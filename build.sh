@@ -15,7 +15,8 @@ source "${SCRIPT_DIR}/scripts/common.sh"
 # Build Functions
 # ========================
 
-setup_inference_runtime() {
+# 调用 scripts/download_inference_runtime.sh 检查/下载安装推理相关库
+setup_inference_runtime() { 
     print_header "[Setting up Inference Runtime]"
 
     SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
@@ -71,7 +72,7 @@ setup_robot_descriptions() {
 
 run_cmake_build() {
     print_header "[Running CMake Build]"
-    print_warning "NOTE: CMake build is for hardware deployment only, not for simulation."
+    print_warning "NOTE: CMake build is for hardware deployment only, not for simulation." # 用于硬件部署，不用于仿真
     print_separator
 
     cmake src/rl_sar/ -B cmake_build -DUSE_CMAKE=ON
