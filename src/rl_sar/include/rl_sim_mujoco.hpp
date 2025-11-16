@@ -6,6 +6,7 @@
 #ifndef RL_SIM_HPP
 #define RL_SIM_HPP
 
+// 绘制图表或记录数据
 // #define PLOT
 // #define CSV_LOGGER
 

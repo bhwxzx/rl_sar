@@ -95,7 +95,9 @@ std::vector<float> RL::ComputeObservation()
         }
         else if (observation == "dof_pos")
         {
+            // 观测的是相对默认位置值
             std::vector<float> dof_pos_rel = this->obs.dof_pos - this->params.Get<std::vector<float>>("default_dof_pos");
+            // 对于轮子相对位置大小为0
             for (int i : this->params.Get<std::vector<int>>("wheel_indices"))
             {
                 dof_pos_rel[i] = 0.0f;

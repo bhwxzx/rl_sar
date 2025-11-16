@@ -84,11 +84,11 @@ public:
         {
 
             if (Interpolate(percent_pre_getup, rl.now_state.motor_state.q, pre_running_pos, 1.0f, "Pre Getting up", true)) return;
-            if (Interpolate(percent_getup, pre_running_pos, rl.params.Get<std::vector<float>>("default_dof_pos_leg"), 2.0f, "Getting up", true)) return;
+            if (Interpolate(percent_getup, pre_running_pos, rl.params.Get<std::vector<float>>("default_dof_pos"), 2.0f, "Getting up", true)) return;
         }
         else
         {
-            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos_leg"), 1.0f, "Getting up", true)) return;
+            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos"), 1.0f, "Getting up", true)) return;
         }
     }
 
@@ -106,7 +106,72 @@ public:
             {
                 return "RLFSMStateRLLocomotion_Leg";
             }
-            else if (rl.control.current_keyboard == Input::Keyboard::Num2 || rl.control.current_gamepad == Input::Gamepad::RB_DPadDown)
+            else if (rl.control.current_keyboard == Input::Keyboard::Num9 || rl.control.current_gamepad == Input::Gamepad::B)
+            {
+                return "RLFSMStateGetDown";
+            }
+        }
+        return state_name_;
+    }
+};
+
+class RLFSMStateGetUp_Wheel : public RLFSMState
+{
+public:
+    RLFSMStateGetUp_Wheel(RL *rl) : RLFSMState(*rl, "RLFSMStateGetUp_Wheel") {}
+
+    float percent_pre_getup = 0.0f;
+    float percent_getup = 0.0f;
+    std::vector<float> pre_running_pos = {
+        0.0, 0.0,
+        0.0, 0.0,
+        1.178, 1.178,
+        0.00, 0.00,
+        0.0, 0.0
+    };
+    bool stand_from_passive = true;
+
+    void Enter() override
+    {
+        percent_pre_getup = 0.0f;
+        percent_getup = 0.0f;
+        if (rl.fsm.previous_state_->GetStateName() == "RLFSMStatePassive")
+        {
+            stand_from_passive = true;
+        }
+        else
+        {
+            stand_from_passive = false;
+        }
+        rl.now_state = *fsm_state;
+        rl.start_state = rl.now_state;
+    }
+
+    void Run() override
+    {
+        if(stand_from_passive)
+        {
+
+            if (Interpolate(percent_pre_getup, rl.now_state.motor_state.q, pre_running_pos, 1.0f, "Pre Getting up", true)) return;
+            if (Interpolate(percent_getup, pre_running_pos, rl.params.Get<std::vector<float>>("default_dof_pos"), 2.0f, "Getting up", true)) return;
+        }
+        else
+        {
+            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos"), 1.0f, "Getting up", true)) return;
+        }
+    }
+
+    void Exit() override {}
+
+    std::string CheckChange() override
+    {
+        if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
+        {
+            return "RLFSMStatePassive";
+        }
+        if (percent_getup >= 1.0f)
+        {
+            if (rl.control.current_keyboard == Input::Keyboard::Num2 || rl.control.current_gamepad == Input::Gamepad::RB_DPadDown)
             {
                 return "RLFSMStateRLLocomotion_Wheel";
             }
