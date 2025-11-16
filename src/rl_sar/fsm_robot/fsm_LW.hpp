@@ -14,8 +14,8 @@ public:
 
     void Enter() override
     {
-        std::cout << LOGGER::NOTE << "Entered passive mode. Press '0' (Keyboard) or 'A' (Gamepad) to switch to RLFSMStateGetUp_Leg. \n
-                                        Press '2' (Keyboard) or 'RB+DPadDown' (Gamepad) to switch to RLFSMStateGetUp_Wheel." << std::endl;
+        std::cout << LOGGER::NOTE << "Entered passive mode. \n Press '0' (Keyboard) or 'A' (Gamepad) to switch to RLFSMStateGetUp_Leg. \n"
+                                     "Press '2' (Keyboard) or 'RB+DPadDown' (Gamepad) to switch to RLFSMStateGetUp_Wheel." << std::endl;
     }
 
     void Run() override
@@ -40,7 +40,7 @@ public:
         }
         else if (rl.control.current_keyboard == Input::Keyboard::Num2 || rl.control.current_gamepad == Input::Gamepad::RB_DPadDown)
         {
-            return "RLFSMStateGetUp_Wheel"
+            return "RLFSMStateGetUp_Wheel";
         }
         return state_name_;
     }
