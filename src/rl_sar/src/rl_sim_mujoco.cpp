@@ -79,7 +79,8 @@ RL_Sim::RL_Sim(int argc, char **argv)
 
     this->mj_model = m;
     this->mj_data = d;
-    this->SetupSysJoystick("/dev/input/js0", 16); // 16 bits joystick
+    // this->SetupSysJoystick("/dev/input/js0", 16); // 16 bits joystick // 虚拟机占用了js0作为虚拟节点
+    this->SetupSysJoystick("/dev/input/js1", 16);
 
     // read params from yaml
     this->ReadYaml(this->robot_name, "base.yaml");
@@ -155,6 +156,7 @@ void RL_Sim::GetState(RobotState<float> *state)
 {
     if (mj_data)
     {
+        // xml的sensor顺序为： jointpos jointvel jointtorque quat gyro accmeter
         state->imu.quaternion[0] = mj_data->sensordata[3 * this->params.Get<int>("num_of_dofs") + 0];
         state->imu.quaternion[1] = mj_data->sensordata[3 * this->params.Get<int>("num_of_dofs") + 1];
         state->imu.quaternion[2] = mj_data->sensordata[3 * this->params.Get<int>("num_of_dofs") + 2];
@@ -343,7 +345,7 @@ void RL_Sim::RunModel()
         this->obs.dof_pos = this->robot_state.motor_state.q;
         this->obs.dof_vel = this->robot_state.motor_state.dq;
 
-        this->obs.actions = this->Forward();
+        this->obs.actions = this->Forward(); // rl推理一步
         this->ComputeOutput(this->obs.actions, this->output_dof_pos, this->output_dof_vel, this->output_dof_tau);
 
         if (!this->output_dof_pos.empty())
@@ -384,7 +386,7 @@ std::vector<float> RL_Sim::Forward()
         return this->obs.actions;
     }
 
-    std::vector<float> clamped_obs = this->ComputeObservation();
+    std::vector<float> clamped_obs = this->ComputeObservation(); // 计算观测
 
     std::vector<float> actions;
     if (this->params.Get<std::vector<int>>("observations_history").size() != 0)
