@@ -113,6 +113,14 @@ std::vector<float> RL::ComputeObservation()
             obs_list.push_back(this->obs.actions);
         }
         // ============= Other Observations =============
+        else if (observation == "gait_phase")
+        {
+            obs_list.push_back(this->obs.gait_phase);
+        }
+        else if (observation == "gait_command")
+        {
+            obs_list.push_back(this->obs.gait_command);
+        }
         else if (observation == "whole_body_tracking/motion_command")
         {
             std::vector<float> motion_cmd;
@@ -196,6 +204,8 @@ void RL::InitObservations()
     this->obs.dof_vel.resize(this->params.Get<int>("num_of_dofs"), 0.0f);
     this->obs.actions.clear();
     this->obs.actions.resize(this->params.Get<int>("num_of_dofs"), 0.0f);
+    this->obs.gait_phase = {0.0f, 1.0f}; // sin(0) cos(0)
+    this->obs.gait_command = this->params.Get<std::vector<float>>("gait_command");
     this->ComputeObservation();
 }
 
@@ -214,6 +224,7 @@ void RL::InitControl()
     this->control.x = 0.0f;
     this->control.y = 0.0f;
     this->control.yaw = 0.0f;
+    this->control.gait_frequency = 2.5f;
 }
 
 void RL::InitJointNum(size_t num_joints)
@@ -268,6 +279,7 @@ void RL::ComputeOutput(const std::vector<float> &actions, std::vector<float> &ou
     std::vector<float> all_actions_scaled = pos_actions_scaled + vel_actions_scaled;
     output_dof_pos = pos_actions_scaled + this->params.Get<std::vector<float>>("default_dof_pos");
     output_dof_vel = vel_actions_scaled;
+    // 这一步力矩计算好像有问题，存疑
     output_dof_tau = this->params.Get<std::vector<float>>("rl_kp") * (all_actions_scaled + this->params.Get<std::vector<float>>("default_dof_pos") - this->obs.dof_pos) - this->params.Get<std::vector<float>>("rl_kd") * this->obs.dof_vel;
     output_dof_tau = clamp(output_dof_tau, -this->params.Get<std::vector<float>>("torque_limits"), this->params.Get<std::vector<float>>("torque_limits"));
 }

@@ -94,7 +94,7 @@ private:
     int sys_js_axis[10] = {0};
     bool sys_js_active = false;
     float axis_deadzone = 0.05f;
-    int sys_js_max_value = (1 << (16 - 1));
+    int sys_js_max_value = (1 << (16 - 1)); // 即 2的15次方 = 32768
     void SetupSysJoystick(const std::string& device, int bits);
     void GetSysJoystick();
 

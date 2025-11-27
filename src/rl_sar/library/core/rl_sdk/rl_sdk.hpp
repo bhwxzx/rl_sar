@@ -118,6 +118,7 @@ struct Control
     float x = 0.0f;
     float y = 0.0f;
     float yaw = 0.0f;
+    float gait_frequency = 2.5f;
     bool navigation_mode = false;
 
     void SetKeyboard(Input::Keyboard keyboad)
@@ -180,6 +181,8 @@ struct Observations
     std::vector<T> dof_pos;
     std::vector<T> dof_vel;
     std::vector<T> actions;
+    std::vector<T> gait_phase;
+    std::vector<T> gait_command;
 };
 
 class RL
@@ -241,6 +244,7 @@ public:
     std::string ang_vel_axis = "body";  // "world" or "body"
     unsigned long long episode_length_buf = 0;
     float motion_length = 0.0;
+    float gait_phase_time = 0.0;
     int InverseJointMapping(int idx) const;
 
     // Motion tracking (for mimic/dance tasks)

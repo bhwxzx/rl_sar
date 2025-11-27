@@ -79,7 +79,7 @@ RL_Sim::RL_Sim(int argc, char **argv)
 
     this->mj_model = m;
     this->mj_data = d;
-    // this->SetupSysJoystick("/dev/input/js0", 16); // 16 bits joystick // 虚拟机占用了js0作为虚拟节点
+    // this->SetupSysJoystick("/dev/input/js0", 16); // 16 bits joystick // 虚拟机会占用js0作为虚拟节点
     this->SetupSysJoystick("/dev/input/js1", 16);
 
     // read params from yaml
@@ -201,8 +201,17 @@ void RL_Sim::RobotControl()
     if (this->control.current_keyboard == Input::Keyboard::R || this->control.current_gamepad == Input::Gamepad::RB_Y)
     {
         if (this->mj_model && this->mj_data)
-        {
-            mj_resetData(this->mj_model, this->mj_data);
+        {   
+            if(this->robot_name == "LW")
+            {
+                int id = mj_name2id(this->mj_model, mjOBJ_KEY, "home_leg");
+                mj_resetDataKeyframe(this->mj_model, this->mj_data, id);
+            }
+            else
+            {
+                mj_resetData(this->mj_model, this->mj_data);
+            }
+
             mj_forward(this->mj_model, this->mj_data);
         }
     }
@@ -273,43 +282,83 @@ void RL_Sim::GetSysJoystick()
         }
     }
 
+    // if (this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::A);
+    // if (this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::B);
+    // if (this->sys_js_button[2].on_press) this->control.SetGamepad(Input::Gamepad::X);
+    // if (this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::Y);
+    // if (this->sys_js_button[4].on_press) this->control.SetGamepad(Input::Gamepad::LB);
+    // if (this->sys_js_button[5].on_press) this->control.SetGamepad(Input::Gamepad::RB);
+    // if (this->sys_js_button[9].on_press) this->control.SetGamepad(Input::Gamepad::LStick);
+    // if (this->sys_js_button[10].on_press) this->control.SetGamepad(Input::Gamepad::RStick);
+    // if (this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::DPadUp);
+    // if (this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::DPadDown);
+    // if (this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::DPadLeft);
+    // if (this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::DPadRight);
+    // if (this->sys_js_button[4].pressed && this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::LB_A);
+    // if (this->sys_js_button[4].pressed && this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::LB_B);
+    // if (this->sys_js_button[4].pressed && this->sys_js_button[2].on_press) this->control.SetGamepad(Input::Gamepad::LB_X);
+    // if (this->sys_js_button[4].pressed && this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::LB_Y);
+    // if (this->sys_js_button[4].pressed && this->sys_js_button[9].on_press) this->control.SetGamepad(Input::Gamepad::LB_LStick);
+    // if (this->sys_js_button[4].pressed && this->sys_js_button[10].on_press) this->control.SetGamepad(Input::Gamepad::LB_RStick);
+    // if (this->sys_js_button[4].pressed && this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::LB_DPadUp);
+    // if (this->sys_js_button[4].pressed && this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::LB_DPadDown);
+    // if (this->sys_js_button[4].pressed && this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::LB_DPadRight);
+    // if (this->sys_js_button[4].pressed && this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::LB_DPadLeft);
+    // if (this->sys_js_button[5].pressed && this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::RB_A);
+    // if (this->sys_js_button[5].pressed && this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::RB_B);
+    // if (this->sys_js_button[5].pressed && this->sys_js_button[2].on_press) this->control.SetGamepad(Input::Gamepad::RB_X);
+    // if (this->sys_js_button[5].pressed && this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::RB_Y);
+    // if (this->sys_js_button[5].pressed && this->sys_js_button[9].on_press) this->control.SetGamepad(Input::Gamepad::RB_LStick);
+    // if (this->sys_js_button[5].pressed && this->sys_js_button[10].on_press) this->control.SetGamepad(Input::Gamepad::RB_RStick);
+    // if (this->sys_js_button[5].pressed && this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::RB_DPadUp);
+    // if (this->sys_js_button[5].pressed && this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::RB_DPadDown);
+    // if (this->sys_js_button[5].pressed && this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::RB_DPadRight);
+    // if (this->sys_js_button[5].pressed && this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::RB_DPadLeft);
+    // if (this->sys_js_button[4].pressed && this->sys_js_button[5].on_press) this->control.SetGamepad(Input::Gamepad::LB_RB);
+
+    // 修改为自己的手柄映射
     if (this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::A);
     if (this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::B);
-    if (this->sys_js_button[2].on_press) this->control.SetGamepad(Input::Gamepad::X);
-    if (this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::Y);
-    if (this->sys_js_button[4].on_press) this->control.SetGamepad(Input::Gamepad::LB);
-    if (this->sys_js_button[5].on_press) this->control.SetGamepad(Input::Gamepad::RB);
-    if (this->sys_js_button[9].on_press) this->control.SetGamepad(Input::Gamepad::LStick);
-    if (this->sys_js_button[10].on_press) this->control.SetGamepad(Input::Gamepad::RStick);
+    if (this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::X);
+    if (this->sys_js_button[4].on_press) this->control.SetGamepad(Input::Gamepad::Y);
+    if (this->sys_js_button[6].on_press) this->control.SetGamepad(Input::Gamepad::LB);
+    if (this->sys_js_button[7].on_press) this->control.SetGamepad(Input::Gamepad::RB);
+    if (this->sys_js_button[13].on_press) this->control.SetGamepad(Input::Gamepad::LStick);
+    if (this->sys_js_button[14].on_press) this->control.SetGamepad(Input::Gamepad::RStick);
     if (this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::DPadUp);
     if (this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::DPadDown);
     if (this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::DPadLeft);
     if (this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::DPadRight);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::LB_A);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::LB_B);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[2].on_press) this->control.SetGamepad(Input::Gamepad::LB_X);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::LB_Y);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[9].on_press) this->control.SetGamepad(Input::Gamepad::LB_LStick);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[10].on_press) this->control.SetGamepad(Input::Gamepad::LB_RStick);
-    if (this->sys_js_button[4].pressed && this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::LB_DPadUp);
-    if (this->sys_js_button[4].pressed && this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::LB_DPadDown);
-    if (this->sys_js_button[4].pressed && this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::LB_DPadRight);
-    if (this->sys_js_button[4].pressed && this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::LB_DPadLeft);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::RB_A);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::RB_B);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[2].on_press) this->control.SetGamepad(Input::Gamepad::RB_X);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::RB_Y);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[9].on_press) this->control.SetGamepad(Input::Gamepad::RB_LStick);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[10].on_press) this->control.SetGamepad(Input::Gamepad::RB_RStick);
-    if (this->sys_js_button[5].pressed && this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::RB_DPadUp);
-    if (this->sys_js_button[5].pressed && this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::RB_DPadDown);
-    if (this->sys_js_button[5].pressed && this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::RB_DPadRight);
-    if (this->sys_js_button[5].pressed && this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::RB_DPadLeft);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[5].on_press) this->control.SetGamepad(Input::Gamepad::LB_RB);
+    if (this->sys_js_button[6].pressed && this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::LB_A);
+    if (this->sys_js_button[6].pressed && this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::LB_B);
+    if (this->sys_js_button[6].pressed && this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::LB_X);
+    if (this->sys_js_button[6].pressed && this->sys_js_button[4].on_press) this->control.SetGamepad(Input::Gamepad::LB_Y);
+    if (this->sys_js_button[6].pressed && this->sys_js_button[13].on_press) this->control.SetGamepad(Input::Gamepad::LB_LStick);
+    if (this->sys_js_button[6].pressed && this->sys_js_button[14].on_press) this->control.SetGamepad(Input::Gamepad::LB_RStick);
+    if (this->sys_js_button[6].pressed && this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::LB_DPadUp);
+    if (this->sys_js_button[6].pressed && this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::LB_DPadDown);
+    if (this->sys_js_button[6].pressed && this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::LB_DPadRight);
+    if (this->sys_js_button[6].pressed && this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::LB_DPadLeft);
+    if (this->sys_js_button[7].pressed && this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::RB_A);
+    if (this->sys_js_button[7].pressed && this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::RB_B);
+    if (this->sys_js_button[7].pressed && this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::RB_X);
+    if (this->sys_js_button[7].pressed && this->sys_js_button[4].on_press) this->control.SetGamepad(Input::Gamepad::RB_Y);
+    if (this->sys_js_button[7].pressed && this->sys_js_button[13].on_press) this->control.SetGamepad(Input::Gamepad::RB_LStick);
+    if (this->sys_js_button[7].pressed && this->sys_js_button[14].on_press) this->control.SetGamepad(Input::Gamepad::RB_RStick);
+    if (this->sys_js_button[7].pressed && this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::RB_DPadUp);
+    if (this->sys_js_button[7].pressed && this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::RB_DPadDown);
+    if (this->sys_js_button[7].pressed && this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::RB_DPadRight);
+    if (this->sys_js_button[7].pressed && this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::RB_DPadLeft);
+    if (this->sys_js_button[6].pressed && this->sys_js_button[7].on_press) this->control.SetGamepad(Input::Gamepad::LB_RB);
+
+    // 通过sys_js_max_value将各项指令归一化
+    // float ly = -float(this->sys_js_axis[1]) / float(this->sys_js_max_value);
+    // float lx = -float(this->sys_js_axis[0]) / float(this->sys_js_max_value);
+    // float rx = -float(this->sys_js_axis[3]) / float(this->sys_js_max_value);
 
     float ly = -float(this->sys_js_axis[1]) / float(this->sys_js_max_value);
     float lx = -float(this->sys_js_axis[0]) / float(this->sys_js_max_value);
-    float rx = -float(this->sys_js_axis[3]) / float(this->sys_js_max_value);
+    float rx = -float(this->sys_js_axis[2]) / float(this->sys_js_max_value);
 
     bool has_input = (ly != 0.0f || lx != 0.0f || rx != 0.0f);
 
@@ -345,7 +394,24 @@ void RL_Sim::RunModel()
         this->obs.dof_pos = this->robot_state.motor_state.q;
         this->obs.dof_vel = this->robot_state.motor_state.dq;
 
+        if (this->robot_name == "LW")
+        {
+            this->gait_phase_time += this->params.Get<float>("dt") * this->params.Get<int>("decimation") * this->control.gait_frequency;
+            if (this->gait_phase_time >= 1.0f)
+            {
+                this->gait_phase_time -= 1.0f; 
+            }
+            this->obs.gait_phase = {std::sin(2 * static_cast<float>(M_PI) * (this->gait_phase_time)), 
+                                    std::cos(2 * static_cast<float>(M_PI) * (this->gait_phase_time))};
+            
+            this->obs.gait_command = {this->control.gait_frequency, 
+                                      this->params.Get<std::vector<float>>("gait_command")[1], 
+                                      this->params.Get<std::vector<float>>("gait_command")[2],
+                                      this->params.Get<std::vector<float>>("gait_command")[3]};
+        }
+
         this->obs.actions = this->Forward(); // rl推理一步
+        // std::cout << obs.actions << std::endl;
         this->ComputeOutput(this->obs.actions, this->output_dof_pos, this->output_dof_vel, this->output_dof_tau);
 
         if (!this->output_dof_pos.empty())
@@ -387,7 +453,7 @@ std::vector<float> RL_Sim::Forward()
     }
 
     std::vector<float> clamped_obs = this->ComputeObservation(); // 计算观测
-
+    // std::cout << clamped_obs << std::endl;
     std::vector<float> actions;
     if (this->params.Get<std::vector<int>>("observations_history").size() != 0)
     {
