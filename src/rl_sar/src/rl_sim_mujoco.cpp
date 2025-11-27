@@ -376,6 +376,15 @@ void RL_Sim::GetSysJoystick()
         this->control.yaw = 0.0f;
         this->sys_js_active = false;
     }
+
+    if (this->control.current_gamepad == Input::Gamepad::DPadUp)
+    {
+        this->control.gait_frequency += 0.5f;
+    }
+    else if (this->control.current_gamepad == Input::Gamepad::DPadDown)
+    {
+        this->control.gait_frequency -= 0.5f;
+    }
 }
 
 void RL_Sim::RunModel()
