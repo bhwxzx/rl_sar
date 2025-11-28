@@ -377,13 +377,23 @@ void RL_Sim::GetSysJoystick()
         this->sys_js_active = false;
     }
 
-    if (this->control.current_gamepad == Input::Gamepad::DPadUp)
+    if (this->control.current_gamepad == Input::Gamepad::DPadUp )
     {
-        this->control.gait_frequency += 0.5f;
+        if (!this->control.dpad_handled) { // 如果还没处理过
+            this->control.gait_frequency += 0.5f;
+            this->control.dpad_handled = true; // 标记为已处理
+        }
     }
-    else if (this->control.current_gamepad == Input::Gamepad::DPadDown)
+    else if (this->control.current_gamepad == Input::Gamepad::DPadDown )
     {
-        this->control.gait_frequency -= 0.5f;
+        if (!this->control.dpad_handled) { // 如果还没处理过
+            this->control.gait_frequency -= 0.5f;
+            this->control.dpad_handled = true; // 标记为已处理
+        }
+    }
+    else 
+    {
+        this->control.dpad_handled = false;
     }
 }
 
@@ -436,7 +446,7 @@ void RL_Sim::RunModel()
             output_dof_tau_queue.push(this->output_dof_tau);
         }
 
-        // this->TorqueProtect(this->output_dof_tau);
+        this->TorqueProtect(this->output_dof_tau);
         // this->AttitudeProtect(this->robot_state.imu.quaternion, 75.0f, 75.0f);
 
 #ifdef CSV_LOGGER
@@ -499,7 +509,7 @@ void RL_Sim::Plot()
         // this->plot_target_joint_pos[i].push_back();  // TODO
         plt::subplot(this->params.Get<int>("num_of_dofs"), 1, i + 1);
         plt::named_plot("_real_joint_pos", this->plot_t, this->plot_real_joint_pos[i], "r");
-        plt::named_plot("_target_joint_pos", this->plot_t, this->plot_target_joint_pos[i], "b");
+        // plt::named_plot("_target_joint_pos", this->plot_t, this->plot_target_joint_pos[i], "b");
         plt::xlim(this->plot_t.front(), this->plot_t.back());
     }
     // plt::legend();
