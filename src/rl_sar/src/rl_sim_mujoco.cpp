@@ -181,10 +181,13 @@ void RL_Sim::SetCommand(const RobotCommand<float> *command)
     {
         for (int i = 0; i < this->params.Get<int>("num_of_dofs"); ++i)
         {
-            mj_data->ctrl[this->params.Get<std::vector<int>>("joint_mapping")[i]] =
+            mj_data->ctrl[this->params.Get<std::vector<int>>("joint_mapping")[i]] = 
+                clamp<float>(
                 command->motor_command.tau[i] +
                 command->motor_command.kp[i] * (command->motor_command.q[i] - mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i]]) +
-                command->motor_command.kd[i] * (command->motor_command.dq[i] - mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i] + this->params.Get<int>("num_of_dofs")]);
+                command->motor_command.kd[i] * (command->motor_command.dq[i] - mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i] + this->params.Get<int>("num_of_dofs")])
+                , -this->params.Get<std::vector<float>>("torque_limits")[i], this->params.Get<std::vector<float>>("torque_limits")[i]
+                );
         }
     }
 }
@@ -356,9 +359,9 @@ void RL_Sim::GetSysJoystick()
     // float lx = -float(this->sys_js_axis[0]) / float(this->sys_js_max_value);
     // float rx = -float(this->sys_js_axis[3]) / float(this->sys_js_max_value);
 
-    float ly = -float(this->sys_js_axis[1]) / float(this->sys_js_max_value);
-    float lx = -float(this->sys_js_axis[0]) / float(this->sys_js_max_value);
-    float rx = -float(this->sys_js_axis[2]) / float(this->sys_js_max_value);
+    float ly = (-float(this->sys_js_axis[1]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[0];
+    float lx = (-float(this->sys_js_axis[0]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[1];
+    float rx = (-float(this->sys_js_axis[2]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[2];
 
     bool has_input = (ly != 0.0f || lx != 0.0f || rx != 0.0f);
 
