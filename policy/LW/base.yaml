@@ -19,17 +19,17 @@ LW:
                   27.0,  27.0,
                   40.0,  40.0]
   default_dof_pos_leg: [0.0, 0.0,
-                        0.3491, 0.3491,
-                        2.269, 2.269,
+                        -0.3491, 0.3491,
+                        -2.269, 2.269,
                         0.00, 0.00,
-                        0.5236, 0.5236]
+                        -0.5236, 0.5236]
   default_dof_pos_wheel: [0.0, 0.0,
                           0.3491, 0.3491,
                           2.269, 2.269,
                           0.5236, 0.5236,
                           0.00, 0.00]
-  gait_command: [2.0, 0.5, 0.5, 0.25]
-  vel_command: [0.7, 0.5, 1.0]
+  gait_command: [2.0, 0.5, 0.5, 0.3]
+  vel_command: [0.7, 0.0, 0.5]
   joint_names: ["right_hip_joint", "left_hip_joint",
                 "right_thigh_joint", "left_thigh_joint",
                 "right_shank_joint", "left_shank_joint",
