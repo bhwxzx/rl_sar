@@ -225,6 +225,7 @@ void RL::InitControl()
     this->control.y = 0.0f;
     this->control.yaw = 0.0f;
     this->control.gait_frequency = this->params.Get<std::vector<float>>("gait_command")[0];
+    this->control.swing_height = this->params.Get<std::vector<float>>("gait_command")[3];
 }
 
 void RL::InitJointNum(size_t num_joints)

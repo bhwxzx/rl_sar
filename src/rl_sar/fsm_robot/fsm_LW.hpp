@@ -260,7 +260,7 @@ public:
 
         if ( rl.robot_name == "LW" )
         {
-            std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << " gait_fr:" << rl.control.gait_frequency << "swing_height:" << rl.control.swing_height << std::flush;
+            std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << " gait_fr:" << rl.control.gait_frequency << " swing_height:" << rl.control.swing_height << std::flush;
         }
         else
         {
@@ -329,7 +329,7 @@ public:
 
         if ( rl.robot_name == "LW" )
         {
-            std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << " gait_fr:" << rl.control.gait_frequency << "swing_height:" << rl.control.swing_height << std::flush;
+            std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << " gait_fr:" << rl.control.gait_frequency << " swing_height:" << rl.control.swing_height << std::flush;
         }
         else
         {

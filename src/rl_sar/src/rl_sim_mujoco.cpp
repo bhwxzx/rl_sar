@@ -330,8 +330,8 @@ void RL_Sim::GetSysJoystick()
     if (this->sys_js_button[14].on_press) this->control.SetGamepad(Input::Gamepad::RStick);
     if (this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::DPadUp);
     if (this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::DPadDown);
-    if (this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::DPadLeft);
-    if (this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::DPadRight);
+    if (this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::DPadLeft);
+    if (this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::DPadRight);
     if (this->sys_js_button[6].pressed && this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::LB_A);
     if (this->sys_js_button[6].pressed && this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::LB_B);
     if (this->sys_js_button[6].pressed && this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::LB_X);
@@ -394,6 +394,20 @@ void RL_Sim::GetSysJoystick()
             this->control.dpad_handled = true; // 标记为已处理
         }
     }
+    else if (this->control.current_gamepad == Input::Gamepad::DPadLeft)
+    {
+        if (!this->control.dpad_handled) { // 如果还没处理过
+            this->control.swing_height += 0.05f;
+            this->control.dpad_handled = true; // 标记为已处理
+        }
+    }
+    else if (this->control.current_gamepad == Input::Gamepad::DPadRight)
+    {
+        if (!this->control.dpad_handled) { // 如果还没处理过
+            this->control.swing_height -= 0.05f;
+            this->control.dpad_handled = true; // 标记为已处理
+        }
+    }
     else 
     {
         this->control.dpad_handled = false;
@@ -429,7 +443,7 @@ void RL_Sim::RunModel()
             this->obs.gait_command = {this->control.gait_frequency, 
                                       this->params.Get<std::vector<float>>("gait_command")[1], 
                                       this->params.Get<std::vector<float>>("gait_command")[2],
-                                      this->params.Get<std::vector<float>>("gait_command")[3]};
+                                      this->control.swing_height};
         }
 
         this->obs.actions = this->Forward(); // rl推理一步

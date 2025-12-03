@@ -119,6 +119,7 @@ struct Control
     float y = 0.0f;
     float yaw = 0.0f;
     float gait_frequency = 0.0f;
+    float swing_height = 0.0f;
     bool dpad_handled = false;
     bool navigation_mode = false;
 
