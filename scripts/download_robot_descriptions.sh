@@ -28,7 +28,8 @@ fi
 ROBOT_DESC_DIR="${PROJECT_ROOT}/${TARGET_DIR}"
 
 # Repository configuration
-REPO_URL="https://github.com/fan-ziqi/rl_sar_zoo.git"
+# REPO_URL="https://github.com/fan-ziqi/rl_sar_zoo.git"
+REPO_URL="https://github.com/bhwxzx/rl_sar_zoo.git"
 REPO_BRANCH="main"
 
 # Expected version - update this when URDF files need to be updated
