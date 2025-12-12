@@ -1,9 +1,9 @@
 LW/legged_lab_v2/leg_loco:
   model_name: "policy.pt"
-  num_observations:  45   # 3 3 3 10 10 10 2 3
+  num_observations:  45   # 3 3 3 10 10 10 2 4
   observations: ["ang_vel", "gravity_vec", "commands", "dof_pos", "dof_vel", "actions", "gait_phase", "gait_command"]
-  observations_history: []  # 0 is the latest observation
-  observations_history_priority: "time"  # "time" or "term" priority
+  observations_history: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 0 is the latest observation
+  observations_history_priority: "term"  # "time" or "term" priority
   clip_obs: 100.0
   clip_actions_lower: [-100.0, -100.0,
                        -100.0, -100.0,
@@ -18,18 +18,18 @@ LW/legged_lab_v2/leg_loco:
   rl_kp: [70.0, 70.0,
           70.0, 70.0,
           70.0, 70.0,
-          8.0, 8.0,
+          15.0, 15.0,
           0.0, 0.0]
   rl_kd: [3.0, 3.0,
           3.0, 3.0,
           3.0, 3.0,
-          0.3, 0.3,
+          0.8, 0.8,
           0.4, 0.4]
   fixed_kp: [80.0, 80.0, 
              50.0, 50.0,
              50.0, 50.0,
              20.0, 20.0,
-             20.0, 20.0]
+             0.0,  0.0]
   fixed_kd: [3.0, 3.0,
              3.0, 3.0,
              3.0, 3.0, 
@@ -56,6 +56,6 @@ LW/legged_lab_v2/leg_loco:
                     -2.269, 2.269,
                     -0.5236, 0.5236,
                     0.0, 0.0]
-  gait_command: [2.0, 0.5, 0.5, 0.3]
+  gait_command: [1.2, 0.5, 0.5, 0.2]
   vel_command: [0.7, 0.0, 0.5]
   joint_mapping: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
