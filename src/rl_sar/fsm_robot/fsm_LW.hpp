@@ -229,6 +229,7 @@ public:
     RLFSMStateRLLocomotion_Leg(RL *rl) : RLFSMState(*rl, "RLFSMStateRLLocomotion_Leg") {}
 
     float percent_transition = 0.0f;
+    int print_count = 0;
 
     void Enter() override
     {
@@ -258,13 +259,16 @@ public:
 
         if (!rl.rl_init_done) rl.rl_init_done = true;
 
-        if ( rl.robot_name == "LW" )
+        if (print_count++ % 20 == 0) // 10Hz
         {
-            std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << " gait_fr:" << rl.control.gait_frequency << " swing_height:" << rl.control.swing_height << std::flush;
-        }
-        else
-        {
-            std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << std::flush;
+            if ( rl.robot_name == "LW" )
+            {
+                std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << " gait_fr:" << rl.control.gait_frequency << std::flush;
+            }
+            else
+            {
+                std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << std::flush;
+            }
         }
         RLControl();
     }
@@ -298,6 +302,7 @@ public:
     RLFSMStateRLLocomotion_Wheel(RL *rl) : RLFSMState(*rl, "RLFSMStateRLLocomotion_Wheel") {}
 
     float percent_transition = 0.0f;
+    int print_count = 0;
 
     void Enter() override
     {
@@ -327,13 +332,16 @@ public:
 
         if (!rl.rl_init_done) rl.rl_init_done = true;
 
-        if ( rl.robot_name == "LW" )
+        if (print_count++ % 20 == 0) // 10Hz
         {
-            std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << " gait_fr:" << rl.control.gait_frequency << " swing_height:" << rl.control.swing_height << std::flush;
-        }
-        else
-        {
-            std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << std::flush;
+            if ( rl.robot_name == "LW" )
+            {
+                std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << " gait_fr:" << rl.control.gait_frequency << std::flush;
+            }
+            else
+            {
+                std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << std::flush;
+            }
         }
         RLControl();
     }

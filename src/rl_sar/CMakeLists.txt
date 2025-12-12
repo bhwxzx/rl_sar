@@ -80,6 +80,7 @@ if(NOT USE_CMAKE)
         find_package(gazebo_msgs REQUIRED)
         find_package(std_srvs REQUIRED)
         find_package(geometry_msgs REQUIRED)
+        find_package(sensor_msgs REQUIRED)
         ament_package()
     endif()
     add_compile_options(${GAZEBO_CXX_FLAGS})
@@ -298,6 +299,13 @@ target_include_directories(l4w4_sdk INTERFACE
     library/thirdparty/robot_sdk/zhinao/l4w4_sdk
 )
 target_link_libraries(l4w4_sdk INTERFACE Threads::Threads)
+
+# LW_sdk
+add_library(LW_sdk INTERFACE)
+target_include_directories(LW_sdk INTERFACE
+    library/thirdparty/robot_sdk/lfr/LW_sdk
+)
+target_link_libraries(LW_sdk INTERFACE Threads::Threads)
 
 # Lite3_MotionSDK
 if(SYSTEM_TYPE STREQUAL "Linux")
@@ -545,6 +553,35 @@ if(SYSTEM_TYPE STREQUAL "Linux")
             )
             install(TARGETS rl_real_l4w4 DESTINATION lib/${PROJECT_NAME})
         endif()
+    endif()
+endif()
+
+# executable for rl real LW
+if(SYSTEM_TYPE STREQUAL "Linux")
+    if(NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
+        if(NOT DEFINED JOYSTICK_SRC)
+            set(JOYSTICK_SRC library/thirdparty/joystick/joystick.cc)
+        endif()
+        add_executable(rl_real_LW 
+            src/rl_real_LW.cpp
+            ${JOYSTICK_SRC}
+        )
+        target_include_directories(rl_real_LW PRIVATE
+            library/thirdparty/joystick
+        )
+        target_link_libraries(rl_real_LW
+            LW_sdk
+            rl_sdk
+            observation_buffer
+            ${YAML_CPP_LIBRARIES}
+            Threads::Threads
+        )
+        ament_target_dependencies(rl_real_LW
+            rclcpp
+            geometry_msgs
+            sensor_msgs
+        )
+        install(TARGETS rl_real_LW DESTINATION lib/${PROJECT_NAME})
     endif()
 endif()
 

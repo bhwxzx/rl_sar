@@ -119,7 +119,7 @@ struct Control
     float y = 0.0f;
     float yaw = 0.0f;
     float gait_frequency = 0.0f;
-    float swing_height = 0.0f;
+    //float swing_height = 0.0f;
     bool dpad_handled = false;
     bool navigation_mode = false;
 
@@ -246,7 +246,7 @@ public:
     std::string ang_vel_axis = "body";  // "world" or "body"
     unsigned long long episode_length_buf = 0;
     float motion_length = 0.0;
-    float gait_phase_time = 0.0;
+    float gait_phase_time = 0.0f;
     int InverseJointMapping(int idx) const;
 
     // Motion tracking (for mimic/dance tasks)
