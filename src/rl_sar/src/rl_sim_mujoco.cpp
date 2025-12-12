@@ -103,6 +103,7 @@ RL_Sim::RL_Sim(int argc, char **argv)
     this->InitJointNum(this->params.Get<int>("num_of_dofs"));
     this->InitOutputs();
     this->InitControl();
+    this->control.gait_frequency = this->params.Get<std::vector<float>>("gait_command")[0];
 
     // loop
     this->loop_control = std::make_shared<LoopFunc>("loop_control", this->params.Get<float>("dt"), std::bind(&RL_Sim::RobotControl, this));
