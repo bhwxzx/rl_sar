@@ -2,7 +2,7 @@ LW/legged_lab_v2/leg_loco:
   model_name: "policy.pt"
   num_observations:  45   # 3 3 3 10 10 10 2 4
   observations: ["ang_vel", "gravity_vec", "commands", "dof_pos", "dof_vel", "actions", "gait_phase", "gait_command"]
-  observations_history: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 0 is the latest observation
+  observations_history: [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]  # 0 is the latest observation
   observations_history_priority: "term"  # "time" or "term" priority
   clip_obs: 100.0
   clip_actions_lower: [-100.0, -100.0,
@@ -18,7 +18,7 @@ LW/legged_lab_v2/leg_loco:
   rl_kp: [70.0, 70.0,
           70.0, 70.0,
           70.0, 70.0,
-          15.0, 15.0,
+          10.0, 10.0,
           0.0, 0.0]
   rl_kd: [3.0, 3.0,
           3.0, 3.0,
