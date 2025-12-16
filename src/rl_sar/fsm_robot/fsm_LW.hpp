@@ -25,7 +25,7 @@ public:
             // fsm_command->motor_command.q[i] = fsm_state->motor_state.q[i];
             fsm_command->motor_command.dq[i] = 0;
             fsm_command->motor_command.kp[i] = 0;
-            fsm_command->motor_command.kd[i] = 8;
+            fsm_command->motor_command.kd[i] = 5;
             fsm_command->motor_command.tau[i] = 0;
         }
     }
@@ -89,7 +89,7 @@ public:
         }
         else
         {
-            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos_leg"), 2.0f, "Getting up", true)) return;
+            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos_leg"), 3.0f, "Getting up", true)) return;
         }
     }
 
@@ -126,7 +126,7 @@ public:
     std::vector<float> pre_running_pos = {
         0.0, 0.0,
         0.0, 0.0,
-        1.178, 1.178,
+        -1.178, 1.178,
         0.00, 0.00,
         0.0, 0.0
     };
@@ -158,7 +158,7 @@ public:
         }
         else
         {
-            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos_wheel"), 2.0f, "Getting up", true)) return;
+            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos_wheel"), 3.0f, "Getting up", true)) return;
         }
     }
 
@@ -191,6 +191,13 @@ public:
     RLFSMStateGetDown(RL *rl) : RLFSMState(*rl, "RLFSMStateGetDown") {}
 
     float percent_getdown = 0.0f;
+    std::vector<float> pre_running_pos = {
+        0.0, 0.0,
+        0.0, 0.0,
+        -1.178, 1.178,
+        0.00, 0.00,
+        0.0, 0.0
+    };
 
     void Enter() override
     {
@@ -200,7 +207,8 @@ public:
 
     void Run() override
     {
-        Interpolate(percent_getdown, rl.now_state.motor_state.q, rl.start_state.motor_state.q, 2.0f, "Getting down", true);
+        // Interpolate(percent_getdown, rl.now_state.motor_state.q, rl.start_state.motor_state.q, 3.0f, "Getting down", true);
+        Interpolate(percent_getdown, rl.now_state.motor_state.q, pre_running_pos, 3.0f, "Getting down", true);
     }
 
     void Exit() override {}
