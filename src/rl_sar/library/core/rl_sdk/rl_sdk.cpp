@@ -322,7 +322,7 @@ void RL::TorqueProtect(const std::vector<float>& origin_output_dof_tau)
         }
         // Just a reminder, no protection
         // this->control.SetKeyboard(Input::Keyboard::P);
-        std::cout << LOGGER::INFO << "Switching to STATE_POS_GETDOWN"<< std::endl;
+        // std::cout << LOGGER::INFO << "Switching to STATE_POS_GETDOWN"<< std::endl;
     }
 }
 
