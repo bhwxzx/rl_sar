@@ -207,8 +207,8 @@ public:
 
     void Run() override
     {
-        // Interpolate(percent_getdown, rl.now_state.motor_state.q, rl.start_state.motor_state.q, 3.0f, "Getting down", true);
-        Interpolate(percent_getdown, rl.now_state.motor_state.q, pre_running_pos, 3.0f, "Getting down", true);
+        Interpolate(percent_getdown, rl.now_state.motor_state.q, rl.start_state.motor_state.q, 3.0f, "Getting down", true);
+        // Interpolate(percent_getdown, rl.now_state.motor_state.q, pre_running_pos, 3.0f, "Getting down", true);
     }
 
     void Exit() override {}
