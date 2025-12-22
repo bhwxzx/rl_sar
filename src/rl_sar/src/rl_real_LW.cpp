@@ -151,7 +151,11 @@ void RL_Real::RobotControl()
 
     this->control.ClearInput();
 
-    this->SetCommand(&this->robot_command);
+    {
+        std::lock_guard<std::mutex> lock(state_mutex);
+        this->SetCommand(&this->robot_command);
+    }
+
 }
 
 void RL_Real::RunModel()
@@ -276,18 +280,35 @@ void RL_Real::GetState(RobotState<float> *state)
 
 void RL_Real::SetCommand(const RobotCommand<float> *command)
 {
-    for (int i = 0; i < this->params.Get<int>("num_of_dofs"); ++i)
-    {
-        this->lw_low_command.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].action_set = command->motor_command.q[i];
-        this->lw_low_command.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].Kp = command->motor_command.kp[i];
-        this->lw_low_command.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].Kd = command->motor_command.kd[i];
-    }
-    for (int i : this->params.Get<std::vector<int>>("wheel_indices"))
-    {
-        this->lw_low_command.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].action_set = command->motor_command.dq[i];
-    }
-    this->lw_low_command.motors_disable = false;
+    auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
+    auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
+    int num_dofs = this->params.Get<int>("num_of_dofs");
 
+    for (int i = 0; i < num_dofs; ++i)
+    {
+        int motor_id = joint_mapping[i];
+        
+        this->lw_low_command.motorCmd[motor_id].Kp = command->motor_command.kp[i];
+        this->lw_low_command.motorCmd[motor_id].Kd = command->motor_command.kd[i];
+
+        bool is_wheel = false;
+        for (int k : wheel_indices) {
+            if (i == k) {
+                is_wheel = true;
+                break;
+            }
+        }
+
+        if (is_wheel) {
+
+            this->lw_low_command.motorCmd[motor_id].action_set = command->motor_command.dq[i];
+
+        } else {
+            this->lw_low_command.motorCmd[motor_id].action_set = command->motor_command.q[i];
+        }
+    }
+    
+    this->lw_low_command.motors_disable = false;
     this->lw_sdk.SendCmdData(this->lw_low_command);
 }
 
