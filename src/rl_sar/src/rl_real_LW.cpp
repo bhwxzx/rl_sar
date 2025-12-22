@@ -102,20 +102,25 @@ void RL_Real::jointstate_plot_callback(void)
     msg.effort.resize(total_size);
     msg.name = joint_names;
 
-    for (int i = 0; i < this->params.Get<int>("num_of_dofs"); ++i)
+    int num_of_dofs = this->params.Get<int>("num_of_dofs");
+    auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
+    auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
+
+    std::lock_guard<std::mutex> lock(state_mutex);
+    for (int i = 0; i < num_of_dofs; ++i)
     {
-        msg.position[i] = this->lw_low_state.motorState[this->params.Get<std::vector<int>>("joint_mapping")[i]].pos_now;
-        msg.velocity[i] = this->lw_low_state.motorState[this->params.Get<std::vector<int>>("joint_mapping")[i]].vel_now;
-        msg.effort[i] = this->lw_low_state.motorState[this->params.Get<std::vector<int>>("joint_mapping")[i]].tau_now;
+        msg.position[i] = this->lw_low_state.motorState[joint_mapping[i]].pos_now;
+        msg.velocity[i] = this->lw_low_state.motorState[joint_mapping[i]].vel_now;
+        msg.effort[i] = this->lw_low_state.motorState[joint_mapping[i]].tau_now;
     }
     for (int i = this->params.Get<int>("num_of_dofs"); i < 2*this->params.Get<int>("num_of_dofs"); ++i)
     {
-        msg.position[i] = this->lw_low_command.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].action_set;
+        msg.position[i] = this->lw_low_command.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i - num_of_dofs]].action_set;
     }
-    for (int i : this->params.Get<std::vector<int>>("wheel_indices"))
+    for (int i : wheel_indices)
     {
         msg.position[i + this->params.Get<int>("num_of_dofs")] = 0.0f;
-        msg.velocity[i + this->params.Get<int>("num_of_dofs")] = this->lw_low_command.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i]].action_set;
+        msg.velocity[i + this->params.Get<int>("num_of_dofs")] = this->lw_low_command.motorCmd[joint_mapping[i]].action_set;
     }
 
     this->jointstate_plot_publisher_->publish(msg);
@@ -397,14 +402,14 @@ void RL_Real::GetSysJoystick()
     if (this->control.current_gamepad == Input::Gamepad::DPadUp )
     {
         if (!this->control.dpad_handled) { // 如果还没处理过
-            this->control.gait_frequency += 0.5f;
+            this->control.gait_frequency += 0.1f;
             this->control.dpad_handled = true; // 标记为已处理
         }
     }
     else if (this->control.current_gamepad == Input::Gamepad::DPadDown )
     {
         if (!this->control.dpad_handled) { // 如果还没处理过
-            this->control.gait_frequency -= 0.5f;
+            this->control.gait_frequency -= 0.1f;
             this->control.dpad_handled = true; // 标记为已处理
         }
     }
