@@ -603,15 +603,7 @@ bool RLFSMState::Interpolate(
 void RLFSMState::RLControl()
 {
     std::vector<float> _output_dof_pos, _output_dof_vel;
-    // 分别尝试获取
-    bool has_pos = rl.output_dof_pos_queue.try_pop(_output_dof_pos);
-    bool has_vel = rl.output_dof_vel_queue.try_pop(_output_dof_vel);
-
-    // 同时也需要 pop 力矩队列，即使这里可能没用到，否则队列会无限堆积导致内存溢出！
-    std::vector<float> _output_dof_tau; 
-    bool has_tau = rl.output_dof_tau_queue.try_pop(_output_dof_tau);
-
-    if (has_pos && has_vel)
+    if (rl.output_dof_pos_queue.try_pop(_output_dof_pos) && rl.output_dof_vel_queue.try_pop(_output_dof_vel))
     {
         for (int i = 0; i < rl.params.Get<int>("num_of_dofs"); ++i)
         {
