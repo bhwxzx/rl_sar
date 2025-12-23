@@ -263,6 +263,38 @@ void RL::InitRL(std::string robot_config_path)
     {
         throw std::runtime_error("Failed to load model from: " + model_path);
     }
+
+    // ==========================================
+    // 新增：模型预热 (Warm-up)
+    // ==========================================
+    std::cout << LOGGER::INFO << "Warming up RL model for [" << robot_config_path << "]..." << std::endl;
+    
+    // 获取当前计算出的观测维度
+    std::vector<float> dummy_obs = this->ComputeObservation(); 
+    
+    for (int i = 0; i < 10; ++i)
+    {
+        auto t1 = std::chrono::high_resolution_clock::now();
+        
+        if (!this->params.Get<std::vector<int>>("observations_history").empty())
+        {
+            this->history_obs_buf.insert(dummy_obs);
+            auto history_obs_vec = this->history_obs_buf.get_obs_vec(this->params.Get<std::vector<int>>("observations_history"));
+            this->model->forward({history_obs_vec});
+        }
+        else
+        {
+            this->model->forward({dummy_obs});
+        }
+
+        auto t2 = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+        if (i == 0 || i == 9) {
+            std::cout << "Warm-up iter " << i << ": " << ms << " ms" << std::endl;
+        }
+    }
+    std::cout << LOGGER::INFO << "Model warm-up finished." << std::endl;
+    // ==========================================
 }
 
 void RL::ComputeOutput(const std::vector<float> &actions, std::vector<float> &output_dof_pos, std::vector<float> &output_dof_vel, std::vector<float> &output_dof_tau)
