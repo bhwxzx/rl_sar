@@ -556,6 +556,70 @@ endif()
 #     endif()
 # endif()
 
+# # executable for rl sim LW
+# if(SYSTEM_TYPE STREQUAL "Linux")
+#     if(NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
+#         add_compile_definitions(USE_MUJOCO)
+#         set(MUJOCO_DIR "${PROJECT_ROOT_DIR}/library/mujoco")
+
+#         # Linux/Windows use standard structure
+#         if(NOT EXISTS "${MUJOCO_DIR}/include/mujoco/mujoco.h")
+#             message(FATAL_ERROR "MuJoCo not found. Please run: bash scripts/download_mujoco.sh")
+#         endif()
+#         set(MUJOCO_INCLUDE_DIR "${MUJOCO_DIR}/include")
+#         set(MUJOCO_LIB_DIR "${MUJOCO_DIR}/lib")
+
+#         # Add MuJoCo library path to global RPATH
+#         set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${MUJOCO_LIB_DIR}")
+#         message(STATUS "Added MuJoCo to RPATH: ${MUJOCO_LIB_DIR}")
+
+#         # Find GLFW
+#         find_package(glfw3 REQUIRED)
+
+#         # Platform-specific library names
+#         set(MUJOCO_LIB_NAME "libmujoco.so.3.2.7")
+
+#         # Import MuJoCo library with RPATH
+#         add_library(mujoco_prebuilt SHARED IMPORTED)
+#         set_target_properties(mujoco_prebuilt PROPERTIES
+#             IMPORTED_LOCATION "${MUJOCO_LIB_DIR}/${MUJOCO_LIB_NAME}"
+#             INTERFACE_INCLUDE_DIRECTORIES "${MUJOCO_INCLUDE_DIR}"
+#             IMPORTED_NO_SONAME TRUE
+#         )
+
+#         # Include directories
+#         include_directories(
+#             ${MUJOCO_INCLUDE_DIR}
+#             library/thirdparty/joystick
+#         )
+
+#         # Source files
+#         file(GLOB MUJOCO_SIMULATE_SRC library/thirdparty/mujoco_simulate/*.cc)
+#         set(JOYSTICK_SRC library/thirdparty/joystick/joystick.cc)
+
+#         # Build executable
+#         add_executable(rl_sim_LW src/rl_sim_LW.cpp ${MUJOCO_SIMULATE_SRC} ${JOYSTICK_SRC})
+
+#         # Add include directories for mujoco_simulate and joystick headers
+#         target_include_directories(rl_sim_LW PRIVATE
+#             library/thirdparty/mujoco_simulate
+#             library/thirdparty/joystick
+#         )
+
+#         target_link_libraries(rl_sim_LW
+#             rl_sdk observation_buffer ${YAML_CPP_LIBRARIES} LW_sdk
+#             Threads::Threads mujoco_prebuilt glfw
+#         )
+#         ament_target_dependencies(rl_sim_LW
+#                 rclcpp
+#                 geometry_msgs
+#                 sensor_msgs
+#         )
+#         install(TARGETS rl_sim_LW DESTINATION lib/${PROJECT_NAME})
+#         message(STATUS "MuJoCo configured: ${MUJOCO_DIR}")
+#     endif()
+# endif()
+
 # executable for rl real LW
 if(SYSTEM_TYPE STREQUAL "Linux")
     if(NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
