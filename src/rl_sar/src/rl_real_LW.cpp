@@ -7,7 +7,7 @@ RL_Real::RL_Real(int argc, char **argv)
 {
     ros2_node = std::make_shared<rclcpp::Node>("rl_real_LW_node");
     this->imu_subscriber_ = ros2_node->create_subscription<sensor_msgs::msg::Imu>(
-        "/imu", rclcpp::SystemDefaultsQoS(),
+        "/imu", 1,
         [this] (const sensor_msgs::msg::Imu::SharedPtr imu_msg) {this->ImuCallback(imu_msg);}
     );
 
@@ -51,7 +51,7 @@ RL_Real::RL_Real(int argc, char **argv)
 
 #ifdef PLOT
     this->jointstate_plot_publisher_ = ros2_node->create_publisher<sensor_msgs::msg::JointState>(
-        "/LW_joint_states", rclcpp::SystemDefaultsQoS()
+        "/LW_joint_states", 1
     );
     this->timer_ = ros2_node->create_wall_timer(
         2ms, std::bind(&RL_Real::jointstate_plot_callback, this)
