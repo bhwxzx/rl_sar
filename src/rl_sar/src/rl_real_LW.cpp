@@ -106,7 +106,6 @@ void RL_Real::jointstate_plot_callback(void)
     auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
     auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
 
-    std::lock_guard<std::mutex> lock(state_mutex);
     for (int i = 0; i < num_of_dofs; ++i)
     {
         msg.position[i] = this->lw_low_state.motorState[joint_mapping[i]].pos_now;
@@ -142,19 +141,14 @@ void RL_Real::disable_lw_robot(void)
 
 void RL_Real::RobotControl()
 {
-    {
-        std::lock_guard<std::mutex> lock(state_mutex);
-        this->GetState(&this->robot_state);
-    } 
+
+    this->GetState(&this->robot_state);
 
     this->StateController(&this->robot_state, &this->robot_command);
 
     this->control.ClearInput();
 
-    {
-        std::lock_guard<std::mutex> lock(state_mutex);
-        this->SetCommand(&this->robot_command);
-    }
+    this->SetCommand(&this->robot_command);
 
 }
 
@@ -164,10 +158,8 @@ void RL_Real::RunModel()
     {
         RobotState<float> local_state; 
 
-        {
-            std::lock_guard<std::mutex> lock(state_mutex);
-            local_state = this->robot_state;
-        }
+        local_state = this->robot_state;
+
         this->episode_length_buf += 1;
         this->obs.ang_vel = local_state.imu.gyroscope;
         this->obs.commands = {this->control.x, this->control.y, this->control.yaw};
@@ -251,7 +243,6 @@ std::vector<float> RL_Real::Forward()
 
 void RL_Real::ImuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
 {
-    std::lock_guard<std::mutex> lock(state_mutex);
     this->imu = *msg;
 }
 
