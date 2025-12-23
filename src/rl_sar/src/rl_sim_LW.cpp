@@ -146,7 +146,6 @@ void RL_Real::jointstate_plot_callback(void)
     auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
     auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
 
-    std::lock_guard<std::mutex> lock(state_mutex);
     for (int i = 0; i < num_of_dofs; ++i)
     {
         msg.position[i] = this->lw_low_state.motorState[joint_mapping[i]].pos_now;
@@ -182,10 +181,8 @@ void RL_Real::disable_lw_robot(void)
 
 void RL_Real::RobotControl()
 {
-    {
-        std::lock_guard<std::mutex> lock(state_mutex);
-        this->GetState(&this->robot_state);
-    } 
+
+    this->GetState(&this->robot_state);
 
     this->StateController(&this->robot_state, &this->robot_command);
 
@@ -223,10 +220,7 @@ void RL_Real::RobotControl()
 
     this->control.ClearInput();
 
-    {
-        std::lock_guard<std::mutex> lock(state_mutex);
-        this->SetCommand(&this->robot_command);
-    }
+    this->SetCommand(&this->robot_command);
 
 }
 
@@ -235,16 +229,26 @@ void RL_Real::RunModel()
     if (this->rl_init_done)
     {
         RobotState<float> local_state; 
+        local_state = this->robot_state;
 
-        {
-            std::lock_guard<std::mutex> lock(state_mutex);
-            local_state = this->robot_state;
-        }
         this->episode_length_buf += 1;
         this->obs.ang_vel = local_state.imu.gyroscope;
         this->obs.commands = {this->control.x, this->control.y, this->control.yaw};
         this->obs.base_quat = local_state.imu.quaternion;
         this->obs.dof_pos = local_state.motor_state.q;
+
+        // // --- 添加关节速度噪声的逻辑 ---
+        // static std::default_random_engine generator;
+        // // 可以从 0.01 逐渐增加到 0.5 来观察机器人反应
+        // float noise_std = 1.0f; 
+        // std::normal_distribution<float> distribution(0.0, noise_std);
+
+        // this->obs.dof_vel.resize(local_state.motor_state.dq.size());
+        // for (size_t i = 0; i < local_state.motor_state.dq.size(); ++i)
+        // {
+        //     float noise = distribution(generator);
+        //     this->obs.dof_vel[i] = local_state.motor_state.dq[i] + noise;
+        // }
         this->obs.dof_vel = local_state.motor_state.dq;
 
         this->gait_phase_time += this->params.Get<float>("dt") * this->params.Get<int>("decimation") * this->control.gait_frequency;
@@ -323,7 +327,6 @@ std::vector<float> RL_Real::Forward()
 
 // void RL_Real::ImuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
 // {
-//     std::lock_guard<std::mutex> lock(state_mutex);
 //     this->imu = *msg;
 // }
 
