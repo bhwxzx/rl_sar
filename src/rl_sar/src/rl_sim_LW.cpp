@@ -228,9 +228,6 @@ void RL_Real::RunModel()
 {
     if (this->rl_init_done)
     {
-        // --- 模拟测试：人为注入通信延迟 ---
-        // 如果你的控制频率是 50Hz (20ms)，尝试延迟 5-10ms
-        // std::this_thread::sleep_for(std::chrono::milliseconds(5)); 
 
         RobotState<float> local_state; 
         local_state = this->robot_state;
@@ -269,6 +266,11 @@ void RL_Real::RunModel()
                                   this->params.Get<std::vector<float>>("gait_command")[3]};
 
         this->obs.actions = this->Forward();
+
+        // --- 模拟测试：人为添加推理延迟 ---
+        // 如果你的控制频率是 50Hz (20ms)，尝试延迟 5-10ms
+        std::this_thread::sleep_for(std::chrono::milliseconds(12));
+
         this->ComputeOutput(this->obs.actions, this->output_dof_pos, this->output_dof_vel, this->output_dof_tau);
 
         if (!this->output_dof_pos.empty())
