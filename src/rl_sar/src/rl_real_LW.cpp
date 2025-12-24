@@ -141,21 +141,21 @@ void RL_Real::disable_lw_robot(void)
 
 void RL_Real::RobotControl()
 {
-    //auto t_start = std::chrono::high_resolution_clock::now();
+    // auto t_start = std::chrono::high_resolution_clock::now();
     this->GetState(&this->robot_state);
-    //auto t_after_get = std::chrono::high_resolution_clock::now();
+    // auto t_after_get = std::chrono::high_resolution_clock::now();
 
     this->StateController(&this->robot_state, &this->robot_command);
 
     this->control.ClearInput();
 
     this->SetCommand(&this->robot_command);
-    //auto t_end = std::chrono::high_resolution_clock::now();
+    // auto t_end = std::chrono::high_resolution_clock::now();
 
     // double total_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
     // double read_ms = std::chrono::duration<double, std::milli>(t_after_get - t_start).count();
     // static int count = 0;
-    // if (++count % 500 == 0) {
+    // if (++count % 50 == 0) {
     //     std::cout << "[Latency Test] Total Control Pipeline: " << total_ms << "ms "
     //               << "(SDK Read: " << read_ms << "ms)" << std::endl;
     //     if (total_ms > this->params.Get<float>("dt") * 1000.0f) {
@@ -251,6 +251,8 @@ std::vector<float> RL_Real::Forward()
     }
 
     std::vector<float> clamped_obs = this->ComputeObservation();
+    // clamped观测打印
+    // std::cout << clamped_obs << std::endl;
 
     std::vector<float> actions;
     if (!this->params.Get<std::vector<int>>("observations_history").empty())
