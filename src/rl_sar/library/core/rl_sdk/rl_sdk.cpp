@@ -272,7 +272,7 @@ void RL::InitRL(std::string robot_config_path)
     // 获取当前计算出的观测维度
     std::vector<float> dummy_obs = this->ComputeObservation(); 
     
-    for (int i = 0; i < 10; ++i)
+    for (int i = 0; i < 5; ++i)
     {
         auto t1 = std::chrono::high_resolution_clock::now();
         
@@ -289,7 +289,7 @@ void RL::InitRL(std::string robot_config_path)
 
         auto t2 = std::chrono::high_resolution_clock::now();
         double ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
-        if (i == 0 || i == 9) {
+        if (i == 0 || i == 4) {
             std::cout << "Warm-up iter " << i << ": " << ms << " ms" << std::endl;
         }
     }
