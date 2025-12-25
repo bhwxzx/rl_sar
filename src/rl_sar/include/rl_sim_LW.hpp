@@ -2,6 +2,10 @@
 #define RL_SIM_LW_HPP
 
 #define PLOT
+#define ENABLE_FORWARD_LATENCY
+#define ADD_JOINTVEL_NOISE
+// #define JOYSTICK_1
+#define JOYSTICK_2
 // #define CSV_LOGGER
 
 #include "rl_sdk.hpp"
