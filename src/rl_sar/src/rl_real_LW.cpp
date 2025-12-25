@@ -141,34 +141,42 @@ void RL_Real::disable_lw_robot(void)
 
 void RL_Real::RobotControl()
 {
-    // auto t_start = std::chrono::high_resolution_clock::now();
+#ifdef CONTROL_TIME_PRINT
+    auto t_start = std::chrono::high_resolution_clock::now();
+#endif
     this->GetState(&this->robot_state);
-    // auto t_after_get = std::chrono::high_resolution_clock::now();
+#ifdef CONTROL_TIME_PRINT
+    auto t_after_get = std::chrono::high_resolution_clock::now();
+#endif
 
     this->StateController(&this->robot_state, &this->robot_command);
 
     this->control.ClearInput();
 
     this->SetCommand(&this->robot_command);
-    // auto t_end = std::chrono::high_resolution_clock::now();
+#ifdef CONTROL_TIME_PRINT
+    auto t_end = std::chrono::high_resolution_clock::now();
 
-    // double total_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
-    // double read_ms = std::chrono::duration<double, std::milli>(t_after_get - t_start).count();
-    // static int count = 0;
-    // if (++count % 50 == 0) {
-    //     std::cout << "[Latency Test] Total Control Pipeline: " << total_ms << "ms "
-    //               << "(SDK Read: " << read_ms << "ms)" << std::endl;
-    //     if (total_ms > this->params.Get<float>("dt") * 1000.0f) {
-    //         std::cout << LOGGER::WARNING << "!!! Control Overrun !!!" << std::endl;
-    //     }
-    // }
+    double total_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+    double read_ms = std::chrono::duration<double, std::milli>(t_after_get - t_start).count();
+    static int count = 0;
+    if (++count % 50 == 0) {
+        std::cout << "[Latency Test] Total Control Pipeline: " << total_ms << "ms "
+                  << "(SDK Read: " << read_ms << "ms)" << std::endl;
+        if (total_ms > this->params.Get<float>("dt") * 1000.0f) {
+            std::cout << LOGGER::WARNING << "!!! Control Overrun !!!" << std::endl;
+        }
+    }
+#endif
 }
 
 void RL_Real::RunModel()
 {
     if (this->rl_init_done)
     {
-        // auto t_start = std::chrono::high_resolution_clock::now();
+#ifdef FOWARD_TIME_PRINT
+        auto t_start = std::chrono::high_resolution_clock::now();
+#endif
         RobotState<float> local_state; 
 
         local_state = this->robot_state;
@@ -194,25 +202,27 @@ void RL_Real::RunModel()
                                   this->params.Get<std::vector<float>>("gait_command")[3]};
 
         this->obs.actions = this->Forward();
-        // auto t_end = std::chrono::high_resolution_clock::now();
-        // double elapsed_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+#ifdef FOWARD_TIME_PRINT
+        auto t_end = std::chrono::high_resolution_clock::now();
+        double elapsed_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
 
-        // // --- 超时检测逻辑 ---
-        // float rl_dt_ms = this->params.Get<float>("dt") * this->params.Get<int>("decimation") * 1000.0f;
+        // --- 超时检测逻辑 ---
+        float rl_dt_ms = this->params.Get<float>("dt") * this->params.Get<int>("decimation") * 1000.0f;
         
-        // static double max_ms = 0;
-        // static int count = 0;
-        // if (elapsed_ms > max_ms) max_ms = elapsed_ms;
-        // if (elapsed_ms > rl_dt_ms) {
-        //         std::cout << "  <-- !!! TIMEOUT !!!" << std::endl;
-        //     }
+        static double max_ms = 0;
+        static int count = 0;
+        if (elapsed_ms > max_ms) max_ms = elapsed_ms;
+        if (elapsed_ms > rl_dt_ms) {
+                std::cout << "  <-- !!! TIMEOUT !!!" << std::endl;
+            }
 
-        // // 每 100 次打印一次统计信息，避免频繁 IO 影响性能
-        // if (++count % 100 == 0) {
-        //     std::cout << "[RL Inference] Curr: " << elapsed_ms << "ms, Max: " << max_ms 
-        //               << "ms, Limit: " << rl_dt_ms << "ms";
-        //     std::cout << std::endl;
-        // }
+        // 每 100 次打印一次统计信息，避免频繁 IO 影响性能
+        if (++count % 100 == 0) {
+            std::cout << "[RL Inference] Curr: " << elapsed_ms << "ms, Max: " << max_ms 
+                      << "ms, Limit: " << rl_dt_ms << "ms";
+            std::cout << std::endl;
+        }
+#endif
 
         this->ComputeOutput(this->obs.actions, this->output_dof_pos, this->output_dof_vel, this->output_dof_tau);
 
@@ -278,6 +288,7 @@ std::vector<float> RL_Real::Forward()
 
 void RL_Real::ImuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
 {
+    std::lock_guard<std::mutex> lock(state_mutex);
     this->imu = *msg;
 }
 

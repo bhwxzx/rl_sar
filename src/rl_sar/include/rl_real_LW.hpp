@@ -3,6 +3,8 @@
 
 // #define PLOT
 // #define CSV_LOGGER
+// #define CONTROL_TIME_PRINT
+// #define FOWARD_TIME_PRINT
 
 #include "rl_sdk.hpp"
 #include "observation_buffer.hpp"
