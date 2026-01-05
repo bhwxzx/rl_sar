@@ -64,7 +64,7 @@ private:
 
 public:
     LWSDK() {
-        rx_buffer.reserve(2048); // 预留空间减少重分配
+        rx_buffer.reserve(4096); // 预留空间减少重分配
     };
     
     ~LWSDK() {
