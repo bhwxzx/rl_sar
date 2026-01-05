@@ -90,10 +90,14 @@ void RL_Real::jointstate_plot_callback(void)
         "right_foot_target", "left_foot_target",
         "right_wheel_target", "left_wheel_target"
     };
+    std::vector<std::string> imu_states = {
+        "imu_ang_vel",
+    };
     std::vector<std::string> joint_names;
-    joint_names.reserve(joint_now_names.size() + joint_target_names.size());
+    joint_names.reserve(joint_now_names.size() + joint_target_names.size() + imu_states.size());
     joint_names.insert(joint_names.end(), joint_now_names.begin(), joint_now_names.end());
     joint_names.insert(joint_names.end(), joint_target_names.begin(), joint_target_names.end());
+    joint_names.insert(joint_names.end(), imu_states.begin(), imu_states.end());
 
     size_t total_size = joint_names.size();
     msg.name.resize(total_size); 
@@ -105,21 +109,42 @@ void RL_Real::jointstate_plot_callback(void)
     int num_of_dofs = this->params.Get<int>("num_of_dofs");
     auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
     auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
+    auto rl_kp = this->params.Get<std::vector<float>>("rl_kp");
+    auto rl_kd = this->params.Get<std::vector<float>>("rl_kd");
 
     for (int i = 0; i < num_of_dofs; ++i)
     {
-        msg.position[i] = this->lw_low_state.motorState[joint_mapping[i]].pos_now;
         msg.velocity[i] = this->lw_low_state.motorState[joint_mapping[i]].vel_now;
         msg.effort[i] = this->lw_low_state.motorState[joint_mapping[i]].tau_now;
+        if (i == wheel_indices[0] || i == wheel_indices[1] ) // 两个轮子
+        {
+            msg.position[i] = 0.0f;
+        }
+        else
+        {
+            msg.position[i] = this->lw_low_state.motorState[joint_mapping[i]].pos_now;
+        }
     }
-    for (int i = this->params.Get<int>("num_of_dofs"); i < 2*this->params.Get<int>("num_of_dofs"); ++i)
+    for (int i = num_of_dofs; i < 2*num_of_dofs; ++i)
     {
-        msg.position[i] = this->lw_low_command.motorCmd[this->params.Get<std::vector<int>>("joint_mapping")[i - num_of_dofs]].action_set;
+        if (i-num_of_dofs == wheel_indices[0] || i-num_of_dofs == wheel_indices[1])
+        {
+            msg.velocity[i] = this->lw_low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set;
+            msg.effort[i] = rl_kp[i - num_of_dofs]*(0.0f - this->lw_low_state.motorState[joint_mapping[i - num_of_dofs]].pos_now) +
+                            rl_kd[i - num_of_dofs]*(this->lw_low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set - this->lw_low_state.motorState[joint_mapping[i - num_of_dofs]].vel_now);
+        }
+        else{
+            msg.position[i] = this->lw_low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set;
+            msg.effort[i] = rl_kp[i - num_of_dofs]*(this->lw_low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set - this->lw_low_state.motorState[joint_mapping[i - num_of_dofs]].pos_now) +
+                            rl_kd[i - num_of_dofs]*(0.0f - this->lw_low_state.motorState[joint_mapping[i - num_of_dofs]].vel_now);
+        }
     }
-    for (int i : wheel_indices)
+        
+    for (int i = 2*num_of_dofs; i < 2*num_of_dofs + imu_states.size(); ++i)
     {
-        msg.position[i + this->params.Get<int>("num_of_dofs")] = 0.0f;
-        msg.velocity[i + this->params.Get<int>("num_of_dofs")] = this->lw_low_command.motorCmd[joint_mapping[i]].action_set;
+        msg.position[i] = this->robot_state.imu.gyroscope[0];
+        msg.velocity[i] = this->robot_state.imu.gyroscope[1];
+        msg.effort[i] = this->robot_state.imu.gyroscope[2];
     }
 
     this->jointstate_plot_publisher_->publish(msg);
