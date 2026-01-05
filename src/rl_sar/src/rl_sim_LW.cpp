@@ -148,9 +148,9 @@ void RL_Real::jointstate_plot_callback(void)
 
     for (int i = 0; i < num_of_dofs; ++i)
     {
-        msg.position[i] = this->lw_low_state.motorState[joint_mapping[i]].pos_now;
-        msg.velocity[i] = this->lw_low_state.motorState[joint_mapping[i]].vel_now;
-        msg.effort[i] = this->lw_low_state.motorState[joint_mapping[i]].tau_now;
+        msg.position[i] = mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i]];
+        msg.velocity[i] = mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i] + this->params.Get<int>("num_of_dofs")];
+        msg.effort[i] = mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i] + 2 * this->params.Get<int>("num_of_dofs")];
     }
     for (int i = this->params.Get<int>("num_of_dofs"); i < 2*this->params.Get<int>("num_of_dofs"); ++i)
     {
