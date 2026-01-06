@@ -127,7 +127,7 @@ void RL_Real::jointstate_plot_callback(void)
     }
     for (int i = num_of_dofs; i < 2*num_of_dofs; ++i)
     {
-        if (i-num_of_dofs == wheel_indices[0] || i-num_of_dofs == wheel_indices[1])
+        if ((i-num_of_dofs) == wheel_indices[0] || (i-num_of_dofs) == wheel_indices[1])
         {
             msg.velocity[i] = this->lw_low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set;
             msg.effort[i] = rl_kp[i - num_of_dofs]*(0.0f - this->lw_low_state.motorState[joint_mapping[i - num_of_dofs]].pos_now) +
@@ -142,9 +142,9 @@ void RL_Real::jointstate_plot_callback(void)
         
     for (int i = 2*num_of_dofs; i < 2*num_of_dofs + imu_states.size(); ++i)
     {
-        msg.position[i] = this->robot_state.imu.gyroscope[0];
-        msg.velocity[i] = this->robot_state.imu.gyroscope[1];
-        msg.effort[i] = this->robot_state.imu.gyroscope[2];
+        msg.position[i] = this->imu.angular_velocity.x;
+        msg.velocity[i] = this->imu.angular_velocity.y;
+        msg.effort[i] = this->imu.angular_velocity.z;
     }
 
     this->jointstate_plot_publisher_->publish(msg);
