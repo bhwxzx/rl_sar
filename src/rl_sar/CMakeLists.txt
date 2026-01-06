@@ -81,6 +81,7 @@ if(NOT USE_CMAKE)
         find_package(std_srvs REQUIRED)
         find_package(geometry_msgs REQUIRED)
         find_package(sensor_msgs REQUIRED)
+        find_package(realtime_tools REQUIRED)
         ament_package()
     endif()
     add_compile_options(${GAZEBO_CXX_FLAGS})
@@ -644,6 +645,7 @@ if(SYSTEM_TYPE STREQUAL "Linux")
             rclcpp
             geometry_msgs
             sensor_msgs
+            realtime_tools
         )
         install(TARGETS rl_real_LW DESTINATION lib/${PROJECT_NAME})
     endif()

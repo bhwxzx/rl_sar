@@ -21,6 +21,7 @@
     <depend>robot_state_publisher</depend>
     <depend>rospy</depend>
     <depend>sensor_msgs</depend>
+    <depend>realtime_tools</depend>
 
     <export>
         <build_type>ament_cmake</build_type>

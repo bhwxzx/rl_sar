@@ -19,6 +19,9 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <realtime_tools/realtime_box.hpp>
+#include <realtime_tools/realtime_buffer.hpp>
+#include <realtime_tools/realtime_publisher.hpp>
 
 #include "joystick.hh"
 #include "matplotlibcpp.h"
@@ -82,13 +85,13 @@ private:
     void GetSysJoystick();
 
     // Imu
-    sensor_msgs::msg::Imu imu;
-    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_subscriber_;
+    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_subscriber_ = nullptr;
+    realtime_tools::RealtimeBox<std::shared_ptr<sensor_msgs::msg::Imu>> received_imu_msg_ptr_{nullptr};
     void ImuCallback(const sensor_msgs::msg::Imu::SharedPtr imu_msg);
 
      // plot
-    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr jointstate_plot_publisher_;
-    rclcpp::TimerBase::SharedPtr timer_;
+    std::shared_ptr<rclcpp::Publisher<sensor_msgs::msg::JointState>> jointstate_plot_publisher_ = nullptr;
+    std::shared_ptr<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>> realtime_debug_publisher_ = nullptr;
     void jointstate_plot_callback(void);
 
     // others

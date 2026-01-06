@@ -6,8 +6,12 @@ using namespace std::chrono_literals;
 RL_Real::RL_Real(int argc, char **argv)
 {
     ros2_node = std::make_shared<rclcpp::Node>("rl_real_LW_node");
+    // subscribe qos config
+    auto subscribers_qos = rclcpp::SystemDefaultsQoS();
+    subscribers_qos.keep_last(1);
+    subscribers_qos.best_effort();
     this->imu_subscriber_ = ros2_node->create_subscription<sensor_msgs::msg::Imu>(
-        "/imu", 1,
+        "/imu", subscribers_qos,
         [this] (const sensor_msgs::msg::Imu::SharedPtr imu_msg) {this->ImuCallback(imu_msg);}
     );
 
@@ -53,28 +57,11 @@ RL_Real::RL_Real(int argc, char **argv)
     this->jointstate_plot_publisher_ = ros2_node->create_publisher<sensor_msgs::msg::JointState>(
         "/LW_joint_states", 1
     );
-    this->timer_ = ros2_node->create_wall_timer(
-        2ms, std::bind(&RL_Real::jointstate_plot_callback, this)
-    );
-#endif
-#ifdef CSV_LOGGER
-    this->CSVInit(this->robot_name);
-#endif
-
-}
-
-RL_Real::~RL_Real()
-{
-    this->loop_joystick->shutdown();
-    this->loop_rl->shutdown();
-    this->loop_control->shutdown();
-    disable_lw_robot();
-    std::cout << LOGGER::INFO << "RL_Real exit" << std::endl;
-}
-
-void RL_Real::jointstate_plot_callback(void)
-{
-    sensor_msgs::msg::JointState msg;
+    this->realtime_debug_publisher_ = std::make_shared<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>>(jointstate_plot_publisher_);
+    
+    this->realtime_debug_publisher_->lock();
+    auto & debug_msg = realtime_debug_publisher_->msg_;
+    debug_msg.stamp = ros2_node->get_clock()->now();
     // 关节顺序与base.yaml里一致
     std::vector<std::string> joint_now_names = {
         "right_hip_now", "left_hip_now",
@@ -100,55 +87,79 @@ void RL_Real::jointstate_plot_callback(void)
     joint_names.insert(joint_names.end(), imu_states.begin(), imu_states.end());
 
     size_t total_size = joint_names.size();
-    msg.name.resize(total_size); 
-    msg.position.resize(total_size);
-    msg.velocity.resize(total_size);
-    msg.effort.resize(total_size);
-    msg.name = joint_names;
+    debug_msg.name.resize(total_size); 
+    debug_msg.position.resize(total_size);
+    debug_msg.velocity.resize(total_size);
+    debug_msg.effort.resize(total_size);
+    debug_msg.name = joint_names;
+    this->realtime_debug_publisher_->unlock();
 
-    int num_of_dofs = this->params.Get<int>("num_of_dofs");
-    auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
-    auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
-    auto rl_kp = this->params.Get<std::vector<float>>("rl_kp");
-    auto rl_kd = this->params.Get<std::vector<float>>("rl_kd");
+    this->timer_ = ros2_node->create_wall_timer(
+        2ms, std::bind(&RL_Real::jointstate_plot_callback, this)
+    );
+#endif
+#ifdef CSV_LOGGER
+    this->CSVInit(this->robot_name);
+#endif
 
-    for (int i = 0; i < num_of_dofs; ++i)
+}
+
+RL_Real::~RL_Real()
+{
+    this->loop_joystick->shutdown();
+    this->loop_rl->shutdown();
+    this->loop_control->shutdown();
+    disable_lw_robot();
+    std::cout << LOGGER::INFO << "RL_Real exit" << std::endl;
+}
+
+void RL_Real::jointstate_plot_callback(void)
+{
+    if (this->realtime_debug_publisher_->trylock())
     {
-        msg.velocity[i] = this->lw_low_state.motorState[joint_mapping[i]].vel_now;
-        msg.effort[i] = this->lw_low_state.motorState[joint_mapping[i]].tau_now;
-        if (i == wheel_indices[0] || i == wheel_indices[1] ) // 两个轮子
+        auto & msg = realtime_debug_publisher_->msg_;
+
+        int num_of_dofs = this->params.Get<int>("num_of_dofs");
+        auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
+        auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
+        auto rl_kp = this->params.Get<std::vector<float>>("rl_kp");
+        auto rl_kd = this->params.Get<std::vector<float>>("rl_kd");
+
+        for (int i = 0; i < num_of_dofs; ++i)
         {
-            msg.position[i] = 0.0f;
+            msg.velocity[i] = this->lw_low_state.motorState[joint_mapping[i]].vel_now;
+            msg.effort[i] = this->lw_low_state.motorState[joint_mapping[i]].tau_now;
+            if (i == wheel_indices[0] || i == wheel_indices[1] ) // 两个轮子
+            {
+                msg.position[i] = 0.0f;
+            }
+            else
+            {
+                msg.position[i] = this->lw_low_state.motorState[joint_mapping[i]].pos_now;
+            }
         }
-        else
+        for (int i = num_of_dofs; i < 2*num_of_dofs; ++i)
         {
-            msg.position[i] = this->lw_low_state.motorState[joint_mapping[i]].pos_now;
+            if ((i-num_of_dofs) == wheel_indices[0] || (i-num_of_dofs) == wheel_indices[1])
+            {
+                msg.velocity[i] = this->lw_low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set;
+                msg.effort[i] = rl_kp[i - num_of_dofs]*(0.0f - this->lw_low_state.motorState[joint_mapping[i - num_of_dofs]].pos_now) +
+                                rl_kd[i - num_of_dofs]*(this->lw_low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set - this->lw_low_state.motorState[joint_mapping[i - num_of_dofs]].vel_now);
+            }
+            else{
+                msg.position[i] = this->lw_low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set;
+                msg.effort[i] = rl_kp[i - num_of_dofs]*(this->lw_low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set - this->lw_low_state.motorState[joint_mapping[i - num_of_dofs]].pos_now) +
+                                rl_kd[i - num_of_dofs]*(0.0f - this->lw_low_state.motorState[joint_mapping[i - num_of_dofs]].vel_now);
+            }
         }
-    }
-    for (int i = num_of_dofs; i < 2*num_of_dofs; ++i)
-    {
-        if ((i-num_of_dofs) == wheel_indices[0] || (i-num_of_dofs) == wheel_indices[1])
-        {
-            msg.velocity[i] = this->lw_low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set;
-            msg.effort[i] = rl_kp[i - num_of_dofs]*(0.0f - this->lw_low_state.motorState[joint_mapping[i - num_of_dofs]].pos_now) +
-                            rl_kd[i - num_of_dofs]*(this->lw_low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set - this->lw_low_state.motorState[joint_mapping[i - num_of_dofs]].vel_now);
-        }
-        else{
-            msg.position[i] = this->lw_low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set;
-            msg.effort[i] = rl_kp[i - num_of_dofs]*(this->lw_low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set - this->lw_low_state.motorState[joint_mapping[i - num_of_dofs]].pos_now) +
-                            rl_kd[i - num_of_dofs]*(0.0f - this->lw_low_state.motorState[joint_mapping[i - num_of_dofs]].vel_now);
-        }
-    }
         
-    for (int i = 2*num_of_dofs; i < 2*num_of_dofs + imu_states.size(); ++i)
-    {
-        msg.position[i] = this->imu.angular_velocity.x;
-        msg.velocity[i] = this->imu.angular_velocity.y;
-        msg.effort[i] = this->imu.angular_velocity.z;
+
+        msg.position[2*num_of_dofs] = this->robot_state.imu.gyroscope[0];
+        msg.velocity[2*num_of_dofs] = this->robot_state.imu.gyroscope[1];
+        msg.effort[2*num_of_dofs] = this->robot_state.imu.gyroscope[2];
+
+        this->realtime_debug_publisher_->unlockAndPublish();
     }
-
-    this->jointstate_plot_publisher_->publish(msg);
-
 }
 
 void RL_Real::disable_lw_robot(void)
@@ -204,7 +215,10 @@ void RL_Real::RunModel()
 #endif
         RobotState<float> local_state; 
 
-        local_state = this->robot_state;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex); // 保护 robot_state 的完整性
+            local_state = this->robot_state;
+        }
 
         this->episode_length_buf += 1;
         this->obs.ang_vel = local_state.imu.gyroscope;
@@ -313,12 +327,19 @@ std::vector<float> RL_Real::Forward()
 
 void RL_Real::ImuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
 {
-    std::lock_guard<std::mutex> lock(state_mutex);
-    this->imu = *msg;
+    received_imu_msg_ptr_.set(std::move(msg));
 }
 
 void RL_Real::GetState(RobotState<float> *state)
 {
+    std::shared_ptr<sensor_msgs::msg::Imu> imu_msg_ptr;
+    received_imu_msg_ptr_.get(imu_msg_ptr);
+    if (!imu_msg_ptr) {
+        std::cout << LOGGER::WARNING << "No IMU data received yet!" << std::endl;
+        return;
+    }
+    auto imu =  *imu_msg_ptr;
+
     state->imu.quaternion[0] = imu.orientation.w;
     state->imu.quaternion[1] = imu.orientation.x;
     state->imu.quaternion[2] = imu.orientation.y;
