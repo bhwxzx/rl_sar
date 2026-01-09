@@ -61,7 +61,7 @@ RL_Real::RL_Real(int argc, char **argv)
     
     this->realtime_debug_publisher_->lock();
     auto & debug_msg = realtime_debug_publisher_->msg_;
-    debug_msg.stamp = ros2_node->get_clock()->now();
+    debug_msg.header.stamp = ros2_node->get_clock()->now();
     // 关节顺序与base.yaml里一致
     std::vector<std::string> joint_now_names = {
         "right_hip_now", "left_hip_now",

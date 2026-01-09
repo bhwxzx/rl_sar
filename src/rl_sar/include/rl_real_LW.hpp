@@ -1,7 +1,7 @@
 #ifndef RL_REAL_LW_HPP
 #define RL_REAL_LW_HPP
 
-// #define PLOT
+#define PLOT
 // #define CSV_LOGGER
 // #define CONTROL_TIME_PRINT
 // #define FOWARD_TIME_PRINT
@@ -92,6 +92,7 @@ private:
      // plot
     std::shared_ptr<rclcpp::Publisher<sensor_msgs::msg::JointState>> jointstate_plot_publisher_ = nullptr;
     std::shared_ptr<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>> realtime_debug_publisher_ = nullptr;
+    rclcpp::TimerBase::SharedPtr timer_;
     void jointstate_plot_callback(void);
 
     // others
