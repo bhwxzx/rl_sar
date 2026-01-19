@@ -233,6 +233,22 @@ void RL_Real::RunModel()
         local_state = this->robot_state;
 
         this->episode_length_buf += 1;
+
+#ifdef ADD_ANGVEL_NOISE
+        // --- 添加Imu速度噪声的逻辑 ---
+        static std::default_random_engine generator;
+        // 可以从 0.01 逐渐增加到 0.5 来观察机器人反应
+        float noise_std = 0.4f; 
+        std::normal_distribution<float> distribution(0.0, noise_std);
+
+        this->obs.ang_vel.resize(local_state.imu.gyroscope.size());
+        for (size_t i = 0; i < local_state.imu.gyroscope.size(); ++i)
+        {
+            float noise = distribution(generator);
+            this->obs.ang_vel[i] = local_state.imu.gyroscope[i] + noise;
+        }
+#endif
+
         this->obs.ang_vel = local_state.imu.gyroscope;
         this->obs.commands = {this->control.x, this->control.y, this->control.yaw};
         this->obs.base_quat = local_state.imu.quaternion;
@@ -272,7 +288,7 @@ void RL_Real::RunModel()
 #ifdef ENABLE_FORWARD_LATENCY
         // --- 模拟测试：人为添加推理延迟 ---
         // 如果你的控制频率是 50Hz (20ms)，尝试延迟 5-10ms
-        std::this_thread::sleep_for(std::chrono::milliseconds(12));
+        std::this_thread::sleep_for(std::chrono::milliseconds(35));
 #endif
 
         this->ComputeOutput(this->obs.actions, this->output_dof_pos, this->output_dof_vel, this->output_dof_tau);
