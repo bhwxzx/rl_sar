@@ -272,7 +272,7 @@ void RL::InitRL(std::string robot_config_path)
     // 获取当前计算出的观测维度
     std::vector<float> dummy_obs = this->ComputeObservation(); 
     
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 2; ++i)
     {
         auto t1 = std::chrono::high_resolution_clock::now();
         
