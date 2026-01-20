@@ -44,6 +44,7 @@ typedef struct {
     float motor_kp_set[MOTOR_COUNTS];
     float motor_kd_set[MOTOR_COUNTS];
     uint8_t motors_disable;
+    uint16_t crc16;
     uint8_t tail;          // 0xFC
 } MotorCmd_Packet_t;
 
@@ -52,6 +53,7 @@ typedef struct {
     float motor_pos_now[MOTOR_COUNTS];
     float motor_vel_now[MOTOR_COUNTS];
     float motor_tor_now[MOTOR_COUNTS];
+    uint16_t crc16;
     uint8_t tail;           // 0xED
 } MotorFeedback_Packet_t;
 #pragma pack(pop)
@@ -61,6 +63,22 @@ private:
     int serial_fd = -1;
     std::vector<uint8_t> rx_buffer;
     const size_t FEEDBACK_PACKET_SIZE = sizeof(MotorFeedback_Packet_t);
+
+    uint16_t CalculateCRC16(const uint8_t* data, size_t len) {
+        uint16_t crc = 0xFFFF;
+        for (size_t i = 0; i < len; i++) {
+            crc ^= (uint16_t)data[i];
+            for (int j = 0; j < 8; j++) {
+                if (crc & 0x0001) {
+                    crc >>= 1;
+                    crc ^= 0xA001; // Modbus 多项式
+                } else {
+                    crc >>= 1;
+                }
+            }
+        }
+        return crc;
+    }
 
 public:
     LWSDK() {
@@ -136,7 +154,9 @@ public:
             packet.motor_kd_set[i] = cmd.motorCmd[i].Kd;
         }
         packet.motors_disable = cmd.motors_disable ? 0x01 : 0x00;
-
+        
+        // 计算校验值：排除最后3个字节（crc16(2字节) + tail(1字节)）
+        packet.crc16 = CalculateCRC16((uint8_t*)&packet, sizeof(MotorCmd_Packet_t) - 3);
         write(serial_fd, &packet, sizeof(MotorCmd_Packet_t));
     }
 
@@ -169,20 +189,24 @@ public:
         // 从头往后扫描，不断更新“最新合法包”的位置
         for (size_t i = 0; i <= rx_buffer.size() - FEEDBACK_PACKET_SIZE; ) {
             if (rx_buffer[i] == 0x55 && rx_buffer[i+1] == 0xAA) {
-                if (rx_buffer[i + FEEDBACK_PACKET_SIZE - 1] == 0xED) {
-                    // 找到一个合法的包
-                    last_valid_index = i;
-                    has_valid_packet = true;
-                    found_at_least_one = true;
-                    // 继续往后找，看有没有更新的包
-                    i += FEEDBACK_PACKET_SIZE;
-                } else {
-                    // 只有头没有尾，可能是噪声点，跳过这个头
-                    i++;
+                // 找到头了，取出这个潜在的包
+                MotorFeedback_Packet_t* p_test = reinterpret_cast<MotorFeedback_Packet_t*>(&rx_buffer[i]);
+                
+                // 检查尾部标识
+                if (p_test->tail == 0xED) {
+                    // 计算 CRC 校验
+                    uint16_t calc_crc = CalculateCRC16((uint8_t*)p_test, FEEDBACK_PACKET_SIZE - 3);
+                    if (calc_crc == p_test->crc16) {
+                        // 校验通过！
+                        last_valid_index = i;
+                        has_valid_packet = true;
+                        found_at_least_one = true;
+                        i += FEEDBACK_PACKET_SIZE; 
+                        continue;
+                    }
                 }
-            } else {
-                i++;
             }
+            i++; // 没找到或校验失败，往后挪1字节
         }
 
         if (has_valid_packet) {
