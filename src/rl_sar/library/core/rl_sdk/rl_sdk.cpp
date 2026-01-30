@@ -117,10 +117,10 @@ std::vector<float> RL::ComputeObservation()
         {
             obs_list.push_back(this->obs.gait_phase);
         }
-        else if (observation == "gait_command")
-        {
-            obs_list.push_back(this->obs.gait_command);
-        }
+        // else if (observation == "gait_command")
+        // {
+        //     obs_list.push_back(this->obs.gait_command);
+        // }
         else if (observation == "whole_body_tracking/motion_command")
         {
             std::vector<float> motion_cmd;
@@ -205,7 +205,7 @@ void RL::InitObservations()
     this->obs.actions.clear();
     this->obs.actions.resize(this->params.Get<int>("num_of_dofs"), 0.0f);
     this->obs.gait_phase = {0.0f, 1.0f}; // sin(0) cos(0)
-    this->obs.gait_command = this->params.Get<std::vector<float>>("gait_command");
+    // this->obs.gait_command = this->params.Get<std::vector<float>>("gait_command");
     this->ComputeObservation();
 }
 

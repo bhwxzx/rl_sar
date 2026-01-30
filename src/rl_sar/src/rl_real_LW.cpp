@@ -235,10 +235,10 @@ void RL_Real::RunModel()
         this->obs.gait_phase = {std::sin(2 * static_cast<float>(M_PI) * (this->gait_phase_time)), 
                                 std::cos(2 * static_cast<float>(M_PI) * (this->gait_phase_time))};
             
-        this->obs.gait_command = {this->control.gait_frequency, 
-                                  this->params.Get<std::vector<float>>("gait_command")[1], 
-                                  this->params.Get<std::vector<float>>("gait_command")[2],
-                                  this->params.Get<std::vector<float>>("gait_command")[3]};
+        // this->obs.gait_command = {this->control.gait_frequency, 
+        //                           this->params.Get<std::vector<float>>("gait_command")[1], 
+        //                           this->params.Get<std::vector<float>>("gait_command")[2],
+        //                           this->params.Get<std::vector<float>>("gait_command")[3]};
 
         this->obs.actions = this->Forward();
 #ifdef FOWARD_TIME_PRINT
@@ -503,24 +503,24 @@ void RL_Real::GetSysJoystick()
         this->sys_js_active = false;
     }
 
-    if (this->control.current_gamepad == Input::Gamepad::DPadUp )
-    {
-        if (!this->control.dpad_handled) { // 如果还没处理过
-            this->control.gait_frequency += 0.1f;
-            this->control.dpad_handled = true; // 标记为已处理
-        }
-    }
-    else if (this->control.current_gamepad == Input::Gamepad::DPadDown )
-    {
-        if (!this->control.dpad_handled) { // 如果还没处理过
-            this->control.gait_frequency -= 0.1f;
-            this->control.dpad_handled = true; // 标记为已处理
-        }
-    }
-    else 
-    {
-        this->control.dpad_handled = false;
-    }
+    // if (this->control.current_gamepad == Input::Gamepad::DPadUp )
+    // {
+    //     if (!this->control.dpad_handled) { // 如果还没处理过
+    //         this->control.gait_frequency += 0.1f;
+    //         this->control.dpad_handled = true; // 标记为已处理
+    //     }
+    // }
+    // else if (this->control.current_gamepad == Input::Gamepad::DPadDown )
+    // {
+    //     if (!this->control.dpad_handled) { // 如果还没处理过
+    //         this->control.gait_frequency -= 0.1f;
+    //         this->control.dpad_handled = true; // 标记为已处理
+    //     }
+    // }
+    // else 
+    // {
+    //     this->control.dpad_handled = false;
+    // }
 }
 
 int main(int argc, char **argv)

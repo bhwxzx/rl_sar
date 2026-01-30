@@ -245,7 +245,7 @@ public:
         rl.episode_length_buf = 0;
 
         // read params from yaml
-        rl.config_name = "legged_lab_v2";
+        rl.config_name = "robot_lab";
         std::string robot_config_path = rl.robot_name + "/" + rl.config_name + "/leg_loco";
         try
         {
@@ -318,7 +318,7 @@ public:
         rl.episode_length_buf = 0;
 
         // read params from yaml
-        rl.config_name = "legged_lab_v2";
+        rl.config_name = "robot_lab";
         std::string robot_config_path = rl.robot_name + "/" + rl.config_name + "/wheel_loco";
         try
         {
