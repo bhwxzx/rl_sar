@@ -38,7 +38,7 @@ public:
         {
             return "RLFSMStateGetUp_Leg";
         }
-        else if (rl.control.current_keyboard == Input::Keyboard::Num2 || rl.control.current_gamepad == Input::Gamepad::RB_DPadDown)
+        else if (rl.control.current_keyboard == Input::Keyboard::Num2 || rl.control.current_gamepad == Input::Gamepad::Y)
         {
             return "RLFSMStateGetUp_Wheel";
         }
@@ -172,7 +172,7 @@ public:
         }
         if (percent_getup >= 1.0f)
         {
-            if (rl.control.current_keyboard == Input::Keyboard::Num2 || rl.control.current_gamepad == Input::Gamepad::RB_DPadDown)
+            if (rl.control.current_keyboard == Input::Keyboard::Num3 || rl.control.current_gamepad == Input::Gamepad::RB_DPadDown)
             {
                 return "RLFSMStateRLLocomotion_Wheel";
             }
@@ -223,7 +223,7 @@ public:
         {
             return "RLFSMStateGetUp_Leg";
         }
-        else if (rl.control.current_keyboard == Input::Keyboard::Num2 || rl.control.current_gamepad == Input::Gamepad::RB_DPadDown)
+        else if (rl.control.current_keyboard == Input::Keyboard::Num2 || rl.control.current_gamepad == Input::Gamepad::Y)
         {
             return "RLFSMStateGetUp_Wheel";
         }
@@ -271,7 +271,7 @@ public:
         {
             if ( rl.robot_name == "LW" )
             {
-                std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << " gait_fr:" << rl.control.gait_frequency << std::flush;
+                std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << std::flush;
             }
             else
             {
@@ -369,7 +369,7 @@ public:
         {
             return "RLFSMStateGetDown";
         }
-        else if (rl.control.current_keyboard == Input::Keyboard::Num3 || rl.control.current_gamepad == Input::Gamepad::RB_DPadLeft)
+        else if (rl.control.current_keyboard == Input::Keyboard::Num3 || rl.control.current_gamepad == Input::Gamepad::RB_DPadDown)
         {
             return "RLFSMStateRLLocomotion_Wheel";
         }

@@ -1,7 +1,7 @@
 #ifndef RL_REAL_LW_HPP
 #define RL_REAL_LW_HPP
 
-#define PLOT
+// #define PLOT
 // #define CSV_LOGGER
 // #define CONTROL_TIME_PRINT
 // #define FOWARD_TIME_PRINT

@@ -5,8 +5,8 @@
 // #define ENABLE_FORWARD_LATENCY
 // #define ADD_ANGVEL_NOISE
 // #define ADD_JOINTVEL_NOISE
-// #define JOYSTICK_1
-#define JOYSTICK_2
+#define JOYSTICK_1
+// #define JOYSTICK_2
 // #define CSV_LOGGER
 
 #include "rl_sdk.hpp"
@@ -69,6 +69,7 @@ private:
     std::shared_ptr<LoopFunc> loop_control;
     std::shared_ptr<LoopFunc> loop_rl;
     std::shared_ptr<LoopFunc> loop_plot;
+    std::shared_ptr<LoopFunc> loop_keyboard;
 
     // mujoco
     mjvCamera cam;
@@ -101,7 +102,7 @@ private:
     // rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_subscriber_;
     // void ImuCallback(const sensor_msgs::msg::Imu::SharedPtr imu_msg);
 
-     // plot
+    // plot
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr jointstate_plot_publisher_;
     rclcpp::TimerBase::SharedPtr timer_;
     void jointstate_plot_callback(void);

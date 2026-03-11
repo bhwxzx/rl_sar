@@ -184,7 +184,7 @@ struct Observations
     std::vector<T> dof_vel;
     std::vector<T> actions;
     std::vector<T> gait_phase;
-    std::vector<T> gait_command;
+    // std::vector<T> gait_command;
 };
 
 class RL

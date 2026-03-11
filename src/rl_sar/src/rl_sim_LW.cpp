@@ -87,6 +87,9 @@ RL_Real::RL_Real(int argc, char **argv)
     this->loop_joystick->start();
     this->loop_control->start();
     this->loop_rl->start();
+    // keyboard
+    this->loop_keyboard = std::make_shared<LoopFunc>("loop_keyboard", 0.05, std::bind(&RL_Real::KeyboardInterface, this));
+    this->loop_keyboard->start();
 
 #ifdef PLOT
     this->jointstate_plot_publisher_ = ros2_node->create_publisher<sensor_msgs::msg::JointState>(
@@ -108,6 +111,7 @@ RL_Real::~RL_Real()
     this->loop_joystick->shutdown();
     this->loop_rl->shutdown();
     this->loop_control->shutdown();
+    this->loop_keyboard->shutdown();
     //disable_lw_robot();
     std::cout << LOGGER::INFO << "RL_Real exit" << std::endl;
 }
@@ -193,6 +197,23 @@ void RL_Real::RobotControl()
             if(this->robot_name == "LW")
             {
                 int id = mj_name2id(this->mj_model, mjOBJ_KEY, "home_leg");
+                mj_resetDataKeyframe(this->mj_model, this->mj_data, id);
+            }
+            else
+            {
+                mj_resetData(this->mj_model, this->mj_data);
+            }
+
+            mj_forward(this->mj_model, this->mj_data);
+        }
+    }
+    if (this->control.current_keyboard == Input::Keyboard::T || this->control.current_gamepad == Input::Gamepad::RB_A)
+    {
+        if (this->mj_model && this->mj_data)
+        {   
+            if(this->robot_name == "LW")
+            {
+                int id = mj_name2id(this->mj_model, mjOBJ_KEY, "home_wheel");
                 mj_resetDataKeyframe(this->mj_model, this->mj_data, id);
             }
             else
