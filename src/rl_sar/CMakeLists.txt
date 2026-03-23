@@ -375,11 +375,13 @@ endif()
 
 # library for motion loader
 add_library(motion_loader library/core/motion_loader/motion_loader.cpp)
+add_library(motion_loader_lw library/core/motion_loader/motion_loader_lw.cpp)
 
 # library for rl sdk
 add_library(rl_sdk library/core/rl_sdk/rl_sdk.cpp)
 target_link_libraries(rl_sdk PUBLIC
     motion_loader
+    motion_loader_lw
     inference_runtime
     Python3::Python
     Python3::Module

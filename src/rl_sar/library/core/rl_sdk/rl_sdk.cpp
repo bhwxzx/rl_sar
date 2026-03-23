@@ -124,11 +124,26 @@ std::vector<float> RL::ComputeObservation()
         else if (observation == "whole_body_tracking/motion_command")
         {
             std::vector<float> motion_cmd;
-            if (this->motion_loader)
+            if (this->robot_name=="g1" && this->motion_loader)
             {
                 auto joint_pos_sdk = this->motion_loader->GetJointPos();
                 auto joint_vel_sdk = this->motion_loader->GetJointVel();
                 auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
+                std::vector<float> joint_pos_training(joint_mapping.size());
+                std::vector<float> joint_vel_training(joint_mapping.size());
+                for (size_t i = 0; i < joint_mapping.size(); ++i)
+                {
+                    joint_pos_training[i] = joint_pos_sdk[joint_mapping[i]];
+                    joint_vel_training[i] = joint_vel_sdk[joint_mapping[i]];
+                }
+                motion_cmd.insert(motion_cmd.end(), joint_pos_training.begin(), joint_pos_training.end());
+                motion_cmd.insert(motion_cmd.end(), joint_vel_training.begin(), joint_vel_training.end());
+            }
+            else if(this->robot_name=="LW" && this->motion_loader_lw)
+            {
+                auto joint_pos_sdk = this->motion_loader_lw->GetJointPos();
+                auto joint_vel_sdk = this->motion_loader_lw->GetJointVel();
+                auto joint_mapping = this->params.Get<std::vector<int>>("motion_joint_mapping");
                 std::vector<float> joint_pos_training(joint_mapping.size());
                 std::vector<float> joint_vel_training(joint_mapping.size());
                 for (size_t i = 0; i < joint_mapping.size(); ++i)
@@ -148,7 +163,7 @@ std::vector<float> RL::ComputeObservation()
         else if (observation == "whole_body_tracking/motion_anchor_ori_b")
         {
             std::vector<float> anchor_ori(6, 0.0f);
-            if (this->motion_loader)
+            if (this->robot_name=="g1" && this->motion_loader)
             {
                 auto waist_sdk_indices = this->params.Get<std::vector<int>>("waist_joint_indices");
                 std::vector<float> waist_angles = {
@@ -159,6 +174,17 @@ std::vector<float> RL::ComputeObservation()
                 std::vector<float> robot_torso_quat_w = MotionLoader::ComputeTorsoQuat(this->obs.base_quat, waist_angles);
                 std::vector<float> ref_torso_quat_w = this->motion_loader->GetAnchorQuat();
                 std::vector<float> init_quat = this->motion_loader->GetInitQuat();
+                std::vector<float> motion_anchor_quat_w = QuaternionMultiply(init_quat, ref_torso_quat_w);
+                std::vector<float> robot_quat_inv = QuaternionConjugate(robot_torso_quat_w);
+                std::vector<float> relative_quat = QuaternionMultiply(robot_quat_inv, motion_anchor_quat_w);
+                std::vector<float> rot_matrix = QuaternionToRotationMatrix(relative_quat);
+                anchor_ori = MatrixFirstTwoColumns(rot_matrix);
+            }
+            else if(this->robot_name=="LW" && this->motion_loader_lw)
+            {
+                std::vector<float> robot_torso_quat_w = MotionLoaderLW::ComputeTorsoQuat(this->obs.base_quat);
+                std::vector<float> ref_torso_quat_w = this->motion_loader_lw->GetAnchorQuat();
+                std::vector<float> init_quat = this->motion_loader_lw->GetInitQuat();
                 std::vector<float> motion_anchor_quat_w = QuaternionMultiply(init_quat, ref_torso_quat_w);
                 std::vector<float> robot_quat_inv = QuaternionConjugate(robot_torso_quat_w);
                 std::vector<float> relative_quat = QuaternionMultiply(robot_quat_inv, motion_anchor_quat_w);
@@ -234,67 +260,88 @@ void RL::InitJointNum(size_t num_joints)
     this->robot_command.motor_command.resize(num_joints);
 }
 
+void RL::PreloadModel(const std::string& robot_config_path)
+{
+    // 读取对应的 YAML 拿到模型名字
+    std::string config_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/config.yaml";
+    YAML::Node config;
+    try {
+        config = YAML::LoadFile(config_path)[robot_config_path];
+    } catch (...) {
+        std::cout << LOGGER::ERROR << "Failed to preload yaml: " << config_path << std::endl;
+        return;
+    }
+
+    std::string model_name = config["model_name"].as<std::string>();
+    std::string model_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/" + model_name;
+    
+    std::cout << LOGGER::INFO << "Preloading ONNX model into memory: " << model_path << std::endl;
+    
+    // 加载 ONNX 到显存/内存
+    auto model = InferenceRuntime::ModelFactory::load_model(model_path);
+    if (!model) {
+        std::cout << LOGGER::ERROR << "Failed to preload model!" << std::endl;
+        return;
+    }
+
+    // 模型预热 (Warm-up)：把计算图彻底唤醒
+    int num_obs = config["num_observations"].as<int>();
+    int history_len = 1;
+    if (config["observations_history"]) {
+        auto hist_vec = config["observations_history"].as<std::vector<int>>();
+        if (!hist_vec.empty()) {
+            history_len = *std::max_element(hist_vec.begin(), hist_vec.end()) + 1;
+        }
+    }
+    std::vector<float> dummy_input(num_obs * history_len, 0.0f);
+    for(int i = 0; i < 2; i++) {
+        model->forward({dummy_input});
+    }
+
+    // 存入字典缓存
+    this->preloaded_models_[robot_config_path] = std::shared_ptr<InferenceRuntime::Model>(std::move(model));
+    std::cout << LOGGER::INFO << "Preload & Warmup finished for: " << robot_config_path << std::endl;
+}
+
 void RL::InitRL(std::string robot_config_path)
 {
     std::lock_guard<std::mutex> lock(this->model_mutex);
 
     this->ReadYaml(robot_config_path, "config.yaml");
 
-    // init joint num first
     this->InitJointNum(this->params.Get<int>("num_of_dofs"));
-
-    // init rl
     this->InitObservations();
     this->InitOutputs();
     this->InitControl();
 
-    // init obs history
-    const auto& observations_history = this->params.Get<std::vector<int>>("observations_history");  // avoid dangling reference
+    const auto& observations_history = this->params.Get<std::vector<int>>("observations_history"); 
     if (!observations_history.empty())
     {
         int history_length = *std::max_element(observations_history.begin(), observations_history.end()) + 1;
         this->history_obs_buf = ObservationBuffer(1, this->obs_dims, history_length, this->params.Get<std::string>("observations_history_priority"));
     }
 
-    // init model
-    std::string model_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/" + this->params.Get<std::string>("model_name");
-    this->model = InferenceRuntime::ModelFactory::load_model(model_path);
+    // ==========================================
+    // 直接从内存缓存中取模型
+    // ==========================================
+    if (this->preloaded_models_.find(robot_config_path) != this->preloaded_models_.end())
+    {
+        // 瞬间切换指针
+        this->model = this->preloaded_models_[robot_config_path]; 
+    }
+    else
+    {
+        // 如果没预加载，就现场读
+        std::cout << LOGGER::WARNING << "Model not preloaded! Loading from disk (WILL CAUSE LAG): " << robot_config_path << std::endl;
+        std::string model_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/" + this->params.Get<std::string>("model_name");
+        auto loaded_model = InferenceRuntime::ModelFactory::load_model(model_path);
+        this->model = std::shared_ptr<InferenceRuntime::Model>(std::move(loaded_model));
+    }
+
     if (!this->model)
     {
-        throw std::runtime_error("Failed to load model from: " + model_path);
+        throw std::runtime_error("Failed to load model from: " + robot_config_path);
     }
-
-    // ==========================================
-    // 新增：模型预热 (Warm-up)
-    // ==========================================
-    std::cout << LOGGER::INFO << "Warming up RL model for [" << robot_config_path << "]..." << std::endl;
-    
-    // 获取当前计算出的观测维度
-    std::vector<float> dummy_obs = this->ComputeObservation(); 
-    
-    for (int i = 0; i < 2; ++i)
-    {
-        auto t1 = std::chrono::high_resolution_clock::now();
-        
-        if (!this->params.Get<std::vector<int>>("observations_history").empty())
-        {
-            this->history_obs_buf.insert(dummy_obs);
-            auto history_obs_vec = this->history_obs_buf.get_obs_vec(this->params.Get<std::vector<int>>("observations_history"));
-            this->model->forward({history_obs_vec});
-        }
-        else
-        {
-            this->model->forward({dummy_obs});
-        }
-
-        auto t2 = std::chrono::high_resolution_clock::now();
-        double ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
-        if (i == 0 || i == 4) {
-            std::cout << "Warm-up iter " << i << ": " << ms << " ms" << std::endl;
-        }
-    }
-    std::cout << LOGGER::INFO << "Model warm-up finished." << std::endl;
-    // ==========================================
 }
 
 void RL::ComputeOutput(const std::vector<float> &actions, std::vector<float> &output_dof_pos, std::vector<float> &output_dof_vel, std::vector<float> &output_dof_tau)

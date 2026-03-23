@@ -43,7 +43,7 @@ LW:
                          -0.1745, 0.1745,
                           0.0, 0.0,
                           0.0, 0.0]
-  gait_command: [1.2, 0.5, 0.5]
+  gait_command: [1.25, 0.5, 0.5]
   vel_command: [0.7, 0.0, 0.5]
   joint_names: ["right_hip_joint", "left_hip_joint",
                 "right_thigh_joint", "left_thigh_joint",

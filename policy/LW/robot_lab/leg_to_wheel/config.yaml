@@ -1,8 +1,8 @@
-LW/robot_lab/leg_loco:
+LW/robot_lab/leg_to_wheel:
   model_name: "policy.onnx"
-  num_observations:  41   # 3 3 3 10 10 10 2
-  observations: ["ang_vel", "gravity_vec", "commands", "dof_pos", "dof_vel", "actions", "gait_phase"]
-  observations_history: [4, 3, 2, 1, 0]  # 0 is the latest observation
+  num_observations: 59 # 20 + 6 + 3 + 10 + 10 + 10
+  observations: ["whole_body_tracking/motion_command", "whole_body_tracking/motion_anchor_ori_b", "ang_vel", "dof_pos", "dof_vel", "actions"]
+  observations_history: []  # 0 is the latest observation
   observations_history_priority: "time"  # "time" or "term" priority
   clip_obs: 100.0
   clip_actions_lower: [-100.0, -100.0,
@@ -42,9 +42,10 @@ LW/robot_lab/leg_loco:
                  0.25, 0.25,
                  1.0, 1.0]
   wheel_indices: [8, 9]
-  ang_vel_scale: 0.25
+  lin_vel_scale: 1.0
+  ang_vel_scale: 1.0
   dof_pos_scale: 1.0
-  dof_vel_scale: 0.05
+  dof_vel_scale: 1.0
   commands_scale: [1.0, 1.0, 1.0]
   torque_limits: [120.0, 120.0,
                   120.0, 120.0,
@@ -56,11 +57,9 @@ LW/robot_lab/leg_loco:
                     -2.234, 2.234,
                     -0.4712, 0.4712,
                     0.0, 0.0]
-#   default_dof_pos: [0.0, 0.0,
-#                     -0.0, 0.0,
-#                     -0.0, 0.0,
-#                     -0.0, 0.0,
-#                     0.0, 0.0]
+  motion_joint_mapping: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  joint_mapping: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  motion_file: "leg_to_wheel_transform_60hz.csv"
   gait_command: [1.25, 0.5, 0.5]
   vel_command: [0.7, 0.0, 0.5]
-  joint_mapping: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  motion_fps: 60.0

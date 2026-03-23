@@ -22,6 +22,12 @@ RL_Real::RL_Real(int argc, char **argv)
     this->robot_name = "LW";
     this->ReadYaml(this->robot_name, "base.yaml");
 
+    // 提前加载所有的模型到内存
+    this->PreloadModel(this->robot_name + "/robot_lab/leg_loco");
+    this->PreloadModel(this->robot_name + "/robot_lab/wheel_loco");
+    this->PreloadModel(this->robot_name + "/robot_lab/leg_to_wheel");
+    // this->PreloadModel(this->robot_name + "/robot_lab/wheel_to_leg");
+
     // auto load FSM by robot_name
     if (FSMManager::GetInstance().IsTypeSupported(this->robot_name))
     {

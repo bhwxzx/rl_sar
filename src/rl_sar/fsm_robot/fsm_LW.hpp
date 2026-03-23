@@ -300,6 +300,10 @@ public:
         {
             return "RLFSMStateRLLocomotion_Leg";
         }
+        else if (rl.control.current_keyboard == Input::Keyboard::Num4 || rl.control.current_gamepad == Input::Gamepad::RB_DPadLeft)
+        {
+            return "RLFSMStateRL_LegToWheel";
+        }
         return state_name_;
     }
 };
@@ -373,6 +377,174 @@ public:
         {
             return "RLFSMStateRLLocomotion_Wheel";
         }
+        else if (rl.control.current_keyboard == Input::Keyboard::Num5 || rl.control.current_gamepad == Input::Gamepad::RB_DPadRight)
+        {
+            return "RLFSMStateRL_WheelToLeg";
+        }
+        return state_name_;
+    }
+};
+
+class RLFSMStateRL_LegToWheel : public RLFSMState
+{
+public:
+    RLFSMStateRL_LegToWheel(RL *rl) : RLFSMState(*rl, "RLFSMStateRL_LegToWheel") {}
+
+    void Enter() override
+    {
+        rl.episode_length_buf = 0;
+
+        // read params from yaml
+        rl.config_name = "robot_lab/leg_to_wheel";
+        std::string robot_config_path = rl.robot_name + "/" + rl.config_name;
+        try
+        {
+            rl.InitRL(robot_config_path);
+
+            // Initialize motion loader
+            std::string motion_file_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/" + rl.params.Get<std::string>("motion_file");
+            float fps = rl.params.Get<float>("motion_fps");
+            rl.motion_loader_lw = std::make_unique<MotionLoaderLW>(motion_file_path, fps);
+            rl.motion_length = rl.motion_loader_lw->GetDuration();
+
+            rl.motion_loader_lw->Reset(fsm_state->imu.quaternion);
+
+            std::cout << LOGGER::INFO << "Motion duration: " << rl.motion_length << "s" << std::endl;
+
+            rl.now_state = *fsm_state;
+        }
+        catch (const std::exception& e)
+        {
+            std::cout << LOGGER::ERROR << "InitRL() failed: " << e.what() << std::endl;
+            rl.rl_init_done = false;
+            rl.fsm.RequestStateChange("RLFSMStatePassive");
+        }
+    }
+
+    void Run() override
+    {
+        // position transition from last default_dof_pos to current default_dof_pos
+        // if (Interpolate(percent_transition, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos"), 0.5f, "Policy transition", true)) return;
+
+        if (!rl.rl_init_done) rl.rl_init_done = true;
+
+        // Calculate motion time and progress
+        float motion_time = rl.episode_length_buf * rl.params.Get<float>("dt") * rl.params.Get<int>("decimation");
+        motion_time = std::fmin(motion_time, rl.motion_length);
+        float percent = motion_time / rl.motion_length;
+        LOGGER::PrintProgress(percent, rl.config_name);
+
+        rl.motion_loader_lw->Update(motion_time);
+
+        RLControl();
+
+        if (motion_time / rl.motion_length == 1)
+        {
+            rl.fsm.RequestStateChange("RLFSMStateRLLocomotion_Wheel");
+        }
+    }
+
+    void Exit() override
+    {
+        rl.rl_init_done = false;
+    }
+
+    std::string CheckChange() override
+    {
+        if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
+        {
+            return "RLFSMStatePassive";
+        }
+        else if (rl.control.current_keyboard == Input::Keyboard::Num9 || rl.control.current_gamepad == Input::Gamepad::B)
+        {
+            return "RLFSMStateGetDown";
+        }
+        else if (rl.control.current_keyboard == Input::Keyboard::Num0 || rl.control.current_gamepad == Input::Gamepad::A)
+        {
+            return "RLFSMStateGetUp";
+        }
+        return state_name_;
+    }
+};
+
+class RLFSMStateRL_WheelToLeg : public RLFSMState
+{
+public:
+    RLFSMStateRL_WheelToLeg(RL *rl) : RLFSMState(*rl, "RLFSMStateRL_WheelToLeg") {}
+
+    void Enter() override
+    {
+        rl.episode_length_buf = 0;
+
+        // read params from yaml
+        rl.config_name = "robot_lab/wheel_to_leg";
+        std::string robot_config_path = rl.robot_name + "/" + rl.config_name;
+        try
+        {
+            rl.InitRL(robot_config_path);
+
+            // Initialize motion loader
+            std::string motion_file_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/" + rl.params.Get<std::string>("motion_file");
+            float fps = 1.0f / (rl.params.Get<float>("dt") * rl.params.Get<int>("decimation"));
+            rl.motion_loader_lw = std::make_unique<MotionLoaderLW>(motion_file_path, fps);
+            rl.motion_length = rl.motion_loader_lw->GetDuration();
+
+            rl.motion_loader_lw->Reset(fsm_state->imu.quaternion);
+
+            std::cout << LOGGER::INFO << "Motion duration: " << rl.motion_length << "s" << std::endl;
+
+            rl.now_state = *fsm_state;
+        }
+        catch (const std::exception& e)
+        {
+            std::cout << LOGGER::ERROR << "InitRL() failed: " << e.what() << std::endl;
+            rl.rl_init_done = false;
+            rl.fsm.RequestStateChange("RLFSMStatePassive");
+        }
+    }
+
+    void Run() override
+    {
+        // position transition from last default_dof_pos to current default_dof_pos
+        // if (Interpolate(percent_transition, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos"), 0.5f, "Policy transition", true)) return;
+
+        if (!rl.rl_init_done) rl.rl_init_done = true;
+
+        // Calculate motion time and progress
+        float motion_time = rl.episode_length_buf * rl.params.Get<float>("dt") * rl.params.Get<int>("decimation");
+        motion_time = std::fmin(motion_time, rl.motion_length);
+        float percent = motion_time / rl.motion_length;
+        LOGGER::PrintProgress(percent, rl.config_name);
+
+        rl.motion_loader_lw->Update(motion_time);
+
+        RLControl();
+
+        if (motion_time / rl.motion_length == 1)
+        {
+            rl.fsm.RequestStateChange("RLFSMStateRLLocomotion_Leg");
+        }
+    }
+
+    void Exit() override
+    {
+        rl.rl_init_done = false;
+    }
+
+    std::string CheckChange() override
+    {
+        if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
+        {
+            return "RLFSMStatePassive";
+        }
+        else if (rl.control.current_keyboard == Input::Keyboard::Num9 || rl.control.current_gamepad == Input::Gamepad::B)
+        {
+            return "RLFSMStateGetDown";
+        }
+        else if (rl.control.current_keyboard == Input::Keyboard::Num0 || rl.control.current_gamepad == Input::Gamepad::A)
+        {
+            return "RLFSMStateGetUp";
+        }
         return state_name_;
     }
 };
@@ -398,6 +570,10 @@ public:
             return std::make_shared<LW_fsm::RLFSMStateRLLocomotion_Leg>(rl);
         else if (state_name == "RLFSMStateRLLocomotion_Wheel")
             return std::make_shared<LW_fsm::RLFSMStateRLLocomotion_Wheel>(rl);
+        else if (state_name == "RLFSMStateRL_LegToWheel")
+            return std::make_shared<LW_fsm::RLFSMStateRL_LegToWheel>(rl);
+        else if (state_name == "RLFSMStateRL_WheelToLeg")
+            return std::make_shared<LW_fsm::RLFSMStateRL_WheelToLeg>(rl);
         return nullptr;
     }
     std::string GetType() const override { return "LW"; }
@@ -410,6 +586,8 @@ public:
             "RLFSMStateGetDown",
             "RLFSMStateRLLocomotion_Leg",
             "RLFSMStateRLLocomotion_Wheel",
+            "RLFSMStateRL_LegToWheel",
+            "RLFSMStateRL_WheelToLeg"
         };
     }
     std::string GetInitialState() const override { return initial_state_; }

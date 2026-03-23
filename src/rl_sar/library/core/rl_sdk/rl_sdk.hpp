@@ -24,6 +24,9 @@
 #include "inference_runtime.hpp"
 #include "logger.hpp"
 #include "motion_loader.hpp"
+#include "motion_loader_lw.hpp"
+
+#include <unordered_map>
 
 template <typename T>
 struct RobotCommand
@@ -214,6 +217,10 @@ public:
     void InitControl();
     void InitRL(std::string robot_config_path);
     void InitJointNum(size_t num_joints);
+    // 预加载模型函数
+    void PreloadModel(const std::string& robot_config_path);
+    // 存放已经加载好的 ONNX 模型的字典
+    std::unordered_map<std::string, std::shared_ptr<InferenceRuntime::Model>> preloaded_models_;
 
     // rl functions
     virtual std::vector<float> Forward() = 0;
@@ -251,13 +258,14 @@ public:
 
     // Motion tracking (for mimic/dance tasks)
     std::unique_ptr<MotionLoader> motion_loader;
+    std::unique_ptr<MotionLoaderLW> motion_loader_lw;
 
     // protect func
     void TorqueProtect(const std::vector<float> &origin_output_dof_tau);
     void AttitudeProtect(const std::vector<float> &quaternion, float pitch_threshold, float roll_threshold);
 
     // rl module
-    std::unique_ptr<InferenceRuntime::Model> model;
+    std::shared_ptr<InferenceRuntime::Model> model;
     // output buffer
     std::vector<float> output_dof_tau;
     std::vector<float> output_dof_pos;

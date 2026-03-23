@@ -1,11 +1,8 @@
-/*
- * Copyright (c) 2024-2025 Ziqi Fan
- * SPDX-License-Identifier: Apache-2.0
- */
 
-#include "motion_loader.hpp"
 
-MotionLoader::MotionLoader(const std::string& motion_file, float fps)
+#include "motion_loader_lw.hpp"
+
+MotionLoaderLW::MotionLoaderLW(const std::string& motion_file, float fps)
     : dt_(1.0f / fps), index_0_(0), index_1_(0), blend_(0.0f)
 {
     LoadFromCSV(motion_file);
@@ -14,11 +11,11 @@ MotionLoader::MotionLoader(const std::string& motion_file, float fps)
     num_frames_ = root_positions_.size();
     duration_ = num_frames_ * dt_;
 
-    std::cout << LOGGER::INFO << "MotionLoader: Loaded " << num_frames_ << " frames, "
+    std::cout << LOGGER::INFO << "MotionLoaderLW: Loaded " << num_frames_ << " frames, "
               << num_joints_ << " joints, duration=" << duration_ << "s" << std::endl;
 }
 /* 加载csv文件，并进行四元数顺序转换 */
-void MotionLoader::LoadFromCSV(const std::string& filename)
+void MotionLoaderLW::LoadFromCSV(const std::string& filename)
 {
     std::ifstream file(filename);
     if (!file.is_open())
@@ -81,7 +78,7 @@ void MotionLoader::LoadFromCSV(const std::string& filename)
     }
 }
 /* 前向差分计算关节速度 */
-void MotionLoader::ComputeVelocities()
+void MotionLoaderLW::ComputeVelocities()
 {
     joint_velocities_.clear();
 
@@ -106,7 +103,7 @@ void MotionLoader::ComputeVelocities()
     }
 }
 /* 根据当前走过的时间，计算出应该读取哪两帧（index_0_ 和 index_1_），以及它们之间的混合比例（blend_） */
-void MotionLoader::Update(float time)
+void MotionLoaderLW::Update(float time)
 {
     // Clamp time to valid range
     float phase = std::clamp(time / duration_, 0.0f, 1.0f);
@@ -120,18 +117,18 @@ void MotionLoader::Update(float time)
     blend_ = frame_float - index_0_;
 }
 /* 计算yaw偏置，以在外部将参考动作“旋转”对齐到机器人的当前朝向上 */
-void MotionLoader::Reset(const std::vector<float>& robot_base_quat, const std::vector<float>& robot_waist_angles)
+void MotionLoaderLW::Reset(const std::vector<float>& robot_base_quat)
 {
     Update(0.0f);
 
-    std::vector<float> robot_torso = ComputeTorsoQuat(robot_base_quat, robot_waist_angles);
+    std::vector<float> robot_torso = ComputeTorsoQuat(robot_base_quat);
     std::vector<float> motion_torso = GetAnchorQuat();
     world_to_init_ = ComputeYawAlignment(robot_torso, motion_torso);
 
     std::cout << LOGGER::INFO << "Motion reset with yaw alignment" << std::endl;
 }
 /* 使用线性插值（LERP）混合两帧的关节位置和速度 */
-std::vector<float> MotionLoader::GetJointPos() const
+std::vector<float> MotionLoaderLW::GetJointPos() const
 {
     std::vector<float> result;
     const auto& pos0 = joint_positions_[index_0_];
@@ -145,7 +142,7 @@ std::vector<float> MotionLoader::GetJointPos() const
     return result;
 }
 
-std::vector<float> MotionLoader::GetJointVel() const
+std::vector<float> MotionLoaderLW::GetJointVel() const
 {
     std::vector<float> result;
     const auto& vel0 = joint_velocities_[index_0_];
@@ -159,46 +156,32 @@ std::vector<float> MotionLoader::GetJointVel() const
     return result;
 }
 
-std::vector<float> MotionLoader::GetRootQuat() const
+std::vector<float> MotionLoaderLW::GetRootQuat() const
 {
     std::vector<float> q = Slerp(root_quaternions_[index_0_], root_quaternions_[index_1_], blend_);
     return q;
 }
 
-std::vector<float> MotionLoader::ComputeTorsoQuat(const std::vector<float>& base_quat, const std::vector<float>& waist_angles)
+std::vector<float> MotionLoaderLW::ComputeTorsoQuat(const std::vector<float>& base_quat)
 {
-    std::vector<float> q_yaw = QuaternionFromAxisAngle({0.0f, 0.0f, 1.0f}, waist_angles[0]);
-    std::vector<float> q_roll = QuaternionFromAxisAngle({1.0f, 0.0f, 0.0f}, waist_angles[1]);
-    std::vector<float> q_pitch = QuaternionFromAxisAngle({0.0f, 1.0f, 0.0f}, waist_angles[2]);
-
-    std::vector<float> torso_quat = QuaternionMultiply(base_quat, q_yaw);
-    torso_quat = QuaternionMultiply(torso_quat, q_roll);
-    torso_quat = QuaternionMultiply(torso_quat, q_pitch);
-
-    return QuaternionNormalize(torso_quat);
+    return QuaternionNormalize(base_quat);
 }
 
-std::vector<float> MotionLoader::ComputeYawAlignment(const std::vector<float>& robot_torso_quat, const std::vector<float>& motion_torso_quat)
+std::vector<float> MotionLoaderLW::ComputeYawAlignment(const std::vector<float>& robot_torso_quat, const std::vector<float>& motion_torso_quat)
 {
     std::vector<float> robot_yaw = QuaternionYawOnly(robot_torso_quat);
     std::vector<float> motion_yaw = QuaternionYawOnly(motion_torso_quat);
     return QuaternionMultiply(robot_yaw, QuaternionConjugate(motion_yaw));
 }
 
-std::vector<float> MotionLoader::GetAnchorQuat() const
+std::vector<float> MotionLoaderLW::GetAnchorQuat() const
 {
     std::vector<float> root_quat = Slerp(root_quaternions_[index_0_], root_quaternions_[index_1_], blend_);
-    auto joint_pos = GetJointPos();
 
-    const int WAIST_YAW_IDX = 12;
-    const int WAIST_ROLL_IDX = 13;
-    const int WAIST_PITCH_IDX = 14;
-
-    std::vector<float> waist_angles = {joint_pos[WAIST_YAW_IDX], joint_pos[WAIST_ROLL_IDX], joint_pos[WAIST_PITCH_IDX]};
-    return ComputeTorsoQuat(root_quat, waist_angles);
+    return ComputeTorsoQuat(root_quat);
 }
 
-std::vector<float> MotionLoader::Slerp(const std::vector<float>& q0, const std::vector<float>& q1, float t) const
+std::vector<float> MotionLoaderLW::Slerp(const std::vector<float>& q0, const std::vector<float>& q1, float t) const
 {
     // Compute dot product
     float dot = q0[0] * q1[0] + q0[1] * q1[1] + q0[2] * q1[2] + q0[3] * q1[3];
