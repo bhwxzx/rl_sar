@@ -294,9 +294,20 @@ void RL::PreloadModel(const std::string& robot_config_path)
         }
     }
     std::vector<float> dummy_input(num_obs * history_len, 0.0f);
+    // --- 开始计时 ---
+    auto start_time = std::chrono::steady_clock::now();
     for(int i = 0; i < 2; i++) {
         model->forward({dummy_input});
     }
+    // --- 结束计时 ---
+    auto end_time = std::chrono::steady_clock::now();
+    // 计算耗时 (毫秒)
+    std::chrono::duration<double, std::milli> duration_ms = end_time - start_time;
+    
+    // 打印预热耗时
+    std::cout << LOGGER::INFO << "Model warmup took " 
+              << std::fixed << std::setprecision(3) << duration_ms.count() 
+              << " ms." << std::endl;
 
     // 存入字典缓存
     this->preloaded_models_[robot_config_path] = std::shared_ptr<InferenceRuntime::Model>(std::move(model));
