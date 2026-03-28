@@ -306,12 +306,18 @@ std::vector<float> RL_Real::Forward()
     }
 
     std::vector<float> clamped_obs = this->ComputeObservation();
-    // clamped观测打印
-    // std::cout << clamped_obs << std::endl;
-
     std::vector<float> actions;
+
+
     if (!this->params.Get<std::vector<int>>("observations_history").empty())
     {
+        // 在启动的第 1 帧，用当前的真实观测填满整个历史缓冲区
+        // 避免历史数据全为 0 导致的网络 OOD 抽搐
+        if (this->episode_length_buf == 1) 
+        {
+            // {0} 代表只重置第 0 个 environment
+            this->history_obs_buf.reset({0}, clamped_obs);
+        }
         this->history_obs_buf.insert(clamped_obs);
         this->history_obs = this->history_obs_buf.get_obs_vec(this->params.Get<std::vector<int>>("observations_history"));
         actions = this->model->forward({this->history_obs});

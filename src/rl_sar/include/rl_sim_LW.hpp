@@ -107,6 +107,16 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
     void jointstate_plot_callback(void);
 
+    // actuator net
+    bool use_actuator_net_ = false; // 是否使用执行器网络的 Flag
+    std::shared_ptr<InferenceRuntime::Model> leg_actuator_model_; // 模型指针
+    std::shared_ptr<InferenceRuntime::Model> foot_actuator_model_; // 模型指针
+    std::vector<int> leg_train_indices = {0, 1, 2, 3, 4, 5}; 
+    std::vector<int> foot_train_indices = {6, 7};
+    std::deque<std::vector<float>> pos_err_history_; 
+    std::deque<std::vector<float>> vel_history_;     
+    std::vector<float> actuator_net_tau_;
+
     // others
     void disable_robot(void);
     std::mutex state_mutex;
