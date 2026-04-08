@@ -43,7 +43,7 @@ RL_Real::RL_Real(int argc, char **argv)
     }
 
     // init robot
-    this->lw_sdk.InitSerial("/dev/ttyACM0");
+    this->lw_sdk.InitSerial("/dev/ttyLegRight", "/dev/ttyLegLeft");
     this->lw_sdk.InitCmdData(this->lw_low_command);
     this->InitJointNum(this->params.Get<int>("num_of_dofs"));
     this->InitOutputs();

@@ -14,7 +14,10 @@
 #include <sys/ioctl.h>
 #include <linux/serial.h>
 
+// 上层逻辑总电机数保持为 10 不变
 #define MOTOR_COUNTS 10 
+// 底层每个单片机实际控制 5 个电机
+#define BOARD_MOTOR_COUNTS 5 
 
 typedef struct {
     float pos_now;
@@ -37,12 +40,13 @@ typedef struct {
     bool motors_disable;
 } LowCmd;
 
+// 物理层通信包结构 (只针对单腿 5 个电机)
 #pragma pack(push, 1)
 typedef struct {
     uint8_t header[2];     // 0xA5, 0x5A
-    float motor_action_set[MOTOR_COUNTS];
-    float motor_kp_set[MOTOR_COUNTS];
-    float motor_kd_set[MOTOR_COUNTS];
+    float motor_action_set[BOARD_MOTOR_COUNTS];
+    float motor_kp_set[BOARD_MOTOR_COUNTS];
+    float motor_kd_set[BOARD_MOTOR_COUNTS];
     uint8_t motors_disable;
     uint16_t crc16;
     uint8_t tail;          // 0xFC
@@ -50,9 +54,9 @@ typedef struct {
 
 typedef struct {
     uint8_t head[2];        // 0x55, 0xAA 
-    float motor_pos_now[MOTOR_COUNTS];
-    float motor_vel_now[MOTOR_COUNTS];
-    float motor_tor_now[MOTOR_COUNTS];
+    float motor_pos_now[BOARD_MOTOR_COUNTS];
+    float motor_vel_now[BOARD_MOTOR_COUNTS];
+    float motor_tor_now[BOARD_MOTOR_COUNTS];
     uint16_t crc16;
     uint8_t tail;           // 0xED
 } MotorFeedback_Packet_t;
@@ -60,8 +64,10 @@ typedef struct {
 
 class LWSDK {
 private:
-    int serial_fd = -1;
-    std::vector<uint8_t> rx_buffer;
+    int serial_fd_right = -1;
+    int serial_fd_left  = -1;
+    std::vector<uint8_t> rx_buffer_right;
+    std::vector<uint8_t> rx_buffer_left;
     const size_t FEEDBACK_PACKET_SIZE = sizeof(MotorFeedback_Packet_t);
 
     uint16_t CalculateCRC16(const uint8_t* data, size_t len) {
@@ -80,33 +86,15 @@ private:
         return crc;
     }
 
-public:
-    LWSDK() {
-        rx_buffer.reserve(4096); // 预留空间减少重分配
-    };
-    
-    ~LWSDK() {
-        if (serial_fd >= 0) close(serial_fd);
-    };
-
-    void InitCmdData(LowCmd &cmd) {
-        for (int i = 0; i < MOTOR_COUNTS; i++) {
-            cmd.motorCmd[i].action_set = 0.0f;
-            cmd.motorCmd[i].Kp = 0.0f;
-            cmd.motorCmd[i].Kd = 0.0f;
-        }
-        cmd.motors_disable = false;
-    }
-
-    bool InitSerial(const char* port_name) {
-        serial_fd = open(port_name, O_RDWR | O_NOCTTY | O_NONBLOCK);
-        if (serial_fd < 0) {
+     // 内部打开单一串口的辅助函数
+    bool OpenPort(int& fd, const char* port_name) {
+        fd = open(port_name, O_RDWR | O_NOCTTY | O_NONBLOCK);
+        if (fd < 0) {
             std::cerr << "[Error] Cannot open " << port_name << std::endl;
             return false;
         }
-
         struct termios tty;
-        if (tcgetattr(serial_fd, &tty) != 0) return false;
+        if (tcgetattr(fd, &tty) != 0) return false;
 
         cfsetospeed(&tty, B921600);
         cfsetispeed(&tty, B921600);
@@ -126,104 +114,149 @@ public:
         tty.c_cc[VMIN] = 0;
         tty.c_cc[VTIME] = 0;
 
-        if (tcsetattr(serial_fd, TCSANOW, &tty) != 0) return false;
+        if (tcsetattr(fd, TCSANOW, &tty) != 0) return false;
 
-        // 开启内核低延迟模式
         struct serial_struct ser_info;
-        if (ioctl(serial_fd, TIOCGSERIAL, &ser_info) == 0) {
+        if (ioctl(fd, TIOCGSERIAL, &ser_info) == 0) {
             ser_info.flags |= ASYNC_LOW_LATENCY;
-            ioctl(serial_fd, TIOCSSERIAL, &ser_info);
+            ioctl(fd, TIOCSSERIAL, &ser_info);
         }
-
-        tcflush(serial_fd, TCIOFLUSH);
-        std::cout << "[Info] Serial initialized with Low Latency Mode: " << port_name << std::endl;
+        tcflush(fd, TCIOFLUSH);
+        std::cout << "[Info] Serial init OK: " << port_name << std::endl;
         return true;
     }
 
-    void SendCmdData(LowCmd& cmd) {
-        if (serial_fd < 0) return;
+    // 内部处理单一串口接收的辅助函数
+    bool ProcessSingleRx(int fd, std::vector<uint8_t>& rx_buffer, LowState& state, bool is_left) {
+        if (fd < 0) return false;
 
-        static MotorCmd_Packet_t packet;
-        packet.header[0] = 0xA5;
-        packet.header[1] = 0x5A;
-        packet.tail = 0xFC;
-
-        for (int i=0; i < MOTOR_COUNTS; i++) {
-            packet.motor_action_set[i] = cmd.motorCmd[i].action_set;
-            packet.motor_kp_set[i] = cmd.motorCmd[i].Kp;
-            packet.motor_kd_set[i] = cmd.motorCmd[i].Kd;
-        }
-        packet.motors_disable = cmd.motors_disable ? 0x01 : 0x00;
-        
-        // 计算校验值：排除最后3个字节（crc16(2字节) + tail(1字节)）
-        packet.crc16 = CalculateCRC16((uint8_t*)&packet, sizeof(MotorCmd_Packet_t) - 3);
-        write(serial_fd, &packet, sizeof(MotorCmd_Packet_t));
-    }
-
-    /**
-     * @brief 优化后的接收函数
-     * 逻辑：一次性读空串口缓冲区，在本地缓冲区寻找“最后一个”合法的包。
-     */
-    bool RecvFdData(LowState& state) {
-        if (serial_fd < 0) return false;
-
-        // 增大单次读取量
         uint8_t read_buf[1024]; 
-        int n = read(serial_fd, read_buf, sizeof(read_buf));
+        int n = read(fd, read_buf, sizeof(read_buf));
         if (n > 0) {
             rx_buffer.insert(rx_buffer.end(), read_buf, read_buf + n);
         }
 
         if (rx_buffer.size() < FEEDBACK_PACKET_SIZE) return false;
-
-        // 限制缓冲区，防止内存无限增长
         if (rx_buffer.size() > 4096) rx_buffer.clear();
 
-        bool found_at_least_one = false;
-        size_t last_valid_index = 0;
         bool has_valid_packet = false;
+        size_t last_valid_index = 0;
 
-        // 在进入循环前增加一层判断
-        if (rx_buffer.size() < FEEDBACK_PACKET_SIZE) return false;
-        // --- 逆向或遍历寻找最新的一个完整包 ---
-        // 从头往后扫描，不断更新“最新合法包”的位置
         for (size_t i = 0; i <= rx_buffer.size() - FEEDBACK_PACKET_SIZE; ) {
             if (rx_buffer[i] == 0x55 && rx_buffer[i+1] == 0xAA) {
-                // 找到头了，取出这个潜在的包
                 MotorFeedback_Packet_t* p_test = reinterpret_cast<MotorFeedback_Packet_t*>(&rx_buffer[i]);
-                
-                // 检查尾部标识
                 if (p_test->tail == 0xED) {
-                    // 计算 CRC 校验
                     uint16_t calc_crc = CalculateCRC16((uint8_t*)p_test, FEEDBACK_PACKET_SIZE - 3);
                     if (calc_crc == p_test->crc16) {
-                        // 校验通过！
                         last_valid_index = i;
                         has_valid_packet = true;
-                        found_at_least_one = true;
                         i += FEEDBACK_PACKET_SIZE; 
                         continue;
                     }
                 }
             }
-            i++; // 没找到或校验失败，往后挪1字节
+            i++; 
         }
 
         if (has_valid_packet) {
-            // 解析最新的包
             auto* p = reinterpret_cast<MotorFeedback_Packet_t*>(&rx_buffer[last_valid_index]);
-            for (int i=0; i < MOTOR_COUNTS; i++) {
-                state.motorState[i].pos_now = p->motor_pos_now[i];
-                state.motorState[i].vel_now = p->motor_vel_now[i];
-                state.motorState[i].tau_now = p->motor_tor_now[i];
+            
+            // ======= 组装映射 =======
+            // 右腿板子对应总数组的偶数索引 {0,2,4,6,8}
+            // 左腿板子对应总数组的奇数索引 {1,3,5,7,9}
+            int map_idx[BOARD_MOTOR_COUNTS];
+            if (is_left) {
+                int l_idx[] = {1, 3, 5, 7, 9};
+                std::memcpy(map_idx, l_idx, sizeof(map_idx));
+            } else {
+                int r_idx[] = {0, 2, 4, 6, 8};
+                std::memcpy(map_idx, r_idx, sizeof(map_idx));
             }
 
-            // --- 一次性清空最后一个合法包之前的所有数据 ---
-            // 这样可以确保 rx_buffer 里不会堆积旧包
-            rx_buffer.erase(rx_buffer.begin(), rx_buffer.begin() + last_valid_index + FEEDBACK_PACKET_SIZE);
-        }
+            for (int i=0; i < BOARD_MOTOR_COUNTS; i++) {
+                int target_idx = map_idx[i];
+                state.motorState[target_idx].pos_now = p->motor_pos_now[i];
+                state.motorState[target_idx].vel_now = p->motor_vel_now[i];
+                state.motorState[target_idx].tau_now = p->motor_tor_now[i];
+            }
 
-        return found_at_least_one;
+            rx_buffer.erase(rx_buffer.begin(), rx_buffer.begin() + last_valid_index + FEEDBACK_PACKET_SIZE);
+            return true;
+        }
+        return false;
+    }
+
+public:
+    LWSDK() {
+        rx_buffer_right.reserve(4096); 
+        rx_buffer_left.reserve(4096); 
+    };
+    
+    ~LWSDK() {
+        if (serial_fd_right >= 0) close(serial_fd_right);
+        if (serial_fd_left >= 0) close(serial_fd_left);
+    };
+
+    void InitCmdData(LowCmd &cmd) {
+        for (int i = 0; i < MOTOR_COUNTS; i++) {
+            cmd.motorCmd[i].action_set = 0.0f;
+            cmd.motorCmd[i].Kp = 0.0f;
+            cmd.motorCmd[i].Kd = 0.0f;
+        }
+        cmd.motors_disable = false;
+    }
+
+    // 接口修改为传入两个串口名称
+    bool InitSerial(const char* port_right, const char* port_left) { // 右腿串口， 左腿串口
+        bool r_ok = OpenPort(serial_fd_right, port_right);
+        bool l_ok = OpenPort(serial_fd_left, port_left);
+        return r_ok && l_ok;
+    }
+
+    void SendCmdData(LowCmd& cmd) {
+        MotorCmd_Packet_t pkt_r, pkt_l;
+        
+        // 组装共同的头尾
+        pkt_r.header[0] = 0xA5; pkt_r.header[1] = 0x5A; pkt_r.tail = 0xFC;
+        pkt_l.header[0] = 0xA5; pkt_l.header[1] = 0x5A; pkt_l.tail = 0xFC;
+        
+        pkt_r.motors_disable = cmd.motors_disable ? 0x01 : 0x00;
+        pkt_l.motors_disable = cmd.motors_disable ? 0x01 : 0x00;
+
+        // ======= 拆分映射 =======
+        int right_idx[] = {0, 2, 4, 6, 8};
+        int left_idx[]  = {1, 3, 5, 7, 9};
+
+        for (int i=0; i < BOARD_MOTOR_COUNTS; i++) {
+            // 右腿包提取
+            pkt_r.motor_action_set[i] = cmd.motorCmd[right_idx[i]].action_set;
+            pkt_r.motor_kp_set[i]     = cmd.motorCmd[right_idx[i]].Kp;
+            pkt_r.motor_kd_set[i]     = cmd.motorCmd[right_idx[i]].Kd;
+            // 左腿包提取
+            pkt_l.motor_action_set[i] = cmd.motorCmd[left_idx[i]].action_set;
+            pkt_l.motor_kp_set[i]     = cmd.motorCmd[left_idx[i]].Kp;
+            pkt_l.motor_kd_set[i]     = cmd.motorCmd[left_idx[i]].Kd;
+        }
+        
+        // 分别算 CRC 并发送
+        if (serial_fd_right >= 0) {
+            pkt_r.crc16 = CalculateCRC16((uint8_t*)&pkt_r, sizeof(MotorCmd_Packet_t) - 3);
+            write(serial_fd_right, &pkt_r, sizeof(MotorCmd_Packet_t));
+        }
+        
+        if (serial_fd_left >= 0) {
+            pkt_l.crc16 = CalculateCRC16((uint8_t*)&pkt_l, sizeof(MotorCmd_Packet_t) - 3);
+            write(serial_fd_left, &pkt_l, sizeof(MotorCmd_Packet_t));
+        }
+    }
+
+    bool RecvFdData(LowState& state) {
+        // 分别尝试读取并解析左右腿的最新状态
+        bool r_updated = ProcessSingleRx(serial_fd_right, rx_buffer_right, state, false);
+        bool l_updated = ProcessSingleRx(serial_fd_left, rx_buffer_left, state, true);
+        
+        // 只要有一边的状态更新了，就告诉上层我们拿到新数据了
+        return r_updated || l_updated;
     }
 };
 

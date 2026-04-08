@@ -61,7 +61,7 @@ RL_Real::RL_Real(int argc, char **argv)
     this->PreloadModel(this->robot_name + "/robot_lab/leg_loco");
     this->PreloadModel(this->robot_name + "/robot_lab/wheel_loco");
     this->PreloadModel(this->robot_name + "/robot_lab/leg_to_wheel");
-    // this->PreloadModel(this->robot_name + "/robot_lab/wheel_to_leg");
+    this->PreloadModel(this->robot_name + "/robot_lab/wheel_to_leg");
 
     // 解析命令行参数
     for (int i = 1; i < argc; ++i) {
@@ -110,7 +110,6 @@ RL_Real::RL_Real(int argc, char **argv)
     }
 
     // init robot
-    //this->lw_sdk.InitSerial("/dev/ttyACM0");
     this->lw_sdk.InitCmdData(this->lw_low_command);
     this->InitJointNum(this->params.Get<int>("num_of_dofs"));
     this->InitOutputs();
