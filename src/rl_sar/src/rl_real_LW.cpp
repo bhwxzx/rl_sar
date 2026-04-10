@@ -187,6 +187,13 @@ void RL_Real::RobotControl()
     auto t_start = std::chrono::high_resolution_clock::now();
 #endif
     this->GetState(&this->robot_state);
+    // 电机故障保护，切换进入阻尼模式
+    if(this->lw_sdk.MotorsProtect(this->lw_low_state)){
+        this->control.SetKeyboard(Input::Keyboard::P);
+        disable_lw_robot();
+        return;
+    }
+    
 #ifdef CONTROL_TIME_PRINT
     auto t_after_get = std::chrono::high_resolution_clock::now();
 #endif

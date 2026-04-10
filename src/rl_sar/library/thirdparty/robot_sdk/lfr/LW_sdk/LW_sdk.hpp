@@ -23,6 +23,7 @@ typedef struct {
     float pos_now;
     float vel_now;
     float tau_now;
+    uint8_t state_now; // 电机的状态 (1为正常，>1为报错)
 } MotorState;
 
 typedef struct {
@@ -57,6 +58,7 @@ typedef struct {
     float motor_pos_now[BOARD_MOTOR_COUNTS];
     float motor_vel_now[BOARD_MOTOR_COUNTS];
     float motor_tor_now[BOARD_MOTOR_COUNTS];
+    uint8_t motor_state[BOARD_MOTOR_COUNTS];
     uint16_t crc16;
     uint8_t tail;           // 0xED
 } MotorFeedback_Packet_t;
@@ -178,6 +180,7 @@ private:
                 state.motorState[target_idx].pos_now = p->motor_pos_now[i];
                 state.motorState[target_idx].vel_now = p->motor_vel_now[i];
                 state.motorState[target_idx].tau_now = p->motor_tor_now[i];
+                state.motorState[target_idx].state_now = p->motor_state[i];
             }
 
             rx_buffer.erase(rx_buffer.begin(), rx_buffer.begin() + last_valid_index + FEEDBACK_PACKET_SIZE);
@@ -257,6 +260,39 @@ public:
         
         // 只要有一边的状态更新了，就告诉上层我们拿到新数据了
         return r_updated || l_updated;
+    }
+
+    // 电机故障检测函数
+    bool MotorsProtect(LowState& state){
+        bool has_fault = false;
+        
+        for(int i = 0; i < MOTOR_COUNTS; i++) {
+            uint8_t err_code = state.motorState[i].state_now;
+            
+            // 达妙电机状态：1 是 Enable，0 是 Disable，大于 1 全是硬件报错
+            if (err_code > 1) {
+                std::string err_msg = "Unknown Error (未知错误)";
+                
+                // 解析达妙协议中的故障码
+                switch (err_code) {
+                    case 0x08: err_msg = "Over Voltage (过压)"; break;
+                    case 0x09: err_msg = "Under Voltage (欠压)"; break;
+                    case 0x0A: err_msg = "Over Current (过流)"; break;
+                    case 0x0B: err_msg = "MOS Over Temperature (MOS过温)"; break;
+                    case 0x0C: err_msg = "Coil Over Temperature (线圈过温)"; break;
+                    case 0x0D: err_msg = "Communication Loss (通讯丢失)"; break;
+                    case 0x0E: err_msg = "Overload (过载)"; break;
+                }
+
+                // 打印报错信息 (十六进制和中文释义同时打印，方便排查)
+                std::cerr << "\033[1;31m[HARDWARE FAULT] Motor " << i 
+                          << " Fault! Code: 0x" << std::hex << (int)err_code << std::dec
+                          << " - " << err_msg << "\033[0m" << std::endl;
+                          
+                has_fault = true;
+            }
+        }
+        return has_fault;
     }
 };
 
