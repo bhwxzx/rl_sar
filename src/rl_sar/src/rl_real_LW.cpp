@@ -101,7 +101,7 @@ RL_Real::RL_Real(int argc, char **argv)
     this->realtime_debug_publisher_->unlock();
 
     this->timer_ = ros2_node->create_wall_timer(
-        2ms, std::bind(&RL_Real::jointstate_plot_callback, this)
+        4ms, std::bind(&RL_Real::jointstate_plot_callback, this)
     );
 #endif
 #ifdef CSV_LOGGER
