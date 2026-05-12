@@ -26,7 +26,7 @@ RL_Real::RL_Real(int argc, char **argv)
     this->PreloadModel(this->robot_name + "/robot_lab/leg_loco");
     this->PreloadModel(this->robot_name + "/robot_lab/wheel_loco");
     this->PreloadModel(this->robot_name + "/robot_lab/leg_to_wheel");
-    // this->PreloadModel(this->robot_name + "/robot_lab/wheel_to_leg");
+    this->PreloadModel(this->robot_name + "/robot_lab/wheel_to_leg");
 
     // auto load FSM by robot_name
     if (FSMManager::GetInstance().IsTypeSupported(this->robot_name))
@@ -85,6 +85,10 @@ RL_Real::RL_Real(int argc, char **argv)
     };
     std::vector<std::string> imu_states = {
         "imu_ang_vel",
+        "imu_quat_w",
+        "imu_quat_x",
+        "imu_quat_y",
+        "imu_quat_z"
     };
     std::vector<std::string> joint_names;
     joint_names.reserve(joint_now_names.size() + joint_target_names.size() + imu_states.size());
@@ -159,10 +163,33 @@ void RL_Real::jointstate_plot_callback(void)
             }
         }
         
+        // 记录 IMU 及其四元数
+        int imu_offset = 2 * num_of_dofs;
 
-        msg.position[2*num_of_dofs] = this->robot_state.imu.gyroscope[0];
-        msg.velocity[2*num_of_dofs] = this->robot_state.imu.gyroscope[1];
-        msg.effort[2*num_of_dofs] = this->robot_state.imu.gyroscope[2];
+        // 原有的角速度记录
+        msg.position[imu_offset] = this->robot_state.imu.gyroscope[0];
+        msg.velocity[imu_offset] = this->robot_state.imu.gyroscope[1];
+        msg.effort[imu_offset]   = this->robot_state.imu.gyroscope[2];
+
+        // 四元数 W (存在 position 里，为了保持数据整洁清空 vel 和 effort)
+        msg.position[imu_offset + 1] = this->robot_state.imu.quaternion[0];
+        msg.velocity[imu_offset + 1] = 0.0f;
+        msg.effort[imu_offset + 1]   = 0.0f;
+
+        // 四元数 X
+        msg.position[imu_offset + 2] = this->robot_state.imu.quaternion[1];
+        msg.velocity[imu_offset + 2] = 0.0f;
+        msg.effort[imu_offset + 2]   = 0.0f;
+
+        // 四元数 Y
+        msg.position[imu_offset + 3] = this->robot_state.imu.quaternion[2];
+        msg.velocity[imu_offset + 3] = 0.0f;
+        msg.effort[imu_offset + 3]   = 0.0f;
+
+        // 四元数 Z
+        msg.position[imu_offset + 4] = this->robot_state.imu.quaternion[3];
+        msg.velocity[imu_offset + 4] = 0.0f;
+        msg.effort[imu_offset + 4]   = 0.0f;
 
         this->realtime_debug_publisher_->unlockAndPublish();
     }
