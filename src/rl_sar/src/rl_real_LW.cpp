@@ -88,7 +88,8 @@ RL_Real::RL_Real(int argc, char **argv)
         "imu_quat_w",
         "imu_quat_x",
         "imu_quat_y",
-        "imu_quat_z"
+        "imu_quat_z",
+        "cmd_vel"  
     };
     std::vector<std::string> joint_names;
     joint_names.reserve(joint_now_names.size() + joint_target_names.size() + imu_states.size());
@@ -190,6 +191,13 @@ void RL_Real::jointstate_plot_callback(void)
         msg.position[imu_offset + 4] = this->robot_state.imu.quaternion[3];
         msg.velocity[imu_offset + 4] = 0.0f;
         msg.effort[imu_offset + 4]   = 0.0f;
+
+        int cmd_offset = imu_offset + 5;
+
+        // 记录控制指令
+        msg.position[cmd_offset + 0] = this->control.x;
+        msg.velocity[cmd_offset + 0] = this->control.y;
+        msg.effort[cmd_offset + 0]   = this->control.yaw;
 
         this->realtime_debug_publisher_->unlockAndPublish();
     }
