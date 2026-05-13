@@ -244,12 +244,26 @@ public:
         // 分别算 CRC 并发送
         if (serial_fd_right >= 0) {
             pkt_r.crc16 = CalculateCRC16((uint8_t*)&pkt_r, sizeof(MotorCmd_Packet_t) - 3);
-            write(serial_fd_right, &pkt_r, sizeof(MotorCmd_Packet_t));
+            // 检查是否产生了 NaN 或越界
+            for (int i=0; i < BOARD_MOTOR_COUNTS; i++) {
+                if (std::isnan(pkt_r.motor_action_set[i])) {
+                    std::cerr << "\033[1;31m[FATAL] RL Output is NaN! STM32 will ignore!\033[0m" << std::endl;
+                }
+            }
+
+            int res_r = write(serial_fd_right, &pkt_r, sizeof(MotorCmd_Packet_t));
+            // 检查 USB OUT 通道是否死锁
+            if (res_r < 0) {
+                std::cerr << "\033[1;31m[FATAL] Right Leg USB Write Failed! Error: " << strerror(errno) << "\033[0m" << std::endl;
+            }
         }
         
         if (serial_fd_left >= 0) {
             pkt_l.crc16 = CalculateCRC16((uint8_t*)&pkt_l, sizeof(MotorCmd_Packet_t) - 3);
-            write(serial_fd_left, &pkt_l, sizeof(MotorCmd_Packet_t));
+            int res_l = write(serial_fd_left, &pkt_l, sizeof(MotorCmd_Packet_t));
+            if (res_l < 0) {
+                std::cerr << "\033[1;31m[FATAL] Left Leg USB Write Failed! Error: " << strerror(errno) << "\033[0m" << std::endl;
+            }
         }
     }
 
