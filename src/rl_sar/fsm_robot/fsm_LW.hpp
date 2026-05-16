@@ -101,6 +101,10 @@ public:
         {
             return "RLFSMStatePassive";
         }
+        if (rl.control.current_keyboard == Input::Keyboard::Num2 || rl.control.current_gamepad == Input::Gamepad::Y)
+        {
+            return "RLFSMStateGetUp_Wheel";
+        }
         if (percent_getup >= 1.0f)
         {
             if (rl.control.current_keyboard == Input::Keyboard::Num1 || rl.control.current_gamepad == Input::Gamepad::RB_DPadUp)
@@ -169,6 +173,10 @@ public:
         if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
         {
             return "RLFSMStatePassive";
+        }
+        if (rl.control.current_keyboard == Input::Keyboard::Num0 || rl.control.current_gamepad == Input::Gamepad::A)
+        {
+            return "RLFSMStateGetUp_Leg";
         }
         if (percent_getup >= 1.0f)
         {
