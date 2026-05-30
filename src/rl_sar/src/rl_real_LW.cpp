@@ -399,9 +399,32 @@ void RL_Real::GetState(RobotState<float> *state)
     state->imu.quaternion[2] = imu.orientation.y;
     state->imu.quaternion[3] = imu.orientation.z;
 
+// ----------------- 新增的宏定义滤波逻辑 -----------------
+#ifdef ENABLE_IMU_GYRO_FILTER
+    if (this->is_first_imu_) {
+        // 第一帧数据不滤波，直接赋值，作为滤波器的初始基准
+        this->filtered_gyro_[0] = imu.angular_velocity.x;
+        this->filtered_gyro_[1] = imu.angular_velocity.y;
+        this->filtered_gyro_[2] = imu.angular_velocity.z;
+        this->is_first_imu_ = false;
+    } else {
+        // 一阶低通滤波公式： y(t) = alpha * x(t) + (1 - alpha) * y(t-1)
+        this->filtered_gyro_[0] = this->gyro_filter_alpha_ * imu.angular_velocity.x + (1.0f - this->gyro_filter_alpha_) * this->filtered_gyro_[0];
+        this->filtered_gyro_[1] = this->gyro_filter_alpha_ * imu.angular_velocity.y + (1.0f - this->gyro_filter_alpha_) * this->filtered_gyro_[1];
+        this->filtered_gyro_[2] = this->gyro_filter_alpha_ * imu.angular_velocity.z + (1.0f - this->gyro_filter_alpha_) * this->filtered_gyro_[2];
+    }
+    
+    // 将滤波后的结果赋值给 state
+    state->imu.gyroscope[0] = this->filtered_gyro_[0];
+    state->imu.gyroscope[1] = this->filtered_gyro_[1];
+    state->imu.gyroscope[2] = this->filtered_gyro_[2];
+#else
+    // 原有逻辑（未开启滤波）
     state->imu.gyroscope[0] = imu.angular_velocity.x;
     state->imu.gyroscope[1] = imu.angular_velocity.y;
     state->imu.gyroscope[2] = imu.angular_velocity.z;
+#endif
+// --------------------------------------------------------
 
     if (this->lw_sdk.RecvFdData(this->lw_low_state))
     {

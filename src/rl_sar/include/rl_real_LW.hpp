@@ -2,6 +2,7 @@
 #define RL_REAL_LW_HPP
 
 #define PLOT
+#define ENABLE_IMU_GYRO_FILTER 
 // #define CSV_LOGGER
 // #define CONTROL_TIME_PRINT
 // #define FOWARD_TIME_PRINT
@@ -88,6 +89,18 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_subscriber_ = nullptr;
     realtime_tools::RealtimeBox<std::shared_ptr<sensor_msgs::msg::Imu>> received_imu_msg_ptr_{nullptr};
     void ImuCallback(const sensor_msgs::msg::Imu::SharedPtr imu_msg);
+#ifdef ENABLE_IMU_GYRO_FILTER
+    // 滤波系数 alpha 取值范围 (0, 1]。
+    // 越接近 1 则越信任当前真实值（滤波效果弱，延迟小）；
+    // 越接近 0 则越信任历史值（滤波效果强，延迟大）。建议根据实际震动情况调节（如 0.2 ~ 0.5）。
+    float gyro_filter_alpha_ = 0.3f; 
+    
+    // 记录上一时刻的滤波结果
+    std::vector<float> filtered_gyro_ = {0.0f, 0.0f, 0.0f};
+    
+    // 标记是否是第一次接收到 IMU 数据，防止从 0 开始产生初始跳变
+    bool is_first_imu_ = true; 
+#endif
 
      // plot
     std::shared_ptr<rclcpp::Publisher<sensor_msgs::msg::JointState>> jointstate_plot_publisher_ = nullptr;
