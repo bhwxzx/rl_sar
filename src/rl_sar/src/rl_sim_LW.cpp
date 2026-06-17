@@ -516,8 +516,15 @@ void RL_Real::RunModel()
         {
             this->gait_phase_time -= 1.0f; 
         }
-        this->obs.gait_phase = {std::sin(2 * static_cast<float>(M_PI) * (this->gait_phase_time)), 
-                                std::cos(2 * static_cast<float>(M_PI) * (this->gait_phase_time))};
+
+        float vel_threshold = 0.1f;
+        float cmd_norm = std::sqrt(this->control.x * this->control.x + 
+                                   this->control.y * this->control.y + 
+                                   this->control.yaw * this->control.yaw);
+        float is_moving = (cmd_norm > vel_threshold) ? 1.0f : 0.0f;
+
+        this->obs.gait_phase = {is_moving * std::sin(2 * static_cast<float>(M_PI) * (this->gait_phase_time)), 
+                                is_moving * std::cos(2 * static_cast<float>(M_PI) * (this->gait_phase_time))};
             
         // this->obs.gait_command = {this->control.gait_frequency, 
         //                           this->params.Get<std::vector<float>>("gait_command")[1], 
@@ -782,7 +789,7 @@ void RL_Real::GetSysJoystick()
     float ly = (-float(this->sys_js_axis[1]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[0];
     float lx = (-float(this->sys_js_axis[0]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[1];
     float rx = (-float(this->sys_js_axis[2]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[2];
-    
+
 #endif
 
 #ifdef JOYSTICK_2
@@ -826,9 +833,9 @@ void RL_Real::GetSysJoystick()
     // float lx = -float(this->sys_js_axis[0]) / float(this->sys_js_max_value);
     // float rx = -float(this->sys_js_axis[3]) / float(this->sys_js_max_value);
 
-    // float ly = (-float(this->sys_js_axis[1]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[0];
-    // float lx = (-float(this->sys_js_axis[0]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[1];
-    // float rx = (-float(this->sys_js_axis[3]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[2];
+    float ly = (-float(this->sys_js_axis[1]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[0];
+    float lx = (-float(this->sys_js_axis[0]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[1];
+    float rx = (-float(this->sys_js_axis[3]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[2];
 #endif
 
     bool has_input = (ly != 0.0f || lx != 0.0f || rx != 0.0f);
@@ -865,15 +872,23 @@ void RL_Real::GetSysJoystick()
     //     // 设计经典的多段阶跃曲线 (Staircase Command)
     //     if (t < 1.0) {
     //         this->control.x = 0.0f;   // 原地站立预备
-    //     } else if (t < 6.0) {
-    //         this->control.x = 1.0f;   // 前向巡航加速 (0.35 m/s)
-    //         // this->control.yaw = 0.5f;
-    //     // } else if (t < 7.0) {
-    //     //     this->control.x = 0.0f;   // 紧急制动停稳
-    //     // } else if (t < 11.0) {
-    //     //     this->control.x = -0.35f;  // 向后退测试 (-0.35 m/s)
-    //     //     this->control.yaw = -0.15f;
-    //     } else {
+    //     } 
+    //     else if (t < 4.0) {
+    //         this->control.x = 0.3f;   // 前向巡航加速 
+    //     }
+    //     else if (t < 7.0) {
+    //         this->control.x = 0.6f;   // 前向巡航加速 
+    //     }
+    //     else if (t < 10.0) {
+    //         this->control.x = 0.9f;   // 前向巡航加速 
+    //     }
+    //     else if (t < 13.0) {
+    //         this->control.x = 1.2f;   // 前向巡航加速 
+    //     }
+    //     else if (t < 16.0) {
+    //         this->control.x = 1.5f;   // 前向巡航加速 
+    //     }
+    //     else {
     //         this->control.x = 0.0f;   // 实验结束
     //         this->control.yaw = 0.0f;
     //         test_start_time = -1.0;   // 状态复位，允许按键再次触发

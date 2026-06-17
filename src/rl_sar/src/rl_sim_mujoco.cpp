@@ -424,8 +424,15 @@ void RL_Sim::RunModel()
             {
                 this->gait_phase_time -= 1.0f; 
             }
-            this->obs.gait_phase = {std::sin(2 * static_cast<float>(M_PI) * (this->gait_phase_time)), 
-                                    std::cos(2 * static_cast<float>(M_PI) * (this->gait_phase_time))};
+
+            float vel_threshold = 0.1f;
+            float cmd_norm = std::sqrt(this->control.x * this->control.x + 
+                                       this->control.y * this->control.y + 
+                                       this->control.yaw * this->control.yaw);
+            float is_moving = (cmd_norm > vel_threshold) ? 1.0f : 0.0f;
+
+            this->obs.gait_phase = {is_moving * std::sin(2 * static_cast<float>(M_PI) * (this->gait_phase_time)), 
+                                    is_moving * std::cos(2 * static_cast<float>(M_PI) * (this->gait_phase_time))};
             
             this->obs.gait_command = {this->control.gait_frequency, 
                                       this->params.Get<std::vector<float>>("gait_command")[1], 
