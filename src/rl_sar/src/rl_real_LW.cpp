@@ -280,7 +280,7 @@ void RL_Real::RunModel()
         {
             this->gait_phase_time -= 1.0f; 
         }
-        float vel_threshold = 0.1f;
+        float vel_threshold = 0.05f;
         float cmd_norm = std::sqrt(this->control.x * this->control.x + 
                                    this->control.y * this->control.y + 
                                    this->control.yaw * this->control.yaw);

@@ -37,7 +37,7 @@ RL_Real::RL_Real(int argc, char **argv)
         &cam, &opt, &pert, /* is_passive = */ false);
 
     this->robot_name = "LW";
-    this->scene_name = "scene";
+    this->scene_name = "scene"; // "scene" "scene_terrain"
     std::string filename = std::string(CMAKE_CURRENT_SOURCE_DIR) + "/../rl_sar_zoo/" + this->robot_name + "_description/mjcf/" + this->scene_name + ".xml";
 
     // start physics thread
@@ -517,7 +517,7 @@ void RL_Real::RunModel()
             this->gait_phase_time -= 1.0f; 
         }
 
-        float vel_threshold = 0.1f;
+        float vel_threshold = 0.05f;
         float cmd_norm = std::sqrt(this->control.x * this->control.x + 
                                    this->control.y * this->control.y + 
                                    this->control.yaw * this->control.yaw);
