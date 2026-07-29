@@ -44,7 +44,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 1 | LW-001 | P0 / critical | resolved | Make control-loop shutdown and exception handling fail-safe |
 | 2 | LW-002 | P0 / critical | resolved | Require valid, fresh IMU and bilateral motor feedback before commanding |
 | 3 | LW-003 | P0 / critical | resolved | Repair serial receive parsing and complete-write handling |
-| 4 | LW-004 | P0 / critical | pending | Remove invalid FSM transition targets and validate all transitions |
+| 4 | LW-004 | P0 / critical | resolved | Remove invalid FSM transition targets and validate all transitions |
 | 5 | LW-005 | P0 / critical | pending | Enforce finite, bounded commands and active protection |
 | 6 | LW-006 | P0 / critical | pending | Add joystick deadman, disconnect handling, and index bounds |
 | 7 | LW-007 | P1 / high | pending | Remove cross-thread data races with coherent snapshots |
@@ -214,7 +214,7 @@ When an RX buffer exceeds 4096 bytes, it is cleared and then immediately used in
 ## [LW-004] FSM transition correctness
 
 **Priority**: P0 / critical
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-001
 
 ### Problem
@@ -240,6 +240,21 @@ Both morphology-transition states can return the nonexistent state name `RLFSMSt
 - Every `CheckChange()` result is present in the factory's registered state set.
 - Pressing every supported input in every state cannot throw.
 - Invalid external requests are rejected without leaving the current safe state.
+
+### Resolution Evidence
+
+- Resolved: 2026-07-29
+- The invalid `RLFSMStateGetUp` branches were removed from both morphology-transition states. As explicitly requested, `0/A` is ignored during leg-to-wheel and wheel-to-leg transitions instead of interrupting the active motion with a get-up state.
+- Morphology transitions still accept `P/LB_X` for passive mode and `9/B` for get-down; successful motion completion still requests the corresponding registered locomotion state.
+- `FSM::Run()` now resolves a `CheckChange()` target with `find()` before entering change mode. An unregistered target is logged and rejected while the FSM remains in its current state, so the transition path no longer throws through `unordered_map::at()`.
+- Passive-mode operator guidance now matches the implemented wheel get-up mapping: keyboard `2` or gamepad `Y`.
+- `test_lw_fsm_transitions` covers all eight registered LW states, every accepted keyboard/gamepad transition, every value in both input enums, ignored `0/A` input during morphology transitions, factory registration consistency, and rejection of invalid internal and external targets.
+- Verified with:
+  - `cmake --build build/rl_sar --target test_lw_fsm_transitions rl_real_LW rl_sim_LW -j2`
+  - `ctest --test-dir build/rl_sar --output-on-failure --repeat until-fail:20 -R '^(loop_lifecycle|sensor_readiness|lw_serial_sdk|lw_fsm_transitions)$'`
+  - targeted `cppcheck` of the FSM core, LW FSM, and transition test
+- Result: both LW executables built successfully; all four selected tests passed for 20 consecutive runs; `cppcheck` reported only pre-existing style advisories and no new correctness warning.
+- Hardware execution was intentionally not performed.
 
 ---
 

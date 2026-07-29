@@ -428,6 +428,17 @@ if(Python3_NumPy_FOUND)
 else()
     target_compile_definitions(rl_sdk PUBLIC WITHOUT_NUMPY)
 endif()
+if(BUILD_TESTING)
+    add_executable(test_lw_fsm_transitions
+        test/test_lw_fsm_transitions.cpp
+    )
+    target_link_libraries(test_lw_fsm_transitions PRIVATE
+        rl_sdk
+        observation_buffer
+        ${YAML_CPP_LIBRARIES}
+    )
+    add_test(NAME lw_fsm_transitions COMMAND test_lw_fsm_transitions)
+endif()
 if(NOT USE_CMAKE)
     if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
         install(TARGETS rl_sdk DESTINATION lib/${PROJECT_NAME})

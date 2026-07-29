@@ -70,8 +70,20 @@ public:
             std::string next = current_state_->CheckChange();
             if (next != current_state_->GetStateName())
             {
+                const auto next_state = states_.find(next);
+                if (next_state == states_.end())
+                {
+                    std::cout << std::endl
+                              << LOGGER::ERROR
+                              << "[FSM] Reject invalid transition from "
+                              << current_state_->GetStateName()
+                              << " to unregistered state '" << next << "'"
+                              << std::endl;
+                    return;
+                }
+
                 mode_ = Mode::CHANGE;
-                next_state_ = states_.at(next);
+                next_state_ = next_state->second;
                 std::cout << std::endl << LOGGER::NOTE << "[FSM] Switch from " << current_state_->GetStateName() << " to " << next_state_->GetStateName() << std::endl;
             }
         }
