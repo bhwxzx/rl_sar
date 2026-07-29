@@ -1,6 +1,9 @@
 
 #include "rl_real_LW.hpp"
 
+#include <cmath>
+#include <stdexcept>
+
 using namespace std::chrono_literals;
 
 RL_Real::RL_Real(int argc, char **argv)
@@ -21,6 +24,14 @@ RL_Real::RL_Real(int argc, char **argv)
     this->ang_vel_axis = "body";
     this->robot_name = "LW";
     this->ReadYaml(this->robot_name, "base.yaml");
+    const float sensor_timeout_seconds = this->params.Get<float>("sensor_timeout");
+    if (!std::isfinite(sensor_timeout_seconds) || sensor_timeout_seconds <= 0.0f)
+    {
+        throw std::runtime_error("LW sensor_timeout must be a finite positive value");
+    }
+    this->sensor_readiness_monitor_.setTimeout(
+        std::chrono::duration_cast<SafetyClock::duration>(
+            std::chrono::duration<float>(sensor_timeout_seconds)));
 
     // 提前加载所有的模型到内存
     this->PreloadModel(this->robot_name + "/robot_lab/leg_loco");
@@ -43,8 +54,21 @@ RL_Real::RL_Real(int argc, char **argv)
     }
 
     // init robot
-    this->lw_sdk.InitSerial("/dev/ttyLegRight", "/dev/ttyLegLeft");
     this->lw_sdk.InitCmdData(this->lw_low_command);
+    const LWSerialInitStatus serial_status =
+        this->lw_sdk.InitSerial("/dev/ttyLegRight", "/dev/ttyLegLeft");
+    if (!serial_status.bothInitialized())
+    {
+        std::cerr << LOGGER::ERROR
+                  << "[Safety] LW serial initialization failed for "
+                  << serial_status.failedSides()
+                  << " side"
+                  << "; control loops will not start"
+                  << std::endl;
+        disable_lw_robot();
+        throw std::runtime_error("failed to initialize both LW serial ports");
+    }
+    disable_lw_robot();
     this->InitJointNum(this->params.Get<int>("num_of_dofs"));
     this->InitOutputs();
     this->InitControl();
@@ -258,11 +282,6 @@ void RL_Real::disable_lw_robot(bool latch_commands)
 
 void RL_Real::HandleLoopError(const std::string& loop_name, std::exception_ptr error) noexcept
 {
-    if (fatal_loop_error_.exchange(true, std::memory_order_acq_rel))
-    {
-        return;
-    }
-
     std::string message = "unknown exception";
     try
     {
@@ -279,22 +298,62 @@ void RL_Real::HandleLoopError(const std::string& loop_name, std::exception_ptr e
     {
     }
 
-    std::cerr << LOGGER::ERROR << "[Loop] Fatal callback exception - name: "
-              << loop_name << ", error: " << message << std::endl;
+    EnterFailSafe(
+        "[Loop] Fatal callback exception - name: " + loop_name + ", error: " + message);
+}
 
-    try
+void RL_Real::SendEmergencyDisableBurst() noexcept
+{
+    constexpr int disable_attempts = 20;
+    constexpr auto disable_interval = 5ms;
+
+    command_gate_.close();
+    bool send_error_logged = false;
+    for (int attempt = 0; attempt < disable_attempts; ++attempt)
     {
-        disable_lw_robot(true);
+        try
+        {
+            disable_lw_robot(true);
+        }
+        catch (const std::exception& exception)
+        {
+            if (!send_error_logged)
+            {
+                std::cerr << LOGGER::ERROR << "[Safety] Failed to send emergency disable: "
+                          << exception.what() << std::endl;
+                send_error_logged = true;
+            }
+        }
+        catch (...)
+        {
+            if (!send_error_logged)
+            {
+                std::cerr << LOGGER::ERROR << "[Safety] Failed to send emergency disable"
+                          << std::endl;
+                send_error_logged = true;
+            }
+        }
+
+        if (attempt + 1 < disable_attempts)
+        {
+            std::this_thread::sleep_for(disable_interval);
+        }
     }
-    catch (const std::exception& exception)
+}
+
+void RL_Real::EnterFailSafe(const std::string& reason) noexcept
+{
+    if (fatal_error_latched_.exchange(true, std::memory_order_acq_rel))
     {
-        std::cerr << LOGGER::ERROR << "[Loop] Failed to send emergency disable: "
-                  << exception.what() << std::endl;
+        return;
     }
-    catch (...)
-    {
-        std::cerr << LOGGER::ERROR << "[Loop] Failed to send emergency disable" << std::endl;
-    }
+
+    std::cerr << LOGGER::ERROR << reason << std::endl;
+    std::cerr << LOGGER::ERROR
+              << "[Safety] Commands permanently latched off; restart is required"
+              << std::endl;
+
+    SendEmergencyDisableBurst();
 
     try
     {
@@ -305,13 +364,53 @@ void RL_Real::HandleLoopError(const std::string& loop_name, std::exception_ptr e
     }
     catch (const std::exception& exception)
     {
-        std::cerr << LOGGER::ERROR << "[Loop] Failed to request ROS shutdown: "
+        std::cerr << LOGGER::ERROR << "[Safety] Failed to request ROS shutdown: "
                   << exception.what() << std::endl;
     }
     catch (...)
     {
-        std::cerr << LOGGER::ERROR << "[Loop] Failed to request ROS shutdown" << std::endl;
+        std::cerr << LOGGER::ERROR << "[Safety] Failed to request ROS shutdown" << std::endl;
     }
+}
+
+bool RL_Real::HandleSensorReadiness()
+{
+    if (sensor_readiness_status_.decision == SensorReadinessDecision::Ready)
+    {
+        if (!sensor_ready_logged_)
+        {
+            std::cout << LOGGER::INFO
+                      << "[Safety] Fresh IMU and bilateral motor feedback confirmed; control is ready"
+                      << std::endl;
+            sensor_ready_logged_ = true;
+        }
+        return true;
+    }
+
+    const std::string missing_sources = sensor_readiness_status_.missingSources();
+    if (sensor_readiness_status_.decision == SensorReadinessDecision::FaultLatched)
+    {
+        EnterFailSafe(
+            "[Safety] Required runtime data became stale: " + missing_sources);
+        return false;
+    }
+
+    const auto now = SafetyClock::now();
+    const bool log_due =
+        missing_sources != last_missing_sources_
+        || last_readiness_log_time_ == SafetyClock::time_point{}
+        || now - last_readiness_log_time_ >= 1s;
+    if (log_due)
+    {
+        std::cout << LOGGER::WARNING
+                  << "[Safety] Motors remain disabled; waiting for fresh: "
+                  << missing_sources << std::endl;
+        last_missing_sources_ = missing_sources;
+        last_readiness_log_time_ = now;
+    }
+
+    disable_lw_robot();
+    return false;
 }
 
 void RL_Real::RobotControl()
@@ -320,6 +419,11 @@ void RL_Real::RobotControl()
     auto t_start = std::chrono::high_resolution_clock::now();
 #endif
     this->GetState(&this->robot_state);
+    if (!HandleSensorReadiness())
+    {
+        return;
+    }
+
     // 电机故障保护，切换进入阻尼模式
     if(this->lw_sdk.MotorsProtect(this->lw_low_state)){
         this->control.SetKeyboard(Input::Keyboard::P);
@@ -485,18 +589,39 @@ std::vector<float> RL_Real::Forward()
 
 void RL_Real::ImuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
 {
-    received_imu_msg_ptr_.set(std::move(msg));
+    auto sample = std::make_shared<TimedImuSample>();
+    sample->message = std::move(msg);
+    sample->received_at = SafetyClock::now();
+    received_imu_sample_.set(std::move(sample));
 }
 
 void RL_Real::GetState(RobotState<float> *state)
 {
-    std::shared_ptr<sensor_msgs::msg::Imu> imu_msg_ptr;
-    received_imu_msg_ptr_.get(imu_msg_ptr);
-    if (!imu_msg_ptr) {
-        std::cout << LOGGER::WARNING << "No IMU data received yet!" << std::endl;
+    const LWFeedbackUpdate feedback_update = this->lw_sdk.RecvFdData(this->lw_low_state);
+    const auto now = SafetyClock::now();
+    if (feedback_update.right_updated)
+    {
+        sensor_readiness_monitor_.markRightFeedbackReceived(now);
+    }
+    if (feedback_update.left_updated)
+    {
+        sensor_readiness_monitor_.markLeftFeedbackReceived(now);
+    }
+
+    std::shared_ptr<TimedImuSample> imu_sample;
+    received_imu_sample_.get(imu_sample);
+    if (imu_sample && imu_sample->message)
+    {
+        sensor_readiness_monitor_.markImuReceived(imu_sample->received_at);
+    }
+
+    sensor_readiness_status_ = sensor_readiness_monitor_.evaluate(now);
+    if (!sensor_readiness_status_.allFresh())
+    {
         return;
     }
-    auto imu =  *imu_msg_ptr;
+
+    const auto& imu = *imu_sample->message;
 
     state->imu.quaternion[0] = imu.orientation.w;
     state->imu.quaternion[1] = imu.orientation.x;
@@ -530,16 +655,12 @@ void RL_Real::GetState(RobotState<float> *state)
 #endif
 // --------------------------------------------------------
 
-    if (this->lw_sdk.RecvFdData(this->lw_low_state))
+    for (int i = 0; i < this->params.Get<int>("num_of_dofs"); ++i)
     {
-        for (int i = 0; i < this->params.Get<int>("num_of_dofs"); ++i)
-        {
-            state->motor_state.q[i] = this->lw_low_state.motorState[this->params.Get<std::vector<int>>("joint_mapping")[i]].pos_now;
-            state->motor_state.dq[i] = this->lw_low_state.motorState[this->params.Get<std::vector<int>>("joint_mapping")[i]].vel_now;
-            state->motor_state.tau_est[i] = this->lw_low_state.motorState[this->params.Get<std::vector<int>>("joint_mapping")[i]].tau_now;
-        }
+        state->motor_state.q[i] = this->lw_low_state.motorState[this->params.Get<std::vector<int>>("joint_mapping")[i]].pos_now;
+        state->motor_state.dq[i] = this->lw_low_state.motorState[this->params.Get<std::vector<int>>("joint_mapping")[i]].vel_now;
+        state->motor_state.tau_est[i] = this->lw_low_state.motorState[this->params.Get<std::vector<int>>("joint_mapping")[i]].tau_now;
     }
-
 }
 
 void RL_Real::SetCommand(const RobotCommand<float> *command)
@@ -713,8 +834,21 @@ void RL_Real::GetSysJoystick()
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
-    auto rl_sar = std::make_shared<RL_Real>(argc, argv);
-    rclcpp::spin(rl_sar->ros2_node);
-    rclcpp::shutdown();
-    return 0;
+    try
+    {
+        auto rl_sar = std::make_shared<RL_Real>(argc, argv);
+        rclcpp::spin(rl_sar->ros2_node);
+        rclcpp::shutdown();
+        return 0;
+    }
+    catch (const std::exception& exception)
+    {
+        std::cerr << LOGGER::ERROR << "[Startup] rl_real_LW failed: "
+                  << exception.what() << std::endl;
+        if (rclcpp::ok())
+        {
+            rclcpp::shutdown();
+        }
+        return 1;
+    }
 }

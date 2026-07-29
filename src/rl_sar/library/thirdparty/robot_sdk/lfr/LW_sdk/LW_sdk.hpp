@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cmath>
 #include <algorithm>
+#include <string>
 
 #include <unistd.h>
 #include <fcntl.h>
@@ -40,6 +41,51 @@ typedef struct {
     MotorCmd motorCmd[MOTOR_COUNTS];
     bool motors_disable;
 } LowCmd;
+
+struct LWFeedbackUpdate
+{
+    bool right_updated = false;
+    bool left_updated = false;
+
+    bool anyUpdated() const noexcept
+    {
+        return right_updated || left_updated;
+    }
+
+    bool bothUpdated() const noexcept
+    {
+        return right_updated && left_updated;
+    }
+};
+
+struct LWSerialInitStatus
+{
+    bool right_initialized = false;
+    bool left_initialized = false;
+
+    bool bothInitialized() const noexcept
+    {
+        return right_initialized && left_initialized;
+    }
+
+    std::string failedSides() const
+    {
+        std::string result;
+        if (!right_initialized)
+        {
+            result = "right";
+        }
+        if (!left_initialized)
+        {
+            if (!result.empty())
+            {
+                result += ", ";
+            }
+            result += "left";
+        }
+        return result;
+    }
+};
 
 // 物理层通信包结构 (只针对单腿 5 个电机)
 #pragma pack(push, 1)
@@ -210,10 +256,11 @@ public:
     }
 
     // 接口修改为传入两个串口名称
-    bool InitSerial(const char* port_right, const char* port_left) { // 右腿串口， 左腿串口
-        bool r_ok = OpenPort(serial_fd_right, port_right);
-        bool l_ok = OpenPort(serial_fd_left, port_left);
-        return r_ok && l_ok;
+    LWSerialInitStatus InitSerial(const char* port_right, const char* port_left) { // 右腿串口， 左腿串口
+        LWSerialInitStatus status;
+        status.right_initialized = OpenPort(serial_fd_right, port_right);
+        status.left_initialized = OpenPort(serial_fd_left, port_left);
+        return status;
     }
 
     void SendCmdData(LowCmd& cmd) {
@@ -267,13 +314,12 @@ public:
         }
     }
 
-    bool RecvFdData(LowState& state) {
+    LWFeedbackUpdate RecvFdData(LowState& state) {
         // 分别尝试读取并解析左右腿的最新状态
-        bool r_updated = ProcessSingleRx(serial_fd_right, rx_buffer_right, state, false);
-        bool l_updated = ProcessSingleRx(serial_fd_left, rx_buffer_left, state, true);
-        
-        // 只要有一边的状态更新了，就告诉上层我们拿到新数据了
-        return r_updated || l_updated;
+        LWFeedbackUpdate update;
+        update.right_updated = ProcessSingleRx(serial_fd_right, rx_buffer_right, state, false);
+        update.left_updated = ProcessSingleRx(serial_fd_left, rx_buffer_left, state, true);
+        return update;
     }
 
     // 电机故障检测函数

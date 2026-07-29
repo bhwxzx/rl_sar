@@ -42,7 +42,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | Order | ID | Priority | Status | Summary |
 |---:|---|---|---|---|
 | 1 | LW-001 | P0 / critical | resolved | Make control-loop shutdown and exception handling fail-safe |
-| 2 | LW-002 | P0 / critical | pending | Require valid, fresh IMU and bilateral motor feedback before commanding |
+| 2 | LW-002 | P0 / critical | resolved | Require valid, fresh IMU and bilateral motor feedback before commanding |
 | 3 | LW-003 | P0 / critical | pending | Repair serial receive parsing and complete-write handling |
 | 4 | LW-004 | P0 / critical | pending | Remove invalid FSM transition targets and validate all transitions |
 | 5 | LW-005 | P0 / critical | pending | Enforce finite, bounded commands and active protection |
@@ -107,7 +107,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 ## [LW-002] Sensor and communication readiness/freshness gate
 
 **Priority**: P0 / critical
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-001
 
 ### Problem
@@ -138,6 +138,25 @@ The return value of `InitSerial()` is ignored. `GetState()` returns early when n
 - Disconnecting any required source while active reaches the safe state within a defined timeout.
 - Reconnection behavior is explicit and tested; it must not silently resume motion.
 - Startup logs identify exactly which readiness condition is missing.
+
+### Resolution Evidence
+
+- Resolved: 2026-07-29
+- Both serial ports must initialize successfully before any worker loop starts; failures identify the affected side, attempt a disable on any reachable side, and terminate startup.
+- `LWSDK::RecvFdData()` now reports right and left valid-frame updates independently.
+- IMU arrival and each board's valid feedback use independent steady-clock timestamps and a configurable `sensor_timeout` of `0.1 s`.
+- Before all three sources are fresh, the control loop remains in a disabled waiting state and reports the exact missing sources without advancing the FSM.
+- After readiness has been reached once, any source timeout permanently latches the command gate, sends 20 best-effort disable frames over approximately `100 ms`, and requests ROS shutdown. Reconnection cannot clear the latch.
+- The fixed two-second launch delay was removed; actual sensor readiness now controls activation.
+- `test_sensor_readiness` covers every missing startup source, the timeout boundary, every individual runtime timeout, and the permanent reconnection latch.
+- Verified with:
+  - `cmake --build build/rl_sar --target test_sensor_readiness test_loop_lifecycle rl_real_LW -j2`
+  - `ctest --test-dir build/rl_sar --output-on-failure -R '^(loop_lifecycle|sensor_readiness)$'`
+  - `python3 -m py_compile src/rl_sar/launch/rl_real_LW.launch.py`
+  - targeted `cppcheck` of the real entry point and readiness test
+- Result: `rl_real_LW` built successfully; both selected CTest tests passed; no new correctness warning was reported by `cppcheck`.
+- Hardware execution was intentionally not performed.
+- Safety boundary: host-side disable remains best-effort until `LW-003` verifies complete serial writes. A board-local communication watchdog and physical emergency stop are still required to cover cable loss, host failure, and power loss.
 
 ---
 

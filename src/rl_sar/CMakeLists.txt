@@ -240,6 +240,14 @@ if(BUILD_TESTING)
         Threads::Threads
     )
     add_test(NAME loop_lifecycle COMMAND test_loop_lifecycle)
+
+    add_executable(test_sensor_readiness
+        test/test_sensor_readiness.cpp
+    )
+    target_include_directories(test_sensor_readiness PRIVATE
+        library/core/safety
+    )
+    add_test(NAME sensor_readiness COMMAND test_sensor_readiness)
 endif()
 
 # Add Python library path to RPATH
@@ -361,6 +369,7 @@ include_directories(
     library/core/observation_buffer
     library/core/rl_sdk
     library/core/loop
+    library/core/safety
     library/core/fsm
     library/core/vector_math
     library/core/motion_loader

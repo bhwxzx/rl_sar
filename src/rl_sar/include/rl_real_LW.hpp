@@ -12,6 +12,7 @@
 #include "inference_runtime.hpp"
 #include "command_gate.hpp"
 #include "loop.hpp"
+#include "sensor_readiness.hpp"
 #include "fsm_LW.hpp"
 
 #include "LW_sdk.hpp"
@@ -19,6 +20,7 @@
 #include <csignal>
 #include <chrono>
 #include <exception>
+#include <string>
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -64,6 +66,9 @@ private:
     void RunModel();
     void RobotControl();
     void HandleLoopError(const std::string& loop_name, std::exception_ptr error) noexcept;
+    void EnterFailSafe(const std::string& reason) noexcept;
+    void SendEmergencyDisableBurst() noexcept;
+    bool HandleSensorReadiness();
 
     // loop
     std::shared_ptr<LoopFunc> loop_joystick;
@@ -76,7 +81,7 @@ private:
     LowCmd lw_low_command = {0};
     LowState lw_low_state = {0};
     CommandGate command_gate_;
-    std::atomic<bool> fatal_loop_error_{false};
+    std::atomic<bool> fatal_error_latched_{false};
     void disable_lw_robot(bool latch_commands = false);
 
     // joystick
@@ -92,8 +97,20 @@ private:
     void GetSysJoystick();
 
     // Imu
+    using SafetyClock = SensorReadinessMonitor::Clock;
+    struct TimedImuSample
+    {
+        sensor_msgs::msg::Imu::SharedPtr message;
+        SafetyClock::time_point received_at;
+    };
+
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_subscriber_ = nullptr;
-    realtime_tools::RealtimeBox<std::shared_ptr<sensor_msgs::msg::Imu>> received_imu_msg_ptr_{nullptr};
+    realtime_tools::RealtimeBox<std::shared_ptr<TimedImuSample>> received_imu_sample_{nullptr};
+    SensorReadinessMonitor sensor_readiness_monitor_{std::chrono::milliseconds(100)};
+    SensorReadinessStatus sensor_readiness_status_;
+    SafetyClock::time_point last_readiness_log_time_{};
+    std::string last_missing_sources_;
+    bool sensor_ready_logged_ = false;
     void ImuCallback(const sensor_msgs::msg::Imu::SharedPtr imu_msg);
 #ifdef ENABLE_IMU_GYRO_FILTER
     // 滤波系数 alpha 取值范围 (0, 1]。

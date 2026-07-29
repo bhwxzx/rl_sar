@@ -1,6 +1,8 @@
 LW:
   dt: 0.005
   decimation: 4
+  # Maximum age of IMU and each motor-board feedback frame before fail-safe.
+  sensor_timeout: 0.1
   rl_kp: [90.0, 90.0,
           90.0, 90.0,
           90.0, 90.0,
