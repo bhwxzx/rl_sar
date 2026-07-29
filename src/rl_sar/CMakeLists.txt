@@ -227,6 +227,21 @@ find_package(TBB REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(test_loop_lifecycle
+        test/test_loop_lifecycle.cpp
+    )
+    target_include_directories(test_loop_lifecycle PRIVATE
+        library/core/logger
+        library/core/loop
+    )
+    target_link_libraries(test_loop_lifecycle
+        Threads::Threads
+    )
+    add_test(NAME loop_lifecycle COMMAND test_loop_lifecycle)
+endif()
+
 # Add Python library path to RPATH
 if(Python3_LIBRARIES)
     get_filename_component(PYTHON_LIB_DIR "${Python3_LIBRARIES}" DIRECTORY)

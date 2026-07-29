@@ -1,0 +1,541 @@
+# LW Real-Deployment Issue Register
+
+## Purpose
+
+This file is the authoritative remediation order for the LW real-robot deployment review.
+
+- Modify only one issue at a time.
+- The user selects the issue to work on.
+- Code changes require explicit user approval before editing.
+- Do not include later issues or unrelated cleanup in an approved change.
+- After verification, update the selected issue's status and resolution evidence.
+
+## Status Values
+
+- `pending`: Confirmed issue, not yet being changed.
+- `in_progress`: Explicitly selected and approved by the user.
+- `resolved`: Implemented and verified.
+- `deferred`: Intentionally postponed.
+- `wont_fix`: Deliberately rejected, with rationale recorded.
+
+## Review Baseline
+
+- Reviewed: 2026-07-29
+- Repository HEAD during review: `e4a2765`
+- Primary entry point: `src/rl_sar/src/rl_real_LW.cpp`
+- Scope: real-robot entry point, FSM, core RL runtime, loop implementation, LW serial SDK, joystick input, motion loader, policy YAML/ONNX/CSV, CMake and ROS launch integration.
+- Review method: static inspection, `cppcheck`, filesystem/build-artifact inspection, and offline ONNX Runtime metadata inspection.
+- No robot node or serial device was started during the review.
+- ONNX dimensions verified:
+  - `leg_loco`: `410 -> 10`
+  - `wheel_loco`: `195 -> 10`
+  - `leg_to_wheel`: `59 -> 10`
+  - `wheel_to_leg`: `59 -> 10`
+- Both transition CSV files had consistent 17-column rows.
+- Deployment baseline was not clean:
+  - Three tracked LW ONNX files were modified.
+  - `wheel_to_leg/policy.onnx` was untracked.
+  - The installed `rl_real_LW` target resolved to a binary built on 2026-07-10, older than the current source change from 2026-07-23.
+
+## Ordered Summary
+
+| Order | ID | Priority | Status | Summary |
+|---:|---|---|---|---|
+| 1 | LW-001 | P0 / critical | resolved | Make control-loop shutdown and exception handling fail-safe |
+| 2 | LW-002 | P0 / critical | pending | Require valid, fresh IMU and bilateral motor feedback before commanding |
+| 3 | LW-003 | P0 / critical | pending | Repair serial receive parsing and complete-write handling |
+| 4 | LW-004 | P0 / critical | pending | Remove invalid FSM transition targets and validate all transitions |
+| 5 | LW-005 | P0 / critical | pending | Enforce finite, bounded commands and active protection |
+| 6 | LW-006 | P0 / critical | pending | Add joystick deadman, disconnect handling, and index bounds |
+| 7 | LW-007 | P1 / high | pending | Remove cross-thread data races with coherent snapshots |
+| 8 | LW-008 | P1 / high | pending | Replace split policy queues with one coherent output frame |
+| 9 | LW-009 | P1 / high | pending | Use the configured 60 Hz wheel-to-leg reference rate |
+| 10 | LW-010 | P1 / high | pending | Make deployed binary, configuration, and models reproducible |
+| 11 | LW-011 | P2 / medium | pending | Make the control loop suitable for deterministic real-time execution |
+| 12 | LW-012 | P2 / medium | pending | Harden motion loading and correct its time convention |
+| 13 | LW-013 | P2 / medium | pending | Validate YAML, mappings, observation sizes, and model outputs |
+| 14 | LW-014 | P2 / low | pending | Isolate and correct production debug/plot publishing |
+
+---
+
+## [LW-001] Fail-safe loop shutdown and exception boundary
+
+**Priority**: P0 / critical
+**Status**: resolved
+**Dependencies**: none
+
+### Problem
+
+`LoopFunc::start()` detaches its thread. `shutdown()` therefore cannot join it, even though the API prints that the loop ended. During destruction, a still-running control iteration can send another enable command after the disable packet or access an already-destroyed `RL_Real` object. Exceptions escaping a loop callback also terminate the process without a guaranteed safe command.
+
+### Evidence
+
+- `src/rl_sar/library/core/loop/loop.hpp:32-60`
+- `src/rl_sar/src/rl_real_LW.cpp:118-124`
+- `src/rl_sar/library/core/loop/loop.hpp:73-93`
+
+### Intended Scope
+
+- Keep loop threads joinable.
+- Define a deterministic shutdown order.
+- Stop all command-producing threads before sending the final disable command.
+- Catch callback exceptions at the thread boundary and trigger a fail-safe path.
+- Ensure the final disable operation is attempted only after no thread can re-enable motors.
+
+### Acceptance Criteria
+
+- `shutdown()` waits until the corresponding callback can no longer run.
+- No control command can be sent after the final disable command.
+- A forced callback exception produces a logged fault and safe shutdown instead of `std::terminate`.
+- A mock-SDK test verifies command ordering during normal shutdown and exception shutdown.
+
+### Resolution Evidence
+
+- Resolved: 2026-07-29
+- `LoopFunc` now owns a joinable thread, rejects double start, catches callback exceptions at the thread boundary, and joins during `shutdown()` or destruction.
+- `RL_Real` now starts workers only after initialization is complete, stops the command-producing loop first, and sends its final disable frame through a latched serialized command gate.
+- A loop exception now logs the originating loop and exception, closes the command gate, attempts an emergency disable, and requests ROS shutdown.
+- `test_loop_lifecycle` covers join behavior, idempotent shutdown, double start, exception reporting, normal shutdown command ordering, and exception shutdown command ordering.
+- Verified with:
+  - `cmake --build build/rl_sar --target test_loop_lifecycle rl_real_LW -j2`
+  - `ctest --test-dir build/rl_sar --output-on-failure -R '^loop_lifecycle$'`
+- Result: `rl_real_LW` built successfully; `loop_lifecycle` passed (1/1).
+- Hardware execution was intentionally not performed.
+
+---
+
+## [LW-002] Sensor and communication readiness/freshness gate
+
+**Priority**: P0 / critical
+**Status**: pending
+**Dependencies**: LW-001
+
+### Problem
+
+The return value of `InitSerial()` is ignored. `GetState()` returns early when no IMU exists, but `RobotControl()` still advances the FSM and sends commands. Motor feedback is considered updated when either the left or right board updates, and neither motor feedback nor IMU data has a freshness timeout. The ROS launch uses a fixed two-second delay rather than readiness.
+
+### Evidence
+
+- `src/rl_sar/src/rl_real_LW.cpp:45-60`
+- `src/rl_sar/src/rl_real_LW.cpp:219-240`
+- `src/rl_sar/src/rl_real_LW.cpp:393-445`
+- `src/rl_sar/library/thirdparty/robot_sdk/lfr/LW_sdk/LW_sdk.hpp:213-217`
+- `src/rl_sar/library/thirdparty/robot_sdk/lfr/LW_sdk/LW_sdk.hpp:270-277`
+- `src/rl_sar/launch/rl_real_LW.launch.py:27-34`
+
+### Intended Scope
+
+- Refuse to start control if either serial port fails.
+- Track independent left/right feedback timestamps and validity.
+- Track IMU timestamp and validate quaternion/gyro freshness.
+- Keep motors disabled until all required inputs are valid.
+- Enter the fail-safe path when any required source becomes stale.
+- Replace or supplement the fixed launch delay with an explicit readiness condition.
+
+### Acceptance Criteria
+
+- Missing IMU, missing right board, or missing left board prevents motor enable.
+- Disconnecting any required source while active reaches the safe state within a defined timeout.
+- Reconnection behavior is explicit and tested; it must not silently resume motion.
+- Startup logs identify exactly which readiness condition is missing.
+
+---
+
+## [LW-003] Serial parser and transmitter robustness
+
+**Priority**: P0 / critical
+**Status**: pending
+**Dependencies**: LW-001
+
+### Problem
+
+When an RX buffer exceeds 4096 bytes, it is cleared and then immediately used in an unsigned subtraction, creating an out-of-bounds path. Port-configuration failures can leave a nonnegative file descriptor open. TX code treats any positive `write()` as success and does not handle partial writes, `EAGAIN`, or delivery failure consistently.
+
+### Evidence
+
+- `src/rl_sar/library/thirdparty/robot_sdk/lfr/LW_sdk/LW_sdk.hpp:91-129`
+- `src/rl_sar/library/thirdparty/robot_sdk/lfr/LW_sdk/LW_sdk.hpp:131-189`
+- `src/rl_sar/library/thirdparty/robot_sdk/lfr/LW_sdk/LW_sdk.hpp:219-268`
+
+### Intended Scope
+
+- Return immediately or safely resynchronize after clearing an oversized RX buffer.
+- Close and invalidate a port after any configuration failure.
+- Handle complete packet writes, partial writes, interruption, and nonblocking retry policy.
+- Return structured per-board RX/TX status to the caller.
+
+### Acceptance Criteria
+
+- Corrupt input larger than 4096 bytes cannot access an empty buffer.
+- Parser tests cover noise, split packets, multiple packets, bad CRC, and recovery.
+- A command is successful only if the complete packet is written to each required board.
+- Port setup failure cannot leave an apparently usable descriptor.
+
+---
+
+## [LW-004] FSM transition correctness
+
+**Priority**: P0 / critical
+**Status**: pending
+**Dependencies**: LW-001
+
+### Problem
+
+Both morphology-transition states can return the nonexistent state name `RLFSMStateGetUp`. `FSM::Run()` then calls `states_.at(next)`, which throws. The loop has no safe exception boundary in the current implementation. Passive-mode help text also disagrees with the actual gamepad mapping.
+
+### Evidence
+
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:460-475`
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:542-556`
+- `src/rl_sar/library/core/fsm/fsm.hpp:62-95`
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:15-44`
+
+### Intended Scope
+
+- Replace invalid target names with the intended registered state names.
+- Validate transition targets before using `.at()`.
+- Make displayed operator instructions match actual mappings.
+- Add a transition-table test covering every state and accepted input.
+
+### Acceptance Criteria
+
+- Every `CheckChange()` result is present in the factory's registered state set.
+- Pressing every supported input in every state cannot throw.
+- Invalid external requests are rejected without leaving the current safe state.
+
+---
+
+## [LW-005] Finite command validation and active protection
+
+**Priority**: P0 / critical
+**Status**: pending
+**Dependencies**: LW-001, LW-002
+
+### Problem
+
+`TorqueProtect()` only prints warnings. Policy action limits of ±100 permit very large position and wheel-velocity targets after scaling. NaN checking only covers right-leg action targets, does not reject infinities or bad gains, and still transmits the packet. Attitude protection is delayed and does not cover all motion states.
+
+### Evidence
+
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:358-375`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:386-436`
+- `src/rl_sar/src/rl_real_LW.cpp:320-336`
+- `src/rl_sar/src/rl_real_LW.cpp:447-479`
+- `src/rl_sar/library/thirdparty/robot_sdk/lfr/LW_sdk/LW_sdk.hpp:244-267`
+- `policy/LW/robot_lab/*/config.yaml`
+
+### Intended Scope
+
+- Require `std::isfinite()` for every state, action, target, gain, and command field used for control.
+- Define physical position, velocity, gain, and estimated-torque limits.
+- Reject invalid policy frames before enqueueing or transmitting them.
+- Convert torque and attitude protection from warnings into an explicit safe transition.
+- Define protection behavior for get-up, get-down, and morphology transitions.
+
+### Acceptance Criteria
+
+- NaN, infinity, oversized action, oversized target, and excessive estimated torque each trigger the safe path.
+- Invalid values are never written to either serial port.
+- Limits are documented in physical units and tested at boundary values.
+- Normal policy outputs remain unchanged within the approved envelope.
+
+---
+
+## [LW-006] Joystick deadman and input validation
+
+**Priority**: P0 / critical
+**Status**: pending
+**Dependencies**: LW-001, LW-002
+
+### Problem
+
+Joystick reads cannot distinguish no event from disconnect. Cached axis values remain nonzero, so loss of a wireless controller can preserve the last velocity command indefinitely. Button and axis numbers are used as array indices without bounds checks.
+
+### Evidence
+
+- `src/rl_sar/src/rl_real_LW.cpp:481-587`
+- `src/rl_sar/library/thirdparty/joystick/joystick.cc:47-68`
+
+### Intended Scope
+
+- Add an explicit deadman/enable condition.
+- Track last successful joystick event and device health.
+- Zero velocity and enter a defined safe state on timeout or disconnect.
+- Validate button and axis indices before array access.
+
+### Acceptance Criteria
+
+- Disconnecting the joystick while commanding motion clears velocity within a defined timeout.
+- A stopped or missing joystick cannot initiate get-up or locomotion.
+- Out-of-range event numbers are ignored and logged without memory access outside arrays.
+
+---
+
+## [LW-007] Coherent cross-thread state
+
+**Priority**: P1 / high
+**Status**: pending
+**Dependencies**: LW-001, LW-002
+
+### Problem
+
+The policy thread locks `state_mutex` while copying `robot_state`, but the control thread does not take that mutex while writing it. `control`, `params`, `rl_init_done`, `episode_length_buf`, plot data, and `motion_loader_lw` are also shared without a consistent synchronization policy. Policy switching can expose partially updated configuration and state.
+
+### Evidence
+
+- `src/rl_sar/src/rl_real_LW.cpp:127-203`
+- `src/rl_sar/src/rl_real_LW.cpp:257-341`
+- `src/rl_sar/src/rl_real_LW.cpp:393-445`
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:242-558`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:317-356`
+
+### Intended Scope
+
+- Define ownership for control state, robot state, active policy configuration, and motion reference.
+- Publish immutable snapshots between threads or use a consistent lock/atomic scheme.
+- Make policy activation and deactivation an atomic state transition.
+- Ensure debug publishing reads a coherent snapshot.
+
+### Acceptance Criteria
+
+- No shared mutable control data is accessed without its documented synchronization mechanism.
+- Policy switches cannot combine old observations with new configuration/model data.
+- ThreadSanitizer or equivalent stress testing reports no races in the LW control path.
+
+---
+
+## [LW-008] Atomic policy output transport
+
+**Priority**: P1 / high
+**Status**: pending
+**Dependencies**: LW-007
+
+### Problem
+
+Position, velocity, and torque are pushed into separate queues. The consumer can pop a position before its velocity is available, discard it because of short-circuit evaluation, and later pair outputs from different inference frames. Queues are not cleared or versioned during policy changes.
+
+### Evidence
+
+- `src/rl_sar/src/rl_real_LW.cpp:320-333`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.hpp:205-214`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:693-713`
+
+### Intended Scope
+
+- Replace split queues with one frame containing position, velocity, torque, timestamp, sequence number, and policy generation.
+- Prefer explicit latest-frame semantics for real-time control.
+- Reject stale frames and frames from an inactive policy generation.
+
+### Acceptance Criteria
+
+- A consumer can never observe a partial policy output.
+- Policy transitions cannot consume frames from the prior policy.
+- Delayed inference has a documented stale-frame response.
+
+---
+
+## [LW-009] Wheel-to-leg motion reference rate
+
+**Priority**: P1 / high
+**Status**: pending
+**Dependencies**: LW-007, LW-008
+
+### Problem
+
+`wheel_to_leg/config.yaml` specifies `motion_fps: 60.0`, but the FSM constructs its motion loader at `1 / (dt * decimation)`, currently 50 Hz. This stretches the reference and changes computed reference velocities.
+
+### Evidence
+
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:478-535`
+- `policy/LW/robot_lab/wheel_to_leg/config.yaml:62-65`
+- `src/rl_sar/library/core/motion_loader/motion_loader_lw.cpp:5-15`
+
+### Intended Scope
+
+- Use the configured motion-file frame rate consistently for both transition directions.
+- Keep controller inference frequency separate from motion-file sampling frequency.
+- Verify interpolation and velocity scaling against the training/export convention.
+
+### Acceptance Criteria
+
+- Both transition loaders report the configured 60 Hz source rate.
+- Reference duration and velocities match an offline calculation from the CSV.
+- A regression test compares selected timestamps against expected interpolated values.
+
+---
+
+## [LW-010] Reproducible deployment artifacts
+
+**Priority**: P1 / high
+**Status**: pending
+**Dependencies**: LW-004, LW-005, LW-009
+
+### Problem
+
+The installed launcher currently resolves to an executable older than the source. The executable embeds an absolute workspace `POLICY_DIR`, so it loads mutable working-tree models rather than a versioned installed policy set. Current LW model files are also modified/untracked.
+
+### Evidence
+
+- `src/rl_sar/CMakeLists.txt:42-46`
+- `src/rl_sar/CMakeLists.txt:627-655`
+- `src/rl_sar/CMakeLists.txt:672-678`
+- Filesystem/build status recorded in the review baseline above.
+
+### Intended Scope
+
+- Resolve policies through the installed package share directory or an explicit deployment bundle.
+- Build in a clean tree and record source commit, configuration hashes, and model hashes.
+- Fail startup when the expected bundle is incomplete or mismatched.
+- Ensure launch selects the freshly built target.
+
+### Acceptance Criteria
+
+- A deployment manifest identifies the binary, source commit, YAML, ONNX, and CSV hashes.
+- Moving the installed workspace does not break policy lookup.
+- Dirty or untracked production model files are not silently loaded.
+- The launched binary contains all approved source changes.
+
+---
+
+## [LW-011] Deterministic control-loop timing
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-001, LW-007
+
+### Problem
+
+The project defaults to a Debug build, loop timing truncates execution duration to integer milliseconds and uses relative sleeps, callbacks run without real-time scheduling, and progress output performs terminal IO and flushes inside the 200 Hz control path. Production plotting is enabled by default.
+
+### Evidence
+
+- `src/rl_sar/CMakeLists.txt:34-40`
+- `src/rl_sar/library/core/loop/loop.hpp:73-101`
+- `src/rl_sar/library/core/logger/logger.hpp:47-92`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:635-690`
+- `src/rl_sar/include/rl_real_LW.hpp:4-7`
+
+### Intended Scope
+
+- Use an explicit Release/RelWithDebInfo production profile.
+- Schedule against absolute deadlines with high-resolution durations.
+- Define overrun detection and a safe overrun policy.
+- Move terminal IO and progress formatting out of the control thread.
+- Decide and document CPU affinity and real-time priority requirements.
+
+### Acceptance Criteria
+
+- Production builds use the approved optimized profile.
+- A timing test reports control and inference jitter, maximum latency, and missed deadlines.
+- Blocking terminal or ROS debug IO cannot delay motor command generation.
+
+---
+
+## [LW-012] Motion-loader robustness and time convention
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-009
+
+### Problem
+
+Motion duration is calculated as `num_frames * dt` even though the interval from the first to last frame is normally `(num_frames - 1) * dt`. A one-frame file dereferences an empty velocity vector, and inconsistent CSV row lengths are not rejected before indexed access.
+
+### Evidence
+
+- `src/rl_sar/library/core/motion_loader/motion_loader_lw.cpp:5-15`
+- `src/rl_sar/library/core/motion_loader/motion_loader_lw.cpp:18-79`
+- `src/rl_sar/library/core/motion_loader/motion_loader_lw.cpp:81-118`
+
+### Intended Scope
+
+- Define the exact frame-time convention.
+- Reject empty, one-frame, nonfinite, or inconsistent-width motion data.
+- Calculate velocities and duration according to the agreed convention.
+
+### Acceptance Criteria
+
+- Duration tests cover 0, 1, 2, and many frames.
+- Malformed CSV input fails before any indexed access.
+- First, intermediate, and final timestamp interpolation is verified.
+
+---
+
+## [LW-013] Configuration and dimension validation
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-005, LW-010
+
+### Problem
+
+The control path assumes every YAML vector has the correct length and every mapping/index is valid. Model input/output sizes are not explicitly checked against configuration before control starts. `InitObservations()` also initializes a `w,x,y,z` quaternion as `{0,0,0,1}` rather than the identity `{1,0,0,0}`.
+
+### Evidence
+
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:221-235`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:317-375`
+- `src/rl_sar/src/rl_real_LW.cpp:127-203`
+- `src/rl_sar/src/rl_real_LW.cpp:447-479`
+- `policy/LW/base.yaml`
+- `policy/LW/robot_lab/*/config.yaml`
+
+### Intended Scope
+
+- Validate required keys, vector lengths, mapping uniqueness, index ranges, positive timing values, and finite limits.
+- Verify ONNX input/output shapes against computed observation/action dimensions.
+- Correct the quaternion identity initialization.
+
+### Acceptance Criteria
+
+- Invalid configuration fails before serial command loops start.
+- Every current LW configuration passes a standalone validation test.
+- Model dimension mismatches produce a clear startup error.
+
+---
+
+## [LW-014] Debug and plot publishing isolation
+
+**Priority**: P2 / low
+**Status**: pending
+**Dependencies**: LW-007, LW-011
+
+### Problem
+
+Plot publishing is enabled at compile time for production, reads shared control and robot data without a coherent snapshot, and initializes the message timestamp only once rather than on each publication.
+
+### Evidence
+
+- `src/rl_sar/include/rl_real_LW.hpp:4-7`
+- `src/rl_sar/src/rl_real_LW.cpp:62-110`
+- `src/rl_sar/src/rl_real_LW.cpp:127-203`
+
+### Intended Scope
+
+- Make plotting opt-in through a build or runtime setting.
+- Publish from a coherent nonblocking snapshot.
+- Refresh timestamps on every message.
+
+### Acceptance Criteria
+
+- Production control can run with plotting completely disabled.
+- Enabling plotting does not introduce control-path races or blocking.
+- Published messages carry current timestamps and internally consistent samples.
+
+---
+
+## Resolution Template
+
+When an issue is completed, update only that issue:
+
+```markdown
+**Status**: resolved
+
+### Resolution
+- Resolved: YYYY-MM-DDTHH:MM:SS+08:00
+- Commit: <commit>
+- Approved Scope: <what the user approved>
+- Changed Files: <paths>
+- Verification: <commands/tests and results>
+- Remaining Follow-ups: <IDs only; do not modify them>
+```

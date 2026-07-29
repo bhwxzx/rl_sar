@@ -10,12 +10,15 @@
 #include "rl_sdk.hpp"
 #include "observation_buffer.hpp"
 #include "inference_runtime.hpp"
+#include "command_gate.hpp"
 #include "loop.hpp"
 #include "fsm_LW.hpp"
 
 #include "LW_sdk.hpp"
+#include <atomic>
 #include <csignal>
 #include <chrono>
+#include <exception>
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -60,6 +63,7 @@ private:
     void SetCommand(const RobotCommand<float> *command) override;
     void RunModel();
     void RobotControl();
+    void HandleLoopError(const std::string& loop_name, std::exception_ptr error) noexcept;
 
     // loop
     std::shared_ptr<LoopFunc> loop_joystick;
@@ -71,7 +75,9 @@ private:
     LWSDK lw_sdk;
     LowCmd lw_low_command = {0};
     LowState lw_low_state = {0};
-    void disable_lw_robot();
+    CommandGate command_gate_;
+    std::atomic<bool> fatal_loop_error_{false};
+    void disable_lw_robot(bool latch_commands = false);
 
     // joystick
     std::unique_ptr<Joystick> sys_js;

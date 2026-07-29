@@ -51,13 +51,22 @@ RL_Real::RL_Real(int argc, char **argv)
     this->control.gait_frequency = this->params.Get<std::vector<float>>("gait_command")[0];
     this->gait_phase_time = 0.0f;
 
-    // loop
-    this->loop_joystick = std::make_shared<LoopFunc>("loop_joystick", 0.01, std::bind(&RL_Real::GetSysJoystick, this));
-    this->loop_control = std::make_shared<LoopFunc>("loop_control", this->params.Get<float>("dt"), std::bind(&RL_Real::RobotControl, this));
-    this->loop_rl = std::make_shared<LoopFunc>("loop_rl", this->params.Get<float>("dt") * this->params.Get<int>("decimation"), std::bind(&RL_Real::RunModel, this));
-    this->loop_joystick->start();
-    this->loop_control->start();
-    this->loop_rl->start();
+    // Build every resource before starting worker threads. The callbacks capture
+    // this object, so they must not observe a partially initialized RL_Real.
+    const auto loop_error_handler = [this](const std::string& loop_name, std::exception_ptr error)
+    {
+        this->HandleLoopError(loop_name, error);
+    };
+    this->loop_joystick = std::make_shared<LoopFunc>(
+        "loop_joystick", 0.01, std::bind(&RL_Real::GetSysJoystick, this), -1, loop_error_handler);
+    this->loop_control = std::make_shared<LoopFunc>(
+        "loop_control", this->params.Get<float>("dt"), std::bind(&RL_Real::RobotControl, this), -1, loop_error_handler);
+    this->loop_rl = std::make_shared<LoopFunc>(
+        "loop_rl",
+        this->params.Get<float>("dt") * this->params.Get<int>("decimation"),
+        std::bind(&RL_Real::RunModel, this),
+        -1,
+        loop_error_handler);
 
 #ifdef PLOT
     this->jointstate_plot_publisher_ = ros2_node->create_publisher<sensor_msgs::msg::JointState>(
@@ -113,14 +122,32 @@ RL_Real::RL_Real(int argc, char **argv)
     this->CSVInit(this->robot_name);
 #endif
 
+    try
+    {
+        this->loop_joystick->start();
+        this->loop_rl->start();
+        this->loop_control->start();
+    }
+    catch (...)
+    {
+        command_gate_.close();
+        this->loop_control->shutdown();
+        this->loop_rl->shutdown();
+        this->loop_joystick->shutdown();
+        disable_lw_robot(true);
+        throw;
+    }
 }
 
 RL_Real::~RL_Real()
 {
-    this->loop_joystick->shutdown();
-    this->loop_rl->shutdown();
+    // Close the gate before joining so no new enable command can race with the
+    // final disable frame. Stop the command producer first.
+    command_gate_.close();
     this->loop_control->shutdown();
-    disable_lw_robot();
+    this->loop_rl->shutdown();
+    this->loop_joystick->shutdown();
+    disable_lw_robot(true);
     std::cout << LOGGER::INFO << "RL_Real exit" << std::endl;
 }
 
@@ -203,9 +230,9 @@ void RL_Real::jointstate_plot_callback(void)
     }
 }
 
-void RL_Real::disable_lw_robot(void)
+void RL_Real::disable_lw_robot(bool latch_commands)
 {
-    LowCmd cmd;
+    LowCmd cmd = {0};
     for (int i = 0; i < this->params.Get<int>("num_of_dofs"); i++)
     {
         cmd.motorCmd[i].action_set = 0.0f;
@@ -213,7 +240,78 @@ void RL_Real::disable_lw_robot(void)
         cmd.motorCmd[i].Kd = 0.0f;
     }
     cmd.motors_disable = true;
-    this->lw_sdk.SendCmdData(cmd);
+
+    const auto send_disable = [this, &cmd]()
+    {
+        this->lw_sdk.SendCmdData(cmd);
+    };
+
+    if (latch_commands)
+    {
+        command_gate_.closeAndSend(send_disable);
+    }
+    else
+    {
+        command_gate_.sendSerialized(send_disable);
+    }
+}
+
+void RL_Real::HandleLoopError(const std::string& loop_name, std::exception_ptr error) noexcept
+{
+    if (fatal_loop_error_.exchange(true, std::memory_order_acq_rel))
+    {
+        return;
+    }
+
+    std::string message = "unknown exception";
+    try
+    {
+        if (error)
+        {
+            std::rethrow_exception(error);
+        }
+    }
+    catch (const std::exception& exception)
+    {
+        message = exception.what();
+    }
+    catch (...)
+    {
+    }
+
+    std::cerr << LOGGER::ERROR << "[Loop] Fatal callback exception - name: "
+              << loop_name << ", error: " << message << std::endl;
+
+    try
+    {
+        disable_lw_robot(true);
+    }
+    catch (const std::exception& exception)
+    {
+        std::cerr << LOGGER::ERROR << "[Loop] Failed to send emergency disable: "
+                  << exception.what() << std::endl;
+    }
+    catch (...)
+    {
+        std::cerr << LOGGER::ERROR << "[Loop] Failed to send emergency disable" << std::endl;
+    }
+
+    try
+    {
+        if (rclcpp::ok())
+        {
+            rclcpp::shutdown();
+        }
+    }
+    catch (const std::exception& exception)
+    {
+        std::cerr << LOGGER::ERROR << "[Loop] Failed to request ROS shutdown: "
+                  << exception.what() << std::endl;
+    }
+    catch (...)
+    {
+        std::cerr << LOGGER::ERROR << "[Loop] Failed to request ROS shutdown" << std::endl;
+    }
 }
 
 void RL_Real::RobotControl()
@@ -446,36 +544,42 @@ void RL_Real::GetState(RobotState<float> *state)
 
 void RL_Real::SetCommand(const RobotCommand<float> *command)
 {
-    auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
-    auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
-    int num_dofs = this->params.Get<int>("num_of_dofs");
-
-    for (int i = 0; i < num_dofs; ++i)
+    command_gate_.sendIfOpen([this, command]()
     {
-        int motor_id = joint_mapping[i];
-        
-        this->lw_low_command.motorCmd[motor_id].Kp = command->motor_command.kp[i];
-        this->lw_low_command.motorCmd[motor_id].Kd = command->motor_command.kd[i];
+        auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
+        auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
+        int num_dofs = this->params.Get<int>("num_of_dofs");
 
-        bool is_wheel = false;
-        for (int k : wheel_indices) {
-            if (i == k) {
-                is_wheel = true;
-                break;
+        for (int i = 0; i < num_dofs; ++i)
+        {
+            int motor_id = joint_mapping[i];
+
+            this->lw_low_command.motorCmd[motor_id].Kp = command->motor_command.kp[i];
+            this->lw_low_command.motorCmd[motor_id].Kd = command->motor_command.kd[i];
+
+            bool is_wheel = false;
+            for (int k : wheel_indices)
+            {
+                if (i == k)
+                {
+                    is_wheel = true;
+                    break;
+                }
+            }
+
+            if (is_wheel)
+            {
+                this->lw_low_command.motorCmd[motor_id].action_set = command->motor_command.dq[i];
+            }
+            else
+            {
+                this->lw_low_command.motorCmd[motor_id].action_set = command->motor_command.q[i];
             }
         }
 
-        if (is_wheel) {
-
-            this->lw_low_command.motorCmd[motor_id].action_set = command->motor_command.dq[i];
-
-        } else {
-            this->lw_low_command.motorCmd[motor_id].action_set = command->motor_command.q[i];
-        }
-    }
-    
-    this->lw_low_command.motors_disable = false;
-    this->lw_sdk.SendCmdData(this->lw_low_command);
+        this->lw_low_command.motors_disable = false;
+        this->lw_sdk.SendCmdData(this->lw_low_command);
+    });
 }
 
 void RL_Real::SetupSysJoystick(const std::string& device, int bits)

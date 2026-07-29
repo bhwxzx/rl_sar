@@ -27,3 +27,31 @@
 - Last-Seen: 2026-07-29
 
 ---
+
+## [LRN-20260729-002] best_practice
+
+**Logged**: 2026-07-29T14:04:42+08:00
+**Priority**: high
+**Status**: promoted
+**Area**: config
+**Promoted**: AGENTS.md
+
+### Summary
+LW 实机部署问题必须按优先级逐项审批、逐项修改和逐项验证。
+
+### Details
+实机部署审查发现的问题相互关联且包含安全关键路径。用户要求后续由其指定修复项，每次只修改一个问题，不能一次性合并全部修复。完整问题顺序、状态和验收标准记录在 `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+
+### Suggested Action
+收到后续修改请求时，先确认用户指定的 `LW-XXX`，说明该项的修改范围并获得明确审批；只完成该项，验证后更新其状态和证据。
+
+### Metadata
+- Source: user_feedback
+- Related Files: AGENTS.md, .learnings/LW_REAL_DEPLOYMENT_ISSUES.md
+- Tags: real-robot, deployment, staged-remediation, approval, safety
+- Pattern-Key: workflow.lw_staged_remediation
+- Recurrence-Count: 1
+- First-Seen: 2026-07-29
+- Last-Seen: 2026-07-29
+
+---
