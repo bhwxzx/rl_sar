@@ -316,6 +316,7 @@ void RL_Real::disable_lw_robot(void)
 void RL_Real::RobotControl()
 {
 
+    ApplyJoystickFaultGate();
     this->GetState(&this->robot_state);
 
     this->StateController(&this->robot_state, &this->robot_command);
@@ -491,7 +492,18 @@ void RL_Real::RunModel()
 #endif
 
         this->obs.ang_vel = local_state.imu.gyroscope;
-        this->obs.commands = {this->control.x, this->control.y, this->control.yaw};
+        if (joystick_fault_latch_.faulted())
+        {
+            this->obs.commands = {0.0f, 0.0f, 0.0f};
+        }
+        else
+        {
+            this->obs.commands = {
+                this->control.x,
+                this->control.y,
+                this->control.yaw
+            };
+        }
         this->obs.base_quat = local_state.imu.quaternion;
         this->obs.dof_pos = local_state.motor_state.q;
 
@@ -704,48 +716,108 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
 
 void RL_Real::SetupSysJoystick(const std::string& device, int bits)
 {
-    this->sys_js = std::make_unique<Joystick>(device);
+    this->sys_js = std::make_unique<LWJoystickDevice>(device);
     if (!this->sys_js->isFound())
     {
         std::cout << LOGGER::ERROR << "Joystick [" << device << "] open failed." << std::endl;
-        // exit(1);
+        LatchJoystickFault(
+            {LWJoystickSampleStatus::Disconnected, EBADF, -1});
     }
 
     this->sys_js_max_value = (1 << (bits - 1));
 }
 
-void RL_Real::GetSysJoystick()
+void RL_Real::LatchJoystickFault(
+    const LWJoystickSampleResult& result) noexcept
 {
-    // Clear all button event states
-    for (int i = 0; i < 20; ++i)
-    {
-        this->sys_js_button[i].on_press = false;
-        this->sys_js_button[i].on_release = false;
-    }
+    LWClearJoystickState(this->sys_js_button, this->sys_js_axis);
+    this->sys_js_active = false;
 
-    // Check if joystick is valid before using
-    if (!this->sys_js)
+    if (joystick_fault_latch_.latch())
+    {
+        std::cerr << LOGGER::ERROR
+                  << "[Safety] Joystick input latched unavailable"
+                  << ", status=" << static_cast<int>(result.status)
+                  << ", errno=" << result.error_number
+                  << ", bytes=" << result.bytes_read
+                  << ". Velocity commands will remain zero and the current "
+                     "simulation FSM will remain active. Restart is required "
+                     "to restore joystick input."
+                  << std::endl;
+    }
+}
+
+void RL_Real::ApplyJoystickFaultGate() noexcept
+{
+    if (!joystick_fault_latch_.faulted())
     {
         return;
     }
 
-    while (this->sys_js->sample(&this->sys_js_event))
+    this->control.x = 0.0f;
+    this->control.y = 0.0f;
+    this->control.yaw = 0.0f;
+    this->control.current_gamepad = Input::Gamepad::None;
+    this->control.last_gamepad = Input::Gamepad::None;
+}
+
+void RL_Real::GetSysJoystick()
+{
+    LWBeginJoystickCycle(this->sys_js_button);
+
+    if (joystick_fault_latch_.faulted())
     {
-        if (this->sys_js_event.isButton())
+        return;
+    }
+
+    if (!this->sys_js || !this->sys_js->isFound())
+    {
+        LatchJoystickFault(
+            {LWJoystickSampleStatus::Disconnected, EBADF, -1});
+        return;
+    }
+
+    while (true)
+    {
+        const LWJoystickSampleResult sample_result =
+            this->sys_js->sample(&this->sys_js_event);
+        if (sample_result.status == LWJoystickSampleStatus::NoData)
         {
-            this->sys_js_button[this->sys_js_event.number].update(this->sys_js_event.value);
+            break;
         }
-        else if (this->sys_js_event.isAxis())
+        if (!sample_result.hasEvent())
         {
-            double normalized = double(this->sys_js_event.value) / this->sys_js_max_value;
-            if (std::abs(normalized) < this->axis_deadzone)
+            LatchJoystickFault(sample_result);
+            return;
+        }
+
+        const LWJoystickEventResult event_result =
+            LWApplyJoystickEvent(
+                this->sys_js_event,
+                this->sys_js_button,
+                this->sys_js_axis,
+                this->sys_js_max_value,
+                this->axis_deadzone);
+        if (event_result == LWJoystickEventResult::ButtonOutOfRange
+            || event_result == LWJoystickEventResult::AxisOutOfRange)
+        {
+            static size_t invalid_event_count = 0;
+            ++invalid_event_count;
+            if (invalid_event_count == 1 || invalid_event_count % 100 == 0)
             {
-                this->sys_js_axis[this->sys_js_event.number] = 0;
+                std::cerr << LOGGER::WARNING
+                          << "[Safety] Ignoring out-of-range joystick event"
+                          << ", type=" << static_cast<int>(this->sys_js_event.type)
+                          << ", number=" << static_cast<int>(this->sys_js_event.number)
+                          << ", occurrences=" << invalid_event_count
+                          << std::endl;
             }
-            else
-            {
-                this->sys_js_axis[this->sys_js_event.number] = this->sys_js_event.value;
-            }
+        }
+        else if (event_result == LWJoystickEventResult::InvalidConfiguration)
+        {
+            LatchJoystickFault(
+                {LWJoystickSampleStatus::Error, EINVAL, 0});
+            return;
         }
     }
 

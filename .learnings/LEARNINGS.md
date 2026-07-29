@@ -55,3 +55,35 @@ LW 实机部署问题必须按优先级逐项审批、逐项修改和逐项验�
 - Last-Seen: 2026-07-29
 
 ---
+
+## [LRN-20260729-003] knowledge_gap
+
+**Logged**: 2026-07-29T21:20:56+08:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+FSM 支持键盘状态不等于真机程序提供了可用的终端键盘控制通道。
+
+### Details
+LW FSM 接受 `current_keyboard`，核心库也实现了 `KeyboardInterface()`，但
+`rl_real_LW.cpp` 没有启动该接口或键盘线程。因此，手柄断联闭锁后不能假设
+操作员仍可通过终端触发 GetDown。与此同时，退出真机程序会发送最终失能
+命令；机器人直立时依靠重启恢复存在摔倒风险。
+
+### Suggested Action
+审查安全恢复路径时，从输入设备一直追踪到实际入口和线程启动点，并验证
+命令能够到达 FSM；在提供独立受控 GetDown 通道之前，将机械支撑作为
+手柄断联后关闭或重启程序的前置条件。
+
+### Metadata
+- Source: conversation
+- Related Files: src/rl_sar/src/rl_real_LW.cpp, src/rl_sar/fsm_robot/fsm_LW.hpp, src/rl_sar/library/core/rl_sdk/rl_sdk.cpp
+- Tags: real-robot, joystick, keyboard, getdown, shutdown, recovery
+- Pattern-Key: safety.verify_end_to_end_recovery_path
+- Recurrence-Count: 1
+- First-Seen: 2026-07-29
+- Last-Seen: 2026-07-29
+
+---

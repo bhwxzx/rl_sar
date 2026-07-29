@@ -448,6 +448,11 @@ if(BUILD_TESTING)
         ${YAML_CPP_LIBRARIES}
     )
     add_test(NAME lw_control_safety COMMAND test_lw_control_safety)
+
+    add_executable(test_lw_joystick_safety
+        test/test_lw_joystick_safety.cpp
+    )
+    add_test(NAME lw_joystick_safety COMMAND test_lw_joystick_safety)
 endif()
 if(NOT USE_CMAKE)
     if($ENV{ROS_DISTRO} MATCHES "foxy|humble")

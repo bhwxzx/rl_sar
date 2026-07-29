@@ -13,6 +13,7 @@
 #include "observation_buffer.hpp"
 #include "inference_runtime.hpp"
 #include "loop.hpp"
+#include "lw_joystick_safety.hpp"
 #include "fsm_LW.hpp"
 
 #include "LW_sdk.hpp"
@@ -28,23 +29,6 @@
 #include <mujoco/mujoco.h>
 #include "mujoco_utils.hpp"
 namespace plt = matplotlibcpp;
-
-class Button
-{
-public:
-    Button() {}
-
-    void update(bool state)
-    {
-        on_press = state ? state != pressed : false;
-        on_release = state ? false : state != pressed;
-        pressed = state;
-    }
-
-    bool pressed = false;
-    bool on_press = false;
-    bool on_release = false;
-};
 
 class RL_Real : public RL
 {
@@ -86,16 +70,19 @@ private:
     void disable_lw_robot();
 
     // joystick
-    std::unique_ptr<Joystick> sys_js;
+    std::unique_ptr<LWJoystickDevice> sys_js;
     JoystickEvent sys_js_event;
 
-    Button sys_js_button[20];
-    int sys_js_axis[10] = {0};
+    std::array<LWJoystickButton, LW_JOYSTICK_BUTTON_COUNT> sys_js_button{};
+    std::array<int, LW_JOYSTICK_AXIS_COUNT> sys_js_axis{};
+    LWJoystickFaultLatch joystick_fault_latch_;
     bool sys_js_active = false;
     float axis_deadzone = 0.05f;
     int sys_js_max_value = (1 << (16 - 1)); // 即 2的15次方 = 32768
     void SetupSysJoystick(const std::string& device, int bits);
     void GetSysJoystick();
+    void LatchJoystickFault(const LWJoystickSampleResult& result) noexcept;
+    void ApplyJoystickFaultGate() noexcept;
 
     // Imu
     // sensor_msgs::msg::Imu imu;

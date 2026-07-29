@@ -46,7 +46,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 3 | LW-003 | P0 / critical | resolved | Repair serial receive parsing and complete-write handling |
 | 4 | LW-004 | P0 / critical | resolved | Remove invalid FSM transition targets and validate all transitions |
 | 5 | LW-005 | P0 / critical | resolved | Enforce finite commands and state-aware attitude protection |
-| 6 | LW-006 | P0 / critical | pending | Add joystick deadman, disconnect handling, and index bounds |
+| 6 | LW-006 | P0 / critical | resolved | Latch joystick disconnects, clear commands, and validate indices |
 | 7 | LW-007 | P1 / high | pending | Remove cross-thread data races with coherent snapshots |
 | 8 | LW-008 | P1 / high | pending | Replace split policy queues with one coherent output frame |
 | 9 | LW-009 | P1 / high | pending | Use the configured 60 Hz wheel-to-leg reference rate |
@@ -344,10 +344,10 @@ Both morphology-transition states can return the nonexistent state name `RLFSMSt
 
 ---
 
-## [LW-006] Joystick deadman and input validation
+## [LW-006] Joystick disconnect and input validation
 
 **Priority**: P0 / critical
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-001, LW-002
 
 ### Problem
@@ -361,16 +361,79 @@ Joystick reads cannot distinguish no event from disconnect. Cached axis values r
 
 ### Intended Scope
 
-- Add an explicit deadman/enable condition.
-- Track last successful joystick event and device health.
-- Zero velocity and enter a defined safe state on timeout or disconnect.
+- Do not add a deadman button or change the existing button, axis, scaling, or
+  five-percent deadzone behavior.
+- Distinguish an idle nonblocking device from EOF, disconnect, partial reads,
+  and other read failures.
+- On joystick unavailability, permanently latch joystick input off, clear all
+  cached buttons and axes, and force velocity commands to zero.
+- Keep motor control and the current FSM active instead of closing the command
+  gate, disabling motors, or shutting down ROS.
+- Do not automatically accept input after reconnection; restoring joystick
+  input requires restarting the node.
 - Validate button and axis indices before array access.
 
 ### Acceptance Criteria
 
-- Disconnecting the joystick while commanding motion clears velocity within a defined timeout.
-- A stopped or missing joystick cannot initiate get-up or locomotion.
-- Out-of-range event numbers are ignored and logged without memory access outside arrays.
+- `EAGAIN`, `EWOULDBLOCK`, and `EINTR` do not falsely mark an idle joystick as
+  disconnected.
+- EOF, invalid descriptors, device errors, and partial reads permanently latch
+  joystick input unavailable.
+- A latched joystick fault clears cached input and forces `x/y/yaw` and Gamepad
+  state to zero/none in the control path.
+- Joystick loss does not send a motor-disable command, stop the current FSM, or
+  shut down ROS.
+- A stopped or missing joystick cannot initiate get-up, locomotion, or
+  morphology transitions through stale Gamepad state.
+- Out-of-range event numbers are ignored and logged without memory access
+  outside arrays.
+- Existing deadzone and valid input behavior remain unchanged.
+
+### Resolution Evidence
+
+- Resolved: 2026-07-29
+- A LW-local nonblocking joystick reader now reports complete events, no-data,
+  EOF/disconnect, and malformed/error results separately without modifying the
+  third-party joystick submodule.
+- LW real and simulation input paths use fixed-size button/axis arrays and
+  validate every incoming event before indexing them.
+- Startup open failure or a runtime terminal read result clears all cached
+  joystick state and permanently latches joystick input unavailable. Subsequent
+  calls cannot clear the latch or resume Gamepad commands.
+- The 200 Hz control path clears `x/y/yaw` and both Gamepad state fields while
+  the latch is set. The policy path independently publishes a zero command
+  observation, so the next inference frame cannot reuse the prior joystick
+  velocity.
+- Per the approved safety behavior, joystick loss does not call
+  `EnterFailSafe()`, close `CommandGate`, send motor-disable packets, or request
+  ROS shutdown. The current FSM and motor support remain active. The fault gate
+  does not clear keyboard state, but the current real executable does not start
+  `KeyboardInterface()`, so terminal keyboard input is not an available
+  recovery path.
+- The existing axis normalization, `vel_command` scaling, input mapping, and
+  strict five-percent deadzone are unchanged.
+- `test_lw_joystick_safety` covers idle descriptors, complete events, EOF,
+  invalid descriptors, null destinations, partial reads, button/axis boundaries,
+  the five-percent deadzone boundary, full cache clearing, and the permanent
+  fault latch.
+- Verified with:
+  - `cmake --build build/rl_sar --target test_lw_joystick_safety rl_real_LW rl_sim_LW -j2`
+  - `ctest --test-dir build/rl_sar --output-on-failure --repeat until-fail:20 -R '^(loop_lifecycle|sensor_readiness|lw_serial_sdk|lw_fsm_transitions|lw_control_safety|lw_joystick_safety)$'`
+  - standalone `-Wall -Wextra -Wpedantic` compilation
+  - standalone AddressSanitizer and UndefinedBehaviorSanitizer execution
+  - targeted `cppcheck`
+- Result: both LW executables built successfully; all six selected tests passed
+  for 20 consecutive runs; sanitizer execution found no memory or
+  undefined-behavior failure; `cppcheck` reported only pre-existing
+  constructor-initialization performance suggestions.
+- Hardware execution was intentionally not performed.
+- Safety boundary: if a wireless receiver remains present and reports neither
+  release events nor a device/read error after radio-link loss, `/dev/input/js*`
+  alone cannot prove that the handheld controller is disconnected.
+- Safety boundary: stopping or restarting the real executable while the robot
+  is upright sends a final motor-disable command and can cause a fall. After a
+  latched joystick fault, the robot must be mechanically supported before
+  shutdown; LW-006 does not provide an in-process controlled GetDown path.
 
 ---
 
