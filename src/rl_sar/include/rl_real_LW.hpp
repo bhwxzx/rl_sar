@@ -82,7 +82,7 @@ private:
     LowState lw_low_state = {0};
     CommandGate command_gate_;
     std::atomic<bool> fatal_error_latched_{false};
-    void disable_lw_robot(bool latch_commands = false);
+    LWSendResult disable_lw_robot(bool latch_commands = false);
 
     // joystick
     std::unique_ptr<Joystick> sys_js;
@@ -109,6 +109,7 @@ private:
     SensorReadinessMonitor sensor_readiness_monitor_{std::chrono::milliseconds(100)};
     SensorReadinessStatus sensor_readiness_status_;
     SafetyClock::time_point last_readiness_log_time_{};
+    SafetyClock::time_point last_serial_diagnostic_log_time_{};
     std::string last_missing_sources_;
     bool sensor_ready_logged_ = false;
     void ImuCallback(const sensor_msgs::msg::Imu::SharedPtr imu_msg);

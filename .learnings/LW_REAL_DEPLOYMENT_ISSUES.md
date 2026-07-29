@@ -43,7 +43,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 |---:|---|---|---|---|
 | 1 | LW-001 | P0 / critical | resolved | Make control-loop shutdown and exception handling fail-safe |
 | 2 | LW-002 | P0 / critical | resolved | Require valid, fresh IMU and bilateral motor feedback before commanding |
-| 3 | LW-003 | P0 / critical | pending | Repair serial receive parsing and complete-write handling |
+| 3 | LW-003 | P0 / critical | resolved | Repair serial receive parsing and complete-write handling |
 | 4 | LW-004 | P0 / critical | pending | Remove invalid FSM transition targets and validate all transitions |
 | 5 | LW-005 | P0 / critical | pending | Enforce finite, bounded commands and active protection |
 | 6 | LW-006 | P0 / critical | pending | Add joystick deadman, disconnect handling, and index bounds |
@@ -163,7 +163,7 @@ The return value of `InitSerial()` is ignored. `GetState()` returns early when n
 ## [LW-003] Serial parser and transmitter robustness
 
 **Priority**: P0 / critical
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-001
 
 ### Problem
@@ -189,6 +189,25 @@ When an RX buffer exceeds 4096 bytes, it is cleared and then immediately used in
 - Parser tests cover noise, split packets, multiple packets, bad CRC, and recovery.
 - A command is successful only if the complete packet is written to each required board.
 - Port setup failure cannot leave an apparently usable descriptor.
+
+### Resolution Evidence
+
+- Resolved: 2026-07-29
+- Port initialization now configures a local candidate descriptor and publishes it to `LWSDK` only after every required setup step succeeds. All failure paths close the candidate and return the failed operation plus `errno`; unsupported low-latency ioctl behavior remains a nonfatal warning.
+- Feedback uses a bounded streaming parser that preserves incomplete headers/frames, discards noise incrementally, copies packet bytes with `memcpy`, validates tail and CRC, parses every available frame, and applies only the latest valid frame.
+- Each receive call drains at most 4096 bytes per side and returns independent byte, packet, discard, CRC, format, and read-error status.
+- Command transmission tracks per-side offsets, retries partial writes and `EINTR`, waits through `EAGAIN/EWOULDBLOCK` with `poll()`, services both sides under one configurable `serial_write_timeout` of `0.002 s`, and succeeds only when both complete packets have entered the kernel serial queues.
+- `RL_Real` checks the structured result for startup disable, waiting-state disable, motor-protection disable, normal control, emergency disable, and final shutdown. Normal-send failure is evaluated only after releasing `CommandGate`, avoiding recursive-lock deadlock before entering fail-safe.
+- `test_lw_serial_sdk` covers split headers/frames, noise, multiple frames, bad CRC, bad tail, 8192-byte corrupt input and recovery, PTY bilateral RX/TX and mapping, repeated configuration failure without descriptor leakage, partial nonblocking writes, shared-deadline timeout, and continued delivery to a healthy side when its peer fails.
+- Verified with:
+  - `cmake --build build/rl_sar --target test_lw_serial_sdk test_sensor_readiness test_loop_lifecycle rl_real_LW rl_sim_LW -j2`
+  - `ctest --test-dir build/rl_sar --output-on-failure --repeat until-fail:20 -R '^(lw_serial_sdk|sensor_readiness|loop_lifecycle)$'`
+  - standalone `-Wall -Wextra -Wpedantic` compilation
+  - standalone AddressSanitizer and UndefinedBehaviorSanitizer execution
+  - targeted `cppcheck`
+- Result: both LW executables built; all three selected tests passed for 20 consecutive runs; sanitizer execution found no memory or undefined-behavior failure; the descriptor-leak regression passed; `cppcheck` reported no new correctness warning.
+- Hardware execution was intentionally not performed.
+- Safety boundary: a complete host `write()` proves only that the kernel accepted the packet, not that the controller received or executed it. Board acknowledgements, board-local communication watchdogs, and a physical emergency stop remain necessary for end-to-end assurance.
 
 ---
 

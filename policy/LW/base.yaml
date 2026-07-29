@@ -3,6 +3,8 @@ LW:
   decimation: 4
   # Maximum age of IMU and each motor-board feedback frame before fail-safe.
   sensor_timeout: 0.1
+  # Shared deadline for queuing a complete command packet to both serial ports.
+  serial_write_timeout: 0.002
   rl_kp: [90.0, 90.0,
           90.0, 90.0,
           90.0, 90.0,

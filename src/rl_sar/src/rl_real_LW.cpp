@@ -32,6 +32,16 @@ RL_Real::RL_Real(int argc, char **argv)
     this->sensor_readiness_monitor_.setTimeout(
         std::chrono::duration_cast<SafetyClock::duration>(
             std::chrono::duration<float>(sensor_timeout_seconds)));
+    const float serial_write_timeout_seconds =
+        this->params.Get<float>("serial_write_timeout");
+    if (!std::isfinite(serial_write_timeout_seconds)
+        || serial_write_timeout_seconds <= 0.0f)
+    {
+        throw std::runtime_error("LW serial_write_timeout must be a finite positive value");
+    }
+    this->lw_sdk.SetWriteTimeout(
+        std::chrono::duration_cast<LWSDK::Duration>(
+            std::chrono::duration<float>(serial_write_timeout_seconds)));
 
     // 提前加载所有的模型到内存
     this->PreloadModel(this->robot_name + "/robot_lab/leg_loco");
@@ -60,15 +70,22 @@ RL_Real::RL_Real(int argc, char **argv)
     if (!serial_status.bothInitialized())
     {
         std::cerr << LOGGER::ERROR
-                  << "[Safety] LW serial initialization failed for "
-                  << serial_status.failedSides()
-                  << " side"
+                  << "[Safety] LW serial initialization failed: "
+                  << serial_status.failureSummary()
                   << "; control loops will not start"
                   << std::endl;
-        disable_lw_robot();
+        SendEmergencyDisableBurst();
         throw std::runtime_error("failed to initialize both LW serial ports");
     }
-    disable_lw_robot();
+    const LWSendResult startup_disable = disable_lw_robot();
+    if (!startup_disable.complete())
+    {
+        std::cerr << LOGGER::ERROR
+                  << "[Safety] Initial disable command was incomplete: "
+                  << startup_disable.failureSummary() << std::endl;
+        SendEmergencyDisableBurst();
+        throw std::runtime_error("failed to send complete initial disable command");
+    }
     this->InitJointNum(this->params.Get<int>("num_of_dofs"));
     this->InitOutputs();
     this->InitControl();
@@ -158,7 +175,7 @@ RL_Real::RL_Real(int argc, char **argv)
         this->loop_control->shutdown();
         this->loop_rl->shutdown();
         this->loop_joystick->shutdown();
-        disable_lw_robot(true);
+        SendEmergencyDisableBurst();
         throw;
     }
 }
@@ -171,7 +188,13 @@ RL_Real::~RL_Real()
     this->loop_control->shutdown();
     this->loop_rl->shutdown();
     this->loop_joystick->shutdown();
-    disable_lw_robot(true);
+    const LWSendResult final_disable = disable_lw_robot(true);
+    if (!final_disable.complete())
+    {
+        std::cerr << LOGGER::ERROR
+                  << "[Safety] Final shutdown disable was incomplete: "
+                  << final_disable.failureSummary() << std::endl;
+    }
     std::cout << LOGGER::INFO << "RL_Real exit" << std::endl;
 }
 
@@ -254,7 +277,7 @@ void RL_Real::jointstate_plot_callback(void)
     }
 }
 
-void RL_Real::disable_lw_robot(bool latch_commands)
+LWSendResult RL_Real::disable_lw_robot(bool latch_commands)
 {
     LowCmd cmd = {0};
     for (int i = 0; i < this->params.Get<int>("num_of_dofs"); i++)
@@ -265,9 +288,10 @@ void RL_Real::disable_lw_robot(bool latch_commands)
     }
     cmd.motors_disable = true;
 
-    const auto send_disable = [this, &cmd]()
+    LWSendResult result;
+    const auto send_disable = [this, &cmd, &result]()
     {
-        this->lw_sdk.SendCmdData(cmd);
+        result = this->lw_sdk.SendCmdData(cmd);
     };
 
     if (latch_commands)
@@ -278,6 +302,7 @@ void RL_Real::disable_lw_robot(bool latch_commands)
     {
         command_gate_.sendSerialized(send_disable);
     }
+    return result;
 }
 
 void RL_Real::HandleLoopError(const std::string& loop_name, std::exception_ptr error) noexcept
@@ -313,7 +338,14 @@ void RL_Real::SendEmergencyDisableBurst() noexcept
     {
         try
         {
-            disable_lw_robot(true);
+            const LWSendResult result = disable_lw_robot(true);
+            if (!result.complete() && !send_error_logged)
+            {
+                std::cerr << LOGGER::ERROR
+                          << "[Safety] Emergency disable was incomplete: "
+                          << result.failureSummary() << std::endl;
+                send_error_logged = true;
+            }
         }
         catch (const std::exception& exception)
         {
@@ -409,7 +441,13 @@ bool RL_Real::HandleSensorReadiness()
         last_readiness_log_time_ = now;
     }
 
-    disable_lw_robot();
+    const LWSendResult disable_result = disable_lw_robot();
+    if (!disable_result.complete())
+    {
+        EnterFailSafe(
+            "[Safety] Waiting-state disable command was incomplete: "
+            + disable_result.failureSummary());
+    }
     return false;
 }
 
@@ -419,6 +457,10 @@ void RL_Real::RobotControl()
     auto t_start = std::chrono::high_resolution_clock::now();
 #endif
     this->GetState(&this->robot_state);
+    if (fatal_error_latched_.load(std::memory_order_acquire))
+    {
+        return;
+    }
     if (!HandleSensorReadiness())
     {
         return;
@@ -427,7 +469,13 @@ void RL_Real::RobotControl()
     // 电机故障保护，切换进入阻尼模式
     if(this->lw_sdk.MotorsProtect(this->lw_low_state)){
         this->control.SetKeyboard(Input::Keyboard::P);
-        disable_lw_robot();
+        const LWSendResult disable_result = disable_lw_robot();
+        if (!disable_result.complete())
+        {
+            EnterFailSafe(
+                "[Safety] Motor-protection disable command was incomplete: "
+                + disable_result.failureSummary());
+        }
         return;
     }
     
@@ -599,11 +647,25 @@ void RL_Real::GetState(RobotState<float> *state)
 {
     const LWFeedbackUpdate feedback_update = this->lw_sdk.RecvFdData(this->lw_low_state);
     const auto now = SafetyClock::now();
-    if (feedback_update.right_updated)
+    if (feedback_update.readFailed())
+    {
+        EnterFailSafe(
+            "[Safety] LW feedback read failed: " + feedback_update.failureSummary());
+        return;
+    }
+    if (feedback_update.hasParserErrors()
+        && (last_serial_diagnostic_log_time_ == SafetyClock::time_point{}
+            || now - last_serial_diagnostic_log_time_ >= 1s))
+    {
+        std::cout << LOGGER::WARNING << "[Serial] Feedback parser errors: "
+                  << feedback_update.parserErrorSummary() << std::endl;
+        last_serial_diagnostic_log_time_ = now;
+    }
+    if (feedback_update.right.updated)
     {
         sensor_readiness_monitor_.markRightFeedbackReceived(now);
     }
-    if (feedback_update.left_updated)
+    if (feedback_update.left.updated)
     {
         sensor_readiness_monitor_.markLeftFeedbackReceived(now);
     }
@@ -665,7 +727,8 @@ void RL_Real::GetState(RobotState<float> *state)
 
 void RL_Real::SetCommand(const RobotCommand<float> *command)
 {
-    command_gate_.sendIfOpen([this, command]()
+    LWSendResult send_result;
+    const bool command_sent = command_gate_.sendIfOpen([this, command, &send_result]()
     {
         auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
         auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
@@ -699,8 +762,16 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
         }
 
         this->lw_low_command.motors_disable = false;
-        this->lw_sdk.SendCmdData(this->lw_low_command);
+        send_result = this->lw_sdk.SendCmdData(this->lw_low_command);
     });
+
+    // The gate mutex has been released here. Entering fail-safe while holding
+    // it would deadlock when the emergency disable tries to serialize a send.
+    if (command_sent && !send_result.complete())
+    {
+        EnterFailSafe(
+            "[Safety] Control command was incomplete: " + send_result.failureSummary());
+    }
 }
 
 void RL_Real::SetupSysJoystick(const std::string& device, int bits)

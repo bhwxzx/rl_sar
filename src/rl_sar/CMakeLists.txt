@@ -248,6 +248,16 @@ if(BUILD_TESTING)
         library/core/safety
     )
     add_test(NAME sensor_readiness COMMAND test_sensor_readiness)
+
+    if(SYSTEM_TYPE STREQUAL "Linux")
+        add_executable(test_lw_serial_sdk
+            test/test_lw_serial_sdk.cpp
+        )
+        target_include_directories(test_lw_serial_sdk PRIVATE
+            library/thirdparty/robot_sdk/lfr/LW_sdk
+        )
+        add_test(NAME lw_serial_sdk COMMAND test_lw_serial_sdk)
+    endif()
 endif()
 
 # Add Python library path to RPATH
