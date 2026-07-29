@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -287,6 +288,59 @@ void testPtyIntegration()
         "left command CRC is wrong");
 }
 
+void requireNoReadableData(int fd, const std::string& context)
+{
+    struct pollfd descriptor{};
+    descriptor.fd = fd;
+    descriptor.events = POLLIN;
+    const int poll_result = ::poll(&descriptor, 1, 5);
+    require(poll_result == 0, context + " wrote bytes to a serial port");
+}
+
+void testInvalidCommandsAreNotWritten()
+{
+    auto right_pty = createPty();
+    auto left_pty = createPty();
+
+    LWSDK sdk;
+    sdk.SetWriteTimeout(20ms);
+    const auto init = sdk.InitSerial(right_pty.second.c_str(), left_pty.second.c_str());
+    require(init.bothInitialized(), "PTY serial ports did not initialize");
+
+    LowCmd command{};
+    sdk.InitCmdData(command);
+    command.motorCmd[0].action_set = std::numeric_limits<float>::quiet_NaN();
+    auto send = sdk.SendCmdData(command);
+    require(send.right.error_number == EINVAL, "right side accepted NaN command");
+    require(send.left.error_number == EINVAL, "left side accepted NaN command");
+    requireNoReadableData(right_pty.first.get(), "NaN command right side");
+    requireNoReadableData(left_pty.first.get(), "NaN command left side");
+
+    sdk.InitCmdData(command);
+    command.motorCmd[1].Kp = std::numeric_limits<float>::infinity();
+    send = sdk.SendCmdData(command);
+    require(send.right.error_number == EINVAL, "right side accepted infinite gain");
+    require(send.left.error_number == EINVAL, "left side accepted infinite gain");
+    requireNoReadableData(right_pty.first.get(), "infinite gain right side");
+    requireNoReadableData(left_pty.first.get(), "infinite gain left side");
+
+    sdk.InitCmdData(command);
+    command.motorCmd[2].Kd = -0.01f;
+    send = sdk.SendCmdData(command);
+    require(send.right.error_number == EINVAL, "right side accepted negative gain");
+    require(send.left.error_number == EINVAL, "left side accepted negative gain");
+    requireNoReadableData(right_pty.first.get(), "negative gain right side");
+    requireNoReadableData(left_pty.first.get(), "negative gain left side");
+
+    sdk.InitCmdData(command);
+    command.motorCmd[0].Kp = 1.0e20f;
+    command.motorCmd[1].Kd = 1.0e20f;
+    send = sdk.SendCmdData(command);
+    require(send.complete(), "large finite gains were treated as having a maximum");
+    readExact(right_pty.first.get(), sizeof(MotorCmd_Packet_t));
+    readExact(left_pty.first.get(), sizeof(MotorCmd_Packet_t));
+}
+
 void testFailedConfigurationDoesNotLeaveUsableDescriptors()
 {
     const auto count_open_fds = []()
@@ -409,6 +463,7 @@ int main()
         testParserHandlesNoiseSplitsAndMultiplePackets();
         testParserRecoversFromOversizedNoise();
         testPtyIntegration();
+        testInvalidCommandsAreNotWritten();
         testFailedConfigurationDoesNotLeaveUsableDescriptors();
         testPartialWritesAndWouldBlockReachDeadline();
         testOneFailedPortDoesNotBlockTheOther();

@@ -45,7 +45,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 2 | LW-002 | P0 / critical | resolved | Require valid, fresh IMU and bilateral motor feedback before commanding |
 | 3 | LW-003 | P0 / critical | resolved | Repair serial receive parsing and complete-write handling |
 | 4 | LW-004 | P0 / critical | resolved | Remove invalid FSM transition targets and validate all transitions |
-| 5 | LW-005 | P0 / critical | pending | Enforce finite, bounded commands and active protection |
+| 5 | LW-005 | P0 / critical | resolved | Enforce finite commands and state-aware attitude protection |
 | 6 | LW-006 | P0 / critical | pending | Add joystick deadman, disconnect handling, and index bounds |
 | 7 | LW-007 | P1 / high | pending | Remove cross-thread data races with coherent snapshots |
 | 8 | LW-008 | P1 / high | pending | Replace split policy queues with one coherent output frame |
@@ -261,7 +261,7 @@ Both morphology-transition states can return the nonexistent state name `RLFSMSt
 ## [LW-005] Finite command validation and active protection
 
 **Priority**: P0 / critical
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-001, LW-002
 
 ### Problem
@@ -279,18 +279,68 @@ Both morphology-transition states can return the nonexistent state name `RLFSMSt
 
 ### Intended Scope
 
-- Require `std::isfinite()` for every state, action, target, gain, and command field used for control.
-- Define physical position, velocity, gain, and estimated-torque limits.
+- Require `std::isfinite()` for IMU quaternion/gyro, motor feedback
+  position/velocity/estimated torque, raw policy actions, computed policy
+  outputs, final robot commands, and low-level serial command fields.
+- Reject negative proportional or derivative gains, without imposing a maximum
+  gain.
 - Reject invalid policy frames before enqueueing or transmitting them.
-- Convert torque and attitude protection from warnings into an explicit safe transition.
-- Define protection behavior for get-up, get-down, and morphology transitions.
+- Apply the 75-degree roll/pitch fail-safe only in get-down, both locomotion
+  states, and both morphology-transition states.
+- Do not apply attitude protection in passive or either get-up state.
+- Keep the existing `[-100, 100]` action clipping, target position/velocity
+  behavior, and warning-only predicted-torque protection unchanged.
 
 ### Acceptance Criteria
 
-- NaN, infinity, oversized action, oversized target, and excessive estimated torque each trigger the safe path.
-- Invalid values are never written to either serial port.
-- Limits are documented in physical units and tested at boundary values.
-- Normal policy outputs remain unchanged within the approved envelope.
+- NaN or infinity at any validated control stage triggers the permanent
+  fail-safe path.
+- Negative gains trigger the permanent fail-safe path.
+- Invalid low-level command values are never written to either serial port.
+- Roll or pitch beyond 75 degrees triggers the fail-safe path in exactly the
+  five protected states and is ignored by attitude protection in passive and
+  both get-up states.
+- Large but finite actions, targets, gains, and predicted torque do not trigger
+  fail-safe solely because of magnitude; existing action clipping remains
+  unchanged.
+
+### Resolution Evidence
+
+- Resolved: 2026-07-29
+- IMU quaternion/gyro and bilateral motor position, velocity, and estimated
+  torque are checked for correct size and finite values before entering the
+  controller.
+- Raw model actions are checked before the existing clipping operation.
+  Computed position, velocity, and torque outputs are checked before queueing.
+  The final `RobotCommand` is checked before opening the command gate.
+- The serial SDK independently rejects non-finite action/gain fields and
+  negative gains before packet construction, returning bilateral `EINVAL`
+  without writing bytes to either serial port.
+- Attitude protection is evaluated before control and again after the FSM runs,
+  so the first command produced after entering a protected state cannot bypass
+  the 75-degree roll/pitch limit. Protection is enabled only for get-down, leg
+  locomotion, wheel locomotion, leg-to-wheel, and wheel-to-leg.
+- Per the approved scope, passive and both get-up states do not use attitude
+  protection. No position/velocity range, maximum-gain, or predicted-torque
+  fail-safe was added; existing `[-100, 100]` action clipping and warning-only
+  `TorqueProtect()` behavior remain unchanged.
+- `test_lw_control_safety` covers finite feedback, actions, outputs, final
+  commands, negative gains, absence of magnitude limits, and the exact protected
+  and unprotected state sets.
+- `test_lw_serial_sdk` verifies that NaN, infinity, and negative gains produce
+  zero serial bytes, while very large finite gains still transmit.
+- Verified with:
+  - `cmake --build build/rl_sar --target rl_real_LW rl_sim_LW test_lw_control_safety test_lw_serial_sdk test_lw_fsm_transitions test_sensor_readiness test_loop_lifecycle -j2`
+  - `ctest --test-dir build/rl_sar --output-on-failure --repeat until-fail:20 -R '^(lw_control_safety|lw_serial_sdk|lw_fsm_transitions|sensor_readiness|loop_lifecycle)$'`
+  - standalone `-Wall -Wextra -Wpedantic` compilation
+  - standalone AddressSanitizer and UndefinedBehaviorSanitizer execution of the
+    serial SDK test
+  - targeted `cppcheck`
+- Result: both LW executables built successfully; all five selected tests passed
+  for 20 consecutive runs; sanitizer execution found no memory or
+  undefined-behavior failure; `cppcheck` reported only a pre-existing
+  constructor-initialization performance suggestion.
+- Hardware execution was intentionally not performed.
 
 ---
 

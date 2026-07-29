@@ -13,6 +13,7 @@
 #include "command_gate.hpp"
 #include "loop.hpp"
 #include "sensor_readiness.hpp"
+#include "lw_control_safety.hpp"
 #include "fsm_LW.hpp"
 
 #include "LW_sdk.hpp"
@@ -69,6 +70,8 @@ private:
     void EnterFailSafe(const std::string& reason) noexcept;
     void SendEmergencyDisableBurst() noexcept;
     bool HandleSensorReadiness();
+    bool ValidateFeedbackAndAttitude();
+    bool ValidateCommandForSend(const RobotCommand<float>& command);
 
     // loop
     std::shared_ptr<LoopFunc> loop_joystick;

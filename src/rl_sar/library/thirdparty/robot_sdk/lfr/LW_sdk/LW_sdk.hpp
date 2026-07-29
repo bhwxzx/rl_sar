@@ -581,6 +581,22 @@ public:
 
     LWSendResult SendCmdData(const LowCmd& cmd) noexcept
     {
+        for (int index = 0; index < MOTOR_COUNTS; ++index)
+        {
+            const MotorCmd& motor = cmd.motorCmd[index];
+            if (!std::isfinite(motor.action_set)
+                || !std::isfinite(motor.Kp)
+                || !std::isfinite(motor.Kd)
+                || motor.Kp < 0.0f
+                || motor.Kd < 0.0f)
+            {
+                LWSendResult invalid_result;
+                invalid_result.right.error_number = EINVAL;
+                invalid_result.left.error_number = EINVAL;
+                return invalid_result;
+            }
+        }
+
         MotorCmd_Packet_t packet_right{};
         MotorCmd_Packet_t packet_left{};
 
@@ -605,17 +621,6 @@ public:
             packet_left.motor_action_set[i] = cmd.motorCmd[left_indices[i]].action_set;
             packet_left.motor_kp_set[i] = cmd.motorCmd[left_indices[i]].Kp;
             packet_left.motor_kd_set[i] = cmd.motorCmd[left_indices[i]].Kd;
-        }
-
-        // Preserve the existing diagnostic behavior. Full finite-value command
-        // rejection is handled separately by LW-005.
-        for (int i = 0; i < BOARD_MOTOR_COUNTS; ++i)
-        {
-            if (std::isnan(packet_right.motor_action_set[i]))
-            {
-                std::cerr << "\033[1;31m[FATAL] RL Output is NaN! STM32 will ignore!"
-                          << "\033[0m" << std::endl;
-            }
         }
 
         packet_right.crc16 = LWCalculateCRC16(

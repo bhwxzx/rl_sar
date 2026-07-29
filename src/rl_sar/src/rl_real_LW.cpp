@@ -451,6 +451,60 @@ bool RL_Real::HandleSensorReadiness()
     return false;
 }
 
+bool RL_Real::ValidateFeedbackAndAttitude()
+{
+    const size_t num_dofs =
+        static_cast<size_t>(this->params.Get<int>("num_of_dofs"));
+    const LWValidationResult feedback_result =
+        LWValidateFeedbackState(this->robot_state, num_dofs);
+    if (!feedback_result.valid())
+    {
+        EnterFailSafe(
+            "[Safety] Invalid LW feedback: "
+            + feedback_result.failureDescription());
+        return false;
+    }
+
+    if (!this->fsm.current_state_)
+    {
+        EnterFailSafe("[Safety] LW FSM has no current state");
+        return false;
+    }
+
+    constexpr float attitude_threshold_degrees = 75.0f;
+    const std::string& state_name =
+        this->fsm.current_state_->GetStateName();
+    const LWAttitudeValidationResult attitude_result =
+        LWValidateAttitude(
+            state_name,
+            this->robot_state.imu.quaternion,
+            attitude_threshold_degrees);
+    if (!attitude_result.safe)
+    {
+        EnterFailSafe(
+            "[Safety] LW attitude limit exceeded in " + state_name + ": "
+            + attitude_result.failureDescription(attitude_threshold_degrees));
+        return false;
+    }
+    return true;
+}
+
+bool RL_Real::ValidateCommandForSend(const RobotCommand<float>& command)
+{
+    const size_t num_dofs =
+        static_cast<size_t>(this->params.Get<int>("num_of_dofs"));
+    const LWValidationResult command_result =
+        LWValidateRobotCommand(command, num_dofs);
+    if (!command_result.valid())
+    {
+        EnterFailSafe(
+            "[Safety] Invalid LW command: "
+            + command_result.failureDescription());
+        return false;
+    }
+    return true;
+}
+
 void RL_Real::RobotControl()
 {
 #ifdef CONTROL_TIME_PRINT
@@ -462,6 +516,10 @@ void RL_Real::RobotControl()
         return;
     }
     if (!HandleSensorReadiness())
+    {
+        return;
+    }
+    if (!ValidateFeedbackAndAttitude())
     {
         return;
     }
@@ -484,6 +542,16 @@ void RL_Real::RobotControl()
 #endif
 
     this->StateController(&this->robot_state, &this->robot_command);
+    // The FSM may enter a protected state during StateController(). Validate
+    // again so its first command cannot bypass state-specific attitude checks.
+    if (!ValidateFeedbackAndAttitude())
+    {
+        return;
+    }
+    if (!ValidateCommandForSend(this->robot_command))
+    {
+        return;
+    }
 
     this->control.ClearInput();
 
@@ -545,6 +613,10 @@ void RL_Real::RunModel()
         //                           this->params.Get<std::vector<float>>("gait_command")[3]};
 
         this->obs.actions = this->Forward();
+        if (fatal_error_latched_.load(std::memory_order_acquire))
+        {
+            return;
+        }
 #ifdef FOWARD_TIME_PRINT
         auto t_end = std::chrono::high_resolution_clock::now();
         double elapsed_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
@@ -568,6 +640,19 @@ void RL_Real::RunModel()
 #endif
 
         this->ComputeOutput(this->obs.actions, this->output_dof_pos, this->output_dof_vel, this->output_dof_tau);
+        const LWValidationResult output_result =
+            LWValidatePolicyOutputs(
+                this->output_dof_pos,
+                this->output_dof_vel,
+                this->output_dof_tau,
+                static_cast<size_t>(this->params.Get<int>("num_of_dofs")));
+        if (!output_result.valid())
+        {
+            EnterFailSafe(
+                "[Safety] Invalid LW policy output: "
+                + output_result.failureDescription());
+            return;
+        }
 
         if (!this->output_dof_pos.empty())
         {
@@ -583,7 +668,6 @@ void RL_Real::RunModel()
         }
 
         this->TorqueProtect(this->output_dof_tau);
-        this->AttitudeProtect(this->robot_state.imu.quaternion, 75.0f, 75.0f);
 
 #ifdef CSV_LOGGER
         std::vector<float> tau_est = this->robot_state.motor_state.tau_est;
@@ -596,43 +680,74 @@ std::vector<float> RL_Real::Forward()
 {
     std::unique_lock<std::mutex> lock(this->model_mutex, std::try_to_lock);
 
-    // If model is being reinitialized, return previous actions to avoid blocking
+    std::vector<float> actions;
+    // If model is being reinitialized, use previous actions to avoid blocking.
     if (!lock.owns_lock())
     {
         std::cout << LOGGER::WARNING << "Model is being reinitialized, using previous actions" << std::endl;
-        return this->obs.actions;
+        actions = this->obs.actions;
     }
-
-    std::vector<float> clamped_obs = this->ComputeObservation();
-    std::vector<float> actions;
-
-
-    if (!this->params.Get<std::vector<int>>("observations_history").empty())
+    else
     {
-        // 在启动的第 1 帧，用当前的真实观测填满整个历史缓冲区
-        // 避免历史数据全为 0 导致的网络 OOD 抽搐
-        if (this->episode_length_buf == 1) 
+        std::vector<float> clamped_obs = this->ComputeObservation();
+        if (!this->params.Get<std::vector<int>>("observations_history").empty())
         {
-            // {0} 代表只重置第 0 个 environment
-            this->history_obs_buf.reset({0}, clamped_obs);
+            // 在启动的第 1 帧，用当前的真实观测填满整个历史缓冲区
+            // 避免历史数据全为 0 导致的网络 OOD 抽搐
+            if (this->episode_length_buf == 1)
+            {
+                // {0} 代表只重置第 0 个 environment
+                this->history_obs_buf.reset({0}, clamped_obs);
+            }
+            this->history_obs_buf.insert(clamped_obs);
+            this->history_obs = this->history_obs_buf.get_obs_vec(this->params.Get<std::vector<int>>("observations_history"));
+            actions = this->model->forward({this->history_obs});
         }
-        this->history_obs_buf.insert(clamped_obs);
-        this->history_obs = this->history_obs_buf.get_obs_vec(this->params.Get<std::vector<int>>("observations_history"));
-        actions = this->model->forward({this->history_obs});
-    }
-    else
-    {
-        actions = this->model->forward({clamped_obs});
+        else
+        {
+            actions = this->model->forward({clamped_obs});
+        }
     }
 
-    if (!this->params.Get<std::vector<float>>("clip_actions_upper").empty() && !this->params.Get<std::vector<float>>("clip_actions_lower").empty())
+    if (lock.owns_lock())
     {
-        return clamp(actions, this->params.Get<std::vector<float>>("clip_actions_lower"), this->params.Get<std::vector<float>>("clip_actions_upper"));
+        lock.unlock();
     }
-    else
+
+    const size_t num_dofs =
+        static_cast<size_t>(this->params.Get<int>("num_of_dofs"));
+    const LWValidationResult action_result =
+        LWValidatePolicyActions(actions, num_dofs);
+    if (!action_result.valid())
     {
-        return actions;
+        EnterFailSafe(
+            "[Safety] Invalid LW policy action: "
+            + action_result.failureDescription());
+        return {};
     }
+
+    const auto upper =
+        this->params.Get<std::vector<float>>("clip_actions_upper");
+    const auto lower =
+        this->params.Get<std::vector<float>>("clip_actions_lower");
+    if (!upper.empty() && !lower.empty())
+    {
+        const LWValidationResult upper_result =
+            LWValidateFiniteVector("clip_actions_upper", upper, num_dofs);
+        const LWValidationResult lower_result =
+            LWValidateFiniteVector("clip_actions_lower", lower, num_dofs);
+        if (!upper_result.valid() || !lower_result.valid())
+        {
+            const LWValidationResult& clip_result =
+                upper_result.valid() ? lower_result : upper_result;
+            EnterFailSafe(
+                "[Safety] Invalid LW action clipping configuration: "
+                + clip_result.failureDescription());
+            return {};
+        }
+        return clamp(actions, lower, upper);
+    }
+    return actions;
 }
 
 void RL_Real::ImuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
@@ -727,6 +842,15 @@ void RL_Real::GetState(RobotState<float> *state)
 
 void RL_Real::SetCommand(const RobotCommand<float> *command)
 {
+    if (command == nullptr || !ValidateCommandForSend(*command))
+    {
+        if (command == nullptr)
+        {
+            EnterFailSafe("[Safety] Null LW command");
+        }
+        return;
+    }
+
     LWSendResult send_result;
     const bool command_sent = command_gate_.sendIfOpen([this, command, &send_result]()
     {

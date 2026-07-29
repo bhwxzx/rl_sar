@@ -438,6 +438,16 @@ if(BUILD_TESTING)
         ${YAML_CPP_LIBRARIES}
     )
     add_test(NAME lw_fsm_transitions COMMAND test_lw_fsm_transitions)
+
+    add_executable(test_lw_control_safety
+        test/test_lw_control_safety.cpp
+    )
+    target_link_libraries(test_lw_control_safety PRIVATE
+        rl_sdk
+        observation_buffer
+        ${YAML_CPP_LIBRARIES}
+    )
+    add_test(NAME lw_control_safety COMMAND test_lw_control_safety)
 endif()
 if(NOT USE_CMAKE)
     if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
