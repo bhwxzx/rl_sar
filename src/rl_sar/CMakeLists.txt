@@ -453,6 +453,14 @@ if(BUILD_TESTING)
         test/test_lw_joystick_safety.cpp
     )
     add_test(NAME lw_joystick_safety COMMAND test_lw_joystick_safety)
+
+    add_executable(test_lw_runtime_sync
+        test/test_lw_runtime_sync.cpp
+    )
+    target_link_libraries(test_lw_runtime_sync PRIVATE
+        Threads::Threads
+    )
+    add_test(NAME lw_runtime_sync COMMAND test_lw_runtime_sync)
 endif()
 if(NOT USE_CMAKE)
     if($ENV{ROS_DISTRO} MATCHES "foxy|humble")

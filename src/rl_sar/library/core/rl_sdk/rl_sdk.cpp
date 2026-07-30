@@ -218,6 +218,150 @@ std::vector<float> RL::ComputeObservation()
     return clamped_obs;
 }
 
+std::vector<float> RL::ComputeLWObservation(
+    const YamlParams& policy_params,
+    Observations<float>& policy_obs,
+    std::vector<int>& policy_obs_dims,
+    const LWMotionReferenceSnapshot* motion_reference,
+    std::uint64_t policy_frame,
+    float motion_length) const
+{
+    std::vector<std::vector<float>> obs_list;
+    for (const std::string& observation :
+         policy_params.Get<std::vector<std::string>>("observations"))
+    {
+        if (observation == "ang_vel")
+        {
+            obs_list.push_back(
+                policy_obs.ang_vel
+                * policy_params.Get<float>("ang_vel_scale"));
+        }
+        else if (observation == "gravity_vec")
+        {
+            obs_list.push_back(
+                QuatRotateInverse(
+                    policy_obs.base_quat,
+                    policy_obs.gravity_vec));
+        }
+        else if (observation == "commands")
+        {
+            obs_list.push_back(
+                policy_obs.commands
+                * policy_params.Get<std::vector<float>>("commands_scale"));
+        }
+        else if (observation == "dof_pos")
+        {
+            std::vector<float> dof_pos_rel =
+                policy_obs.dof_pos
+                - policy_params.Get<std::vector<float>>("default_dof_pos");
+            for (int index :
+                 policy_params.Get<std::vector<int>>("wheel_indices"))
+            {
+                dof_pos_rel[index] = 0.0f;
+            }
+            obs_list.push_back(
+                dof_pos_rel
+                * policy_params.Get<float>("dof_pos_scale"));
+        }
+        else if (observation == "dof_vel")
+        {
+            obs_list.push_back(
+                policy_obs.dof_vel
+                * policy_params.Get<float>("dof_vel_scale"));
+        }
+        else if (observation == "actions")
+        {
+            obs_list.push_back(policy_obs.actions);
+        }
+        else if (observation == "gait_phase")
+        {
+            obs_list.push_back(policy_obs.gait_phase);
+        }
+        else if (observation == "whole_body_tracking/motion_command")
+        {
+            std::vector<float> motion_command;
+            if (motion_reference != nullptr)
+            {
+                const auto mapping =
+                    policy_params.Get<std::vector<int>>(
+                        "motion_joint_mapping");
+                std::vector<float> joint_pos(mapping.size());
+                std::vector<float> joint_vel(mapping.size());
+                for (size_t i = 0; i < mapping.size(); ++i)
+                {
+                    joint_pos[i] =
+                        motion_reference->joint_pos[mapping[i]];
+                    joint_vel[i] =
+                        motion_reference->joint_vel[mapping[i]];
+                }
+                motion_command.insert(
+                    motion_command.end(),
+                    joint_pos.begin(),
+                    joint_pos.end());
+                motion_command.insert(
+                    motion_command.end(),
+                    joint_vel.begin(),
+                    joint_vel.end());
+            }
+            else
+            {
+                motion_command.resize(
+                    policy_params.Get<int>("num_of_dofs") * 2,
+                    0.0f);
+            }
+            obs_list.push_back(std::move(motion_command));
+        }
+        else if (observation
+                 == "whole_body_tracking/motion_anchor_ori_b")
+        {
+            std::vector<float> anchor_orientation(6, 0.0f);
+            if (motion_reference != nullptr)
+            {
+                const std::vector<float> robot_torso_quat =
+                    MotionLoaderLW::ComputeTorsoQuat(
+                        policy_obs.base_quat);
+                const std::vector<float> motion_anchor_quat =
+                    QuaternionMultiply(
+                        motion_reference->init_quat,
+                        motion_reference->anchor_quat);
+                const std::vector<float> relative_quat =
+                    QuaternionMultiply(
+                        QuaternionConjugate(robot_torso_quat),
+                        motion_anchor_quat);
+                anchor_orientation = MatrixFirstTwoColumns(
+                    QuaternionToRotationMatrix(relative_quat));
+            }
+            obs_list.push_back(std::move(anchor_orientation));
+        }
+        else if (observation == "RoboMimic_Deploy/phase")
+        {
+            const float policy_dt =
+                policy_params.Get<float>("dt")
+                * policy_params.Get<int>("decimation");
+            const float phase =
+                motion_length > 0.0f
+                ? static_cast<float>(policy_frame) * policy_dt
+                    / motion_length
+                : 0.0f;
+            obs_list.push_back({phase});
+        }
+    }
+
+    policy_obs_dims.clear();
+    std::vector<float> flattened;
+    for (const auto& observation : obs_list)
+    {
+        policy_obs_dims.push_back(
+            static_cast<int>(observation.size()));
+        flattened.insert(
+            flattened.end(),
+            observation.begin(),
+            observation.end());
+    }
+    const float clip = policy_params.Get<float>("clip_obs");
+    return clamp(flattened, -clip, clip);
+}
+
 void RL::InitObservations()
 {
     this->obs.lin_vel = {0.0f, 0.0f, 0.0f};
@@ -314,6 +458,155 @@ void RL::PreloadModel(const std::string& robot_config_path)
     std::cout << LOGGER::INFO << "Preload & Warmup finished for: " << robot_config_path << std::endl;
 }
 
+void RL::PreloadLWPolicyContext(
+    const std::string& robot_config_path)
+{
+    const std::string config_path =
+        std::string(POLICY_DIR) + "/" + robot_config_path
+        + "/config.yaml";
+    const YAML::Node loaded =
+        YAML::LoadFile(config_path)[robot_config_path];
+    if (!loaded || !loaded.IsMap())
+    {
+        throw std::runtime_error(
+            "Invalid LW policy configuration: " + config_path);
+    }
+
+    auto definition = std::make_shared<LWPolicyDefinition>();
+    definition->path = robot_config_path;
+    definition->params.config_node = YAML::Clone(
+        this->params.config_node);
+    for (auto it = loaded.begin(); it != loaded.end(); ++it)
+    {
+        const std::string key = it->first.as<std::string>();
+        definition->params.config_node[key] = YAML::Clone(it->second);
+    }
+
+    const auto model_it =
+        this->preloaded_models_.find(robot_config_path);
+    if (model_it == this->preloaded_models_.end()
+        || !model_it->second)
+    {
+        throw std::runtime_error(
+            "LW policy model was not preloaded: "
+            + robot_config_path);
+    }
+    definition->model = model_it->second;
+    this->lw_policy_definitions_[robot_config_path] =
+        std::move(definition);
+}
+
+std::shared_ptr<const LWPolicyDefinition>
+RL::GetLWPolicyDefinition(
+    const std::string& robot_config_path) const
+{
+    const auto it =
+        this->lw_policy_definitions_.find(robot_config_path);
+    if (it == this->lw_policy_definitions_.end())
+    {
+        return nullptr;
+    }
+    return it->second;
+}
+
+std::uint64_t RL::ActivateLWPolicy(
+    const std::string& robot_config_path,
+    float motion_length)
+{
+    const auto definition =
+        GetLWPolicyDefinition(robot_config_path);
+    if (!definition)
+    {
+        throw std::runtime_error(
+            "LW policy context was not preloaded: "
+            + robot_config_path);
+    }
+
+    auto activation = std::make_shared<LWPolicyActivation>();
+    activation->definition = definition;
+    activation->generation =
+        lw_next_policy_generation_.fetch_add(
+            1,
+            std::memory_order_relaxed);
+    activation->motion_length = motion_length;
+    lw_policy_progress_.store(
+        std::make_shared<LWPolicyProgressSnapshot>(
+            LWPolicyProgressSnapshot{
+                activation->generation,
+                0}));
+    lw_motion_reference_.clear();
+    lw_policy_activation_.store(activation);
+    return activation->generation;
+}
+
+void RL::DeactivateLWPolicy()
+{
+    lw_policy_activation_.clear();
+    lw_motion_reference_.clear();
+}
+
+std::shared_ptr<const LWPolicyActivation>
+RL::LoadLWPolicyActivation() const noexcept
+{
+    return lw_policy_activation_.load();
+}
+
+void RL::PublishLWMotionReference(
+    LWMotionReferenceSnapshot reference)
+{
+    const auto activation = LoadLWPolicyActivation();
+    if (!activation
+        || reference.generation != activation->generation)
+    {
+        return;
+    }
+    lw_motion_reference_.store(
+        std::make_shared<LWMotionReferenceSnapshot>(
+            std::move(reference)));
+}
+
+void RL::PublishCurrentLWMotionReference(
+    std::uint64_t generation)
+{
+    if (!this->motion_loader_lw)
+    {
+        return;
+    }
+    PublishLWMotionReference(
+        LWMotionReferenceSnapshot{
+            generation,
+            this->motion_loader_lw->GetJointPos(),
+            this->motion_loader_lw->GetJointVel(),
+            this->motion_loader_lw->GetAnchorQuat(),
+            this->motion_loader_lw->GetInitQuat()});
+}
+
+std::shared_ptr<const LWMotionReferenceSnapshot>
+RL::LoadLWMotionReference() const noexcept
+{
+    return lw_motion_reference_.load();
+}
+
+void RL::PublishLWPolicyProgress(
+    std::uint64_t generation,
+    std::uint64_t frame)
+{
+    const auto activation = LoadLWPolicyActivation();
+    if (!activation || activation->generation != generation)
+    {
+        return;
+    }
+    lw_policy_progress_.store(
+        std::make_shared<LWPolicyProgressSnapshot>(
+            LWPolicyProgressSnapshot{generation, frame}));
+}
+
+std::shared_ptr<const LWPolicyProgressSnapshot>
+RL::LoadLWPolicyProgress() const noexcept
+{
+    return lw_policy_progress_.load();
+}
+
 void RL::InitRL(std::string robot_config_path)
 {
     std::lock_guard<std::mutex> lock(this->model_mutex);
@@ -374,6 +667,38 @@ void RL::ComputeOutput(const std::vector<float> &actions, std::vector<float> &ou
     // output_dof_tau = clamp(output_dof_tau, -this->params.Get<std::vector<float>>("torque_limits"), this->params.Get<std::vector<float>>("torque_limits"));
 }
 
+void RL::ComputeLWOutput(
+    const YamlParams& policy_params,
+    const Observations<float>& policy_obs,
+    const std::vector<float>& actions,
+    std::vector<float>& output_dof_pos,
+    std::vector<float>& output_dof_vel,
+    std::vector<float>& output_dof_tau) const
+{
+    const std::vector<float> actions_scaled =
+        actions
+        * policy_params.Get<std::vector<float>>("action_scale");
+    std::vector<float> pos_actions_scaled = actions_scaled;
+    std::vector<float> vel_actions_scaled(actions.size(), 0.0f);
+    for (int index :
+         policy_params.Get<std::vector<int>>("wheel_indices"))
+    {
+        pos_actions_scaled[index] = 0.0f;
+        vel_actions_scaled[index] = actions_scaled[index];
+    }
+
+    const auto default_dof_pos =
+        policy_params.Get<std::vector<float>>("default_dof_pos");
+    output_dof_pos = pos_actions_scaled + default_dof_pos;
+    output_dof_vel = vel_actions_scaled;
+    output_dof_tau =
+        policy_params.Get<std::vector<float>>("rl_kp")
+            * (pos_actions_scaled + default_dof_pos
+               - policy_obs.dof_pos)
+        + policy_params.Get<std::vector<float>>("rl_kd")
+            * (vel_actions_scaled - policy_obs.dof_vel);
+}
+
 int RL::InverseJointMapping(int idx) const
 {
     auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
@@ -385,13 +710,22 @@ int RL::InverseJointMapping(int idx) const
 
 void RL::TorqueProtect(const std::vector<float>& origin_output_dof_tau)
 {
+    TorqueProtect(origin_output_dof_tau, this->params);
+}
+
+void RL::TorqueProtect(
+    const std::vector<float>& origin_output_dof_tau,
+    const YamlParams& policy_params) const
+{
     std::vector<int> out_of_range_indices;
     std::vector<float> out_of_range_values;
+    const auto torque_limits =
+        policy_params.Get<std::vector<float>>("torque_limits");
     for (size_t i = 0; i < origin_output_dof_tau.size(); ++i)
     {
         float torque_value = origin_output_dof_tau[i];
-        float limit_lower = -this->params.Get<std::vector<float>>("torque_limits")[i];
-        float limit_upper = this->params.Get<std::vector<float>>("torque_limits")[i];
+        float limit_lower = -torque_limits[i];
+        float limit_upper = torque_limits[i];
 
         if (torque_value < limit_lower || torque_value > limit_upper)
         {
@@ -405,8 +739,8 @@ void RL::TorqueProtect(const std::vector<float>& origin_output_dof_tau)
         {
             int index = out_of_range_indices[i];
             float value = out_of_range_values[i];
-            float limit_lower = -this->params.Get<std::vector<float>>("torque_limits")[index];
-            float limit_upper = this->params.Get<std::vector<float>>("torque_limits")[index];
+            float limit_lower = -torque_limits[index];
+            float limit_upper = torque_limits[index];
 
             std::cout << LOGGER::WARNING << "Torque(" << index + 1 << ")=" << value << " out of range(" << limit_lower << ", " << limit_upper << ")" << std::endl;
         }
@@ -692,10 +1026,23 @@ bool RLFSMState::Interpolate(
 
 void RLFSMState::RLControl()
 {
+    const auto activation = rl.LoadLWPolicyActivation();
+    if (!activation || !activation->definition)
+    {
+        return;
+    }
+    const YamlParams& policy_params =
+        activation->definition->params;
     std::vector<float> _output_dof_pos, _output_dof_vel;
     if (rl.output_dof_pos_queue.try_pop(_output_dof_pos) && rl.output_dof_vel_queue.try_pop(_output_dof_vel))
     {
-        for (int i = 0; i < rl.params.Get<int>("num_of_dofs"); ++i)
+        const auto rl_kp =
+            policy_params.Get<std::vector<float>>("rl_kp");
+        const auto rl_kd =
+            policy_params.Get<std::vector<float>>("rl_kd");
+        for (int i = 0;
+             i < policy_params.Get<int>("num_of_dofs");
+             ++i)
         {
             if (!_output_dof_pos.empty())
             {
@@ -705,8 +1052,8 @@ void RLFSMState::RLControl()
             {
                 fsm_command->motor_command.dq[i] = _output_dof_vel[i];
             }
-            fsm_command->motor_command.kp[i] = rl.params.Get<std::vector<float>>("rl_kp")[i];
-            fsm_command->motor_command.kd[i] = rl.params.Get<std::vector<float>>("rl_kd")[i];
+            fsm_command->motor_command.kp[i] = rl_kp[i];
+            fsm_command->motor_command.kd[i] = rl_kd[i];
             fsm_command->motor_command.tau[i] = 0;
         }
     }

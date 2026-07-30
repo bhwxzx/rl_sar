@@ -250,20 +250,25 @@ public:
     void Enter() override
     {
         percent_transition = 0.0f;
-        rl.episode_length_buf = 0;
-
         // read params from yaml
         rl.config_name = "robot_lab";
         std::string robot_config_path = rl.robot_name + "/" + rl.config_name + "/leg_loco";
         try
         {
-            rl.InitRL(robot_config_path);
+            if (!rl.GetLWPolicyDefinition(robot_config_path))
+            {
+                throw std::runtime_error(
+                    "policy context was not preloaded: "
+                    + robot_config_path);
+            }
+            rl.InitControl();
+            rl.ActivateLWPolicy(robot_config_path);
             rl.now_state = *fsm_state;
         }
         catch (const std::exception& e)
         {
-            std::cout << LOGGER::ERROR << "InitRL() failed: " << e.what() << std::endl;
-            rl.rl_init_done = false;
+            std::cout << LOGGER::ERROR << "Policy activation failed: " << e.what() << std::endl;
+            rl.DeactivateLWPolicy();
             rl.fsm.RequestStateChange("RLFSMStatePassive");
         }
     }
@@ -272,8 +277,6 @@ public:
     {
         // position transition from last default_dof_pos to current default_dof_pos
         // if (Interpolate(percent_transition, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos"), 0.5f, "Policy transition", true)) return;
-
-        if (!rl.rl_init_done) rl.rl_init_done = true;
 
         if (print_count++ % 20 == 0) // 10Hz
         {
@@ -291,7 +294,7 @@ public:
 
     void Exit() override
     {
-        rl.rl_init_done = false;
+        rl.DeactivateLWPolicy();
     }
 
     std::string CheckChange() override
@@ -327,20 +330,25 @@ public:
     void Enter() override
     {
         percent_transition = 0.0f;
-        rl.episode_length_buf = 0;
-
         // read params from yaml
         rl.config_name = "robot_lab";
         std::string robot_config_path = rl.robot_name + "/" + rl.config_name + "/wheel_loco";
         try
         {
-            rl.InitRL(robot_config_path);
+            if (!rl.GetLWPolicyDefinition(robot_config_path))
+            {
+                throw std::runtime_error(
+                    "policy context was not preloaded: "
+                    + robot_config_path);
+            }
+            rl.InitControl();
+            rl.ActivateLWPolicy(robot_config_path);
             rl.now_state = *fsm_state;
         }
         catch (const std::exception& e)
         {
-            std::cout << LOGGER::ERROR << "InitRL() failed: " << e.what() << std::endl;
-            rl.rl_init_done = false;
+            std::cout << LOGGER::ERROR << "Policy activation failed: " << e.what() << std::endl;
+            rl.DeactivateLWPolicy();
             rl.fsm.RequestStateChange("RLFSMStatePassive");
         }
     }
@@ -349,8 +357,6 @@ public:
     {
         // position transition from last default_dof_pos to current default_dof_pos
         // if (Interpolate(percent_transition, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos"), 0.5f, "Policy transition", true)) return;
-
-        if (!rl.rl_init_done) rl.rl_init_done = true;
 
         if (print_count++ % 20 == 0) // 10Hz
         {
@@ -368,7 +374,7 @@ public:
 
     void Exit() override
     {
-        rl.rl_init_done = false;
+        rl.DeactivateLWPolicy();
     }
 
     std::string CheckChange() override
@@ -397,25 +403,38 @@ class RLFSMStateRL_LegToWheel : public RLFSMState
 {
 public:
     RLFSMStateRL_LegToWheel(RL *rl) : RLFSMState(*rl, "RLFSMStateRL_LegToWheel") {}
+    std::uint64_t policy_generation = 0;
 
     void Enter() override
     {
-        rl.episode_length_buf = 0;
-
         // read params from yaml
         rl.config_name = "robot_lab/leg_to_wheel";
         std::string robot_config_path = rl.robot_name + "/" + rl.config_name;
         try
         {
-            rl.InitRL(robot_config_path);
+            const auto definition =
+                rl.GetLWPolicyDefinition(robot_config_path);
+            if (!definition)
+            {
+                throw std::runtime_error(
+                    "policy context was not preloaded: "
+                    + robot_config_path);
+            }
 
             // Initialize motion loader
-            std::string motion_file_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/" + rl.params.Get<std::string>("motion_file");
-            float fps = rl.params.Get<float>("motion_fps");
+            const YamlParams& policy_params = definition->params;
+            std::string motion_file_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/" + policy_params.Get<std::string>("motion_file");
+            float fps = policy_params.Get<float>("motion_fps");
             rl.motion_loader_lw = std::make_unique<MotionLoaderLW>(motion_file_path, fps);
             rl.motion_length = rl.motion_loader_lw->GetDuration();
 
             rl.motion_loader_lw->Reset(fsm_state->imu.quaternion);
+            rl.InitControl();
+            policy_generation =
+                rl.ActivateLWPolicy(
+                    robot_config_path,
+                    rl.motion_length);
+            rl.PublishCurrentLWMotionReference(policy_generation);
 
             std::cout << LOGGER::INFO << "Motion duration: " << rl.motion_length << "s" << std::endl;
 
@@ -423,8 +442,8 @@ public:
         }
         catch (const std::exception& e)
         {
-            std::cout << LOGGER::ERROR << "InitRL() failed: " << e.what() << std::endl;
-            rl.rl_init_done = false;
+            std::cout << LOGGER::ERROR << "Policy activation failed: " << e.what() << std::endl;
+            rl.DeactivateLWPolicy();
             rl.fsm.RequestStateChange("RLFSMStatePassive");
         }
     }
@@ -434,15 +453,28 @@ public:
         // position transition from last default_dof_pos to current default_dof_pos
         // if (Interpolate(percent_transition, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos"), 0.5f, "Policy transition", true)) return;
 
-        if (!rl.rl_init_done) rl.rl_init_done = true;
-
         // Calculate motion time and progress
-        float motion_time = rl.episode_length_buf * rl.params.Get<float>("dt") * rl.params.Get<int>("decimation");
+        const auto activation = rl.LoadLWPolicyActivation();
+        const auto progress = rl.LoadLWPolicyProgress();
+        if (!activation
+            || activation->generation != policy_generation
+            || !progress
+            || progress->generation != policy_generation)
+        {
+            return;
+        }
+        const YamlParams& policy_params =
+            activation->definition->params;
+        float motion_time =
+            progress->frame
+            * policy_params.Get<float>("dt")
+            * policy_params.Get<int>("decimation");
         motion_time = std::fmin(motion_time, rl.motion_length);
         float percent = motion_time / rl.motion_length;
         LOGGER::PrintProgress(percent, rl.config_name);
 
         rl.motion_loader_lw->Update(motion_time);
+        rl.PublishCurrentLWMotionReference(policy_generation);
 
         RLControl();
 
@@ -454,7 +486,7 @@ public:
 
     void Exit() override
     {
-        rl.rl_init_done = false;
+        rl.DeactivateLWPolicy();
     }
 
     std::string CheckChange() override
@@ -475,25 +507,38 @@ class RLFSMStateRL_WheelToLeg : public RLFSMState
 {
 public:
     RLFSMStateRL_WheelToLeg(RL *rl) : RLFSMState(*rl, "RLFSMStateRL_WheelToLeg") {}
+    std::uint64_t policy_generation = 0;
 
     void Enter() override
     {
-        rl.episode_length_buf = 0;
-
         // read params from yaml
         rl.config_name = "robot_lab/wheel_to_leg";
         std::string robot_config_path = rl.robot_name + "/" + rl.config_name;
         try
         {
-            rl.InitRL(robot_config_path);
+            const auto definition =
+                rl.GetLWPolicyDefinition(robot_config_path);
+            if (!definition)
+            {
+                throw std::runtime_error(
+                    "policy context was not preloaded: "
+                    + robot_config_path);
+            }
 
             // Initialize motion loader
-            std::string motion_file_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/" + rl.params.Get<std::string>("motion_file");
-            float fps = 1.0f / (rl.params.Get<float>("dt") * rl.params.Get<int>("decimation"));
+            const YamlParams& policy_params = definition->params;
+            std::string motion_file_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/" + policy_params.Get<std::string>("motion_file");
+            float fps = 1.0f / (policy_params.Get<float>("dt") * policy_params.Get<int>("decimation"));
             rl.motion_loader_lw = std::make_unique<MotionLoaderLW>(motion_file_path, fps);
             rl.motion_length = rl.motion_loader_lw->GetDuration();
 
             rl.motion_loader_lw->Reset(fsm_state->imu.quaternion);
+            rl.InitControl();
+            policy_generation =
+                rl.ActivateLWPolicy(
+                    robot_config_path,
+                    rl.motion_length);
+            rl.PublishCurrentLWMotionReference(policy_generation);
 
             std::cout << LOGGER::INFO << "Motion duration: " << rl.motion_length << "s" << std::endl;
 
@@ -501,8 +546,8 @@ public:
         }
         catch (const std::exception& e)
         {
-            std::cout << LOGGER::ERROR << "InitRL() failed: " << e.what() << std::endl;
-            rl.rl_init_done = false;
+            std::cout << LOGGER::ERROR << "Policy activation failed: " << e.what() << std::endl;
+            rl.DeactivateLWPolicy();
             rl.fsm.RequestStateChange("RLFSMStatePassive");
         }
     }
@@ -512,15 +557,28 @@ public:
         // position transition from last default_dof_pos to current default_dof_pos
         // if (Interpolate(percent_transition, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos"), 0.5f, "Policy transition", true)) return;
 
-        if (!rl.rl_init_done) rl.rl_init_done = true;
-
         // Calculate motion time and progress
-        float motion_time = rl.episode_length_buf * rl.params.Get<float>("dt") * rl.params.Get<int>("decimation");
+        const auto activation = rl.LoadLWPolicyActivation();
+        const auto progress = rl.LoadLWPolicyProgress();
+        if (!activation
+            || activation->generation != policy_generation
+            || !progress
+            || progress->generation != policy_generation)
+        {
+            return;
+        }
+        const YamlParams& policy_params =
+            activation->definition->params;
+        float motion_time =
+            progress->frame
+            * policy_params.Get<float>("dt")
+            * policy_params.Get<int>("decimation");
         motion_time = std::fmin(motion_time, rl.motion_length);
         float percent = motion_time / rl.motion_length;
         LOGGER::PrintProgress(percent, rl.config_name);
 
         rl.motion_loader_lw->Update(motion_time);
+        rl.PublishCurrentLWMotionReference(policy_generation);
 
         RLControl();
 
@@ -532,7 +590,7 @@ public:
 
     void Exit() override
     {
-        rl.rl_init_done = false;
+        rl.DeactivateLWPolicy();
     }
 
     std::string CheckChange() override

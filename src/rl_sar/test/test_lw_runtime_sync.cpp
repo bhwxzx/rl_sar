@@ -1,0 +1,263 @@
+#include "lw_runtime_sync.hpp"
+
+#include <atomic>
+#include <cstdint>
+#include <cstdlib>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace
+{
+void require(bool condition, const std::string& message)
+{
+    if (!condition)
+    {
+        throw std::runtime_error(message);
+    }
+}
+
+struct CoherentFrame
+{
+    std::uint64_t sequence = 0;
+    std::vector<std::uint64_t> values;
+};
+
+void testSnapshotBufferPublishesWholeFrames()
+{
+    LWSnapshotBuffer<CoherentFrame> buffer;
+    std::atomic<bool> start{false};
+    std::atomic<bool> failed{false};
+
+    std::thread writer([&]()
+    {
+        while (!start.load(std::memory_order_acquire))
+        {
+        }
+        for (std::uint64_t sequence = 1;
+             sequence <= 50000;
+             ++sequence)
+        {
+            buffer.publish(
+                CoherentFrame{
+                    sequence,
+                    std::vector<std::uint64_t>(32, sequence)});
+        }
+    });
+
+    std::vector<std::thread> readers;
+    for (int reader = 0; reader < 4; ++reader)
+    {
+        readers.emplace_back([&]()
+        {
+            while (!start.load(std::memory_order_acquire))
+            {
+            }
+            for (int iteration = 0;
+                 iteration < 50000;
+                 ++iteration)
+            {
+                CoherentFrame frame;
+                if (!buffer.read(frame))
+                {
+                    continue;
+                }
+                if (frame.values.size() != 32)
+                {
+                    failed.store(true, std::memory_order_release);
+                    return;
+                }
+                for (std::uint64_t value : frame.values)
+                {
+                    if (value != frame.sequence)
+                    {
+                        failed.store(
+                            true,
+                            std::memory_order_release);
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    start.store(true, std::memory_order_release);
+    writer.join();
+    for (auto& reader : readers)
+    {
+        reader.join();
+    }
+    require(
+        !failed.load(std::memory_order_acquire),
+        "snapshot buffer exposed a partially published frame");
+}
+
+struct ImmutableContext
+{
+    std::uint64_t generation = 0;
+    std::string config;
+    std::string model;
+};
+
+void testAtomicSnapshotKeepsContextCoherent()
+{
+    LWAtomicSnapshot<ImmutableContext> slot;
+    std::atomic<bool> start{false};
+    std::atomic<bool> failed{false};
+
+    std::thread writer([&]()
+    {
+        while (!start.load(std::memory_order_acquire))
+        {
+        }
+        for (std::uint64_t generation = 1;
+             generation <= 50000;
+             ++generation)
+        {
+            const std::string tag = std::to_string(generation);
+            slot.store(
+                std::make_shared<ImmutableContext>(
+                    ImmutableContext{
+                        generation,
+                        "config-" + tag,
+                        "model-" + tag}));
+        }
+    });
+
+    std::vector<std::thread> readers;
+    for (int reader = 0; reader < 4; ++reader)
+    {
+        readers.emplace_back([&]()
+        {
+            while (!start.load(std::memory_order_acquire))
+            {
+            }
+            for (int iteration = 0;
+                 iteration < 50000;
+                 ++iteration)
+            {
+                const auto context = slot.load();
+                if (!context)
+                {
+                    continue;
+                }
+                const std::string tag =
+                    std::to_string(context->generation);
+                if (context->config != "config-" + tag
+                    || context->model != "model-" + tag)
+                {
+                    failed.store(
+                        true,
+                        std::memory_order_release);
+                    return;
+                }
+            }
+        });
+    }
+
+    start.store(true, std::memory_order_release);
+    writer.join();
+    for (auto& reader : readers)
+    {
+        reader.join();
+    }
+    require(
+        !failed.load(std::memory_order_acquire),
+        "atomic policy slot mixed generations");
+}
+
+enum class TestEvent
+{
+    None,
+    Start,
+    Stop
+};
+
+void testInputMailboxKeepsVelocityCoherentAndEventsSequenced()
+{
+    LWInputMailbox<TestEvent> mailbox;
+    std::atomic<bool> start{false};
+    std::atomic<bool> failed{false};
+
+    std::thread writer([&]()
+    {
+        while (!start.load(std::memory_order_acquire))
+        {
+        }
+        for (int value = 1; value <= 50000; ++value)
+        {
+            const float x = static_cast<float>(value);
+            mailbox.publishVelocity(x, 2.0f * x, 3.0f * x);
+            if (value % 1000 == 0)
+            {
+                mailbox.publishEvent(TestEvent::Start);
+            }
+        }
+    });
+
+    std::thread reader([&]()
+    {
+        while (!start.load(std::memory_order_acquire))
+        {
+        }
+        std::uint64_t last_event_sequence = 0;
+        for (int iteration = 0;
+             iteration < 50000;
+             ++iteration)
+        {
+            const auto snapshot = mailbox.read();
+            if (snapshot.y != 2.0f * snapshot.x
+                || snapshot.yaw != 3.0f * snapshot.x
+                || snapshot.event_sequence
+                    < last_event_sequence)
+            {
+                failed.store(true, std::memory_order_release);
+                return;
+            }
+            last_event_sequence = snapshot.event_sequence;
+        }
+    });
+
+    start.store(true, std::memory_order_release);
+    writer.join();
+    reader.join();
+    require(
+        !failed.load(std::memory_order_acquire),
+        "input mailbox exposed incoherent velocity or event state");
+
+    const auto before_clear = mailbox.read();
+    mailbox.clear(TestEvent::None);
+    const auto after_clear = mailbox.read();
+    require(
+        after_clear.x == 0.0f
+            && after_clear.y == 0.0f
+            && after_clear.yaw == 0.0f
+            && after_clear.event == TestEvent::None,
+        "input clear retained a stale command");
+    require(
+        after_clear.event_sequence
+            == before_clear.event_sequence + 1,
+        "input clear was not published as a new event generation");
+}
+} // namespace
+
+int main()
+{
+    try
+    {
+        testSnapshotBufferPublishesWholeFrames();
+        testAtomicSnapshotKeepsContextCoherent();
+        testInputMailboxKeepsVelocityCoherentAndEventsSequenced();
+        std::cout << "LW runtime synchronization tests passed"
+                  << std::endl;
+        return EXIT_SUCCESS;
+    }
+    catch (const std::exception& exception)
+    {
+        std::cerr << "LW runtime synchronization tests failed: "
+                  << exception.what() << std::endl;
+        return EXIT_FAILURE;
+    }
+}

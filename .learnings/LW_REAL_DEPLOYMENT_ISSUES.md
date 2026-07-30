@@ -47,7 +47,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 4 | LW-004 | P0 / critical | resolved | Remove invalid FSM transition targets and validate all transitions |
 | 5 | LW-005 | P0 / critical | resolved | Enforce finite commands and state-aware attitude protection |
 | 6 | LW-006 | P0 / critical | resolved | Latch joystick disconnects, clear commands, and validate indices |
-| 7 | LW-007 | P1 / high | pending | Remove cross-thread data races with coherent snapshots |
+| 7 | LW-007 | P1 / high | resolved | Remove cross-thread data races with coherent snapshots |
 | 8 | LW-008 | P1 / high | pending | Replace split policy queues with one coherent output frame |
 | 9 | LW-009 | P1 / high | pending | Use the configured 60 Hz wheel-to-leg reference rate |
 | 10 | LW-010 | P1 / high | pending | Make deployed binary, configuration, and models reproducible |
@@ -440,7 +440,7 @@ Joystick reads cannot distinguish no event from disconnect. Cached axis values r
 ## [LW-007] Coherent cross-thread state
 
 **Priority**: P1 / high
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-001, LW-002
 
 ### Problem
@@ -467,6 +467,57 @@ The policy thread locks `state_mutex` while copying `robot_state`, but the contr
 - No shared mutable control data is accessed without its documented synchronization mechanism.
 - Policy switches cannot combine old observations with new configuration/model data.
 - ThreadSanitizer or equivalent stress testing reports no races in the LW control path.
+
+### Resolution Evidence
+
+- Resolved: 2026-07-29
+- The 200 Hz control thread is now the sole owner of `control`, the FSM,
+  `robot_state`, `robot_command`, and the LW motion loader. The joystick worker
+  publishes coherent velocity and sequenced Gamepad input through a protected
+  mailbox; the simulation keyboard reader also runs in the control thread.
+- Each inference frame reads one combined robot-state/control snapshot. Debug
+  callbacks read dedicated complete snapshots instead of live control data, and
+  the simulator actuator network consumes a generation-matched inference
+  snapshot.
+- All four policy YAML configurations and preloaded models are assembled before
+  worker startup into read-only policy definitions. Activation publishes one
+  atomic definition/model/motion-length context with a monotonically increasing
+  generation; the inference thread keeps that same context for the whole frame
+  and resets its private observation/history/output workspace only when the
+  generation changes.
+- Morphology references and inference progress are immutable, generation-tagged
+  snapshots. A reference or progress value from another generation is rejected,
+  so a policy frame cannot combine a new model/configuration with an old motion
+  reference.
+- Snapshot buffers copy into retained storage rather than transferring
+  temporary vector ownership every control cycle, reducing allocation jitter in
+  the 200 Hz path.
+- `test_lw_runtime_sync` stresses whole-frame publication, atomic policy-context
+  replacement, and coherent/sequenced input with one writer, four concurrent
+  readers where applicable, and 50,000 iterations per worker.
+- Verified with:
+  - `cmake --build build/rl_sar --target rl_sdk test_lw_runtime_sync test_lw_fsm_transitions test_lw_control_safety test_lw_joystick_safety rl_real_LW rl_sim_LW -j2`
+  - `ctest --test-dir build/rl_sar --output-on-failure -R 'loop_lifecycle|sensor_readiness|lw_serial_sdk|lw_fsm_transitions|lw_control_safety|lw_joystick_safety|lw_runtime_sync'`
+  - `ctest --test-dir build/rl_sar --output-on-failure --repeat until-fail:20 -R 'lw_fsm_transitions|lw_runtime_sync'`
+  - 50 additional consecutive standalone `test_lw_runtime_sync` runs
+  - standalone AddressSanitizer and UndefinedBehaviorSanitizer execution
+  - `-Wall -Wextra -Wpedantic` builds of the core library, synchronization
+    test, and both LW executables
+- Result: both LW executables and all selected targets built successfully; all
+  seven selected CTest tests passed, the FSM/synchronization tests passed 20
+  consecutive CTest runs, the synchronization test passed 50 additional runs,
+  and sanitizer execution reported no memory or undefined-behavior failure.
+  Strict-warning output contained only pre-existing initialization,
+  unused-parameter, and third-party warnings.
+- ThreadSanitizer instrumentation compiled successfully, but its runtime could
+  not start in this container (`ThreadSanitizer: unexpected memory mapping`);
+  the concurrent stress test, repeated runs, and ASan/UBSan execution were used
+  as the available equivalent verification.
+- Hardware execution was intentionally not performed.
+- Scope boundary: the three existing position/velocity/torque queues remain
+  separate and unversioned. A complete inference frame is internally bound to
+  one generation, but stale or cross-paired queue consumption remains LW-008
+  and was intentionally not changed here.
 
 ---
 

@@ -69,6 +69,10 @@ RL_Real::RL_Real(int argc, char **argv)
     this->PreloadModel(this->robot_name + "/robot_lab/wheel_loco");
     this->PreloadModel(this->robot_name + "/robot_lab/leg_to_wheel");
     this->PreloadModel(this->robot_name + "/robot_lab/wheel_to_leg");
+    this->PreloadLWPolicyContext(this->robot_name + "/robot_lab/leg_loco");
+    this->PreloadLWPolicyContext(this->robot_name + "/robot_lab/wheel_loco");
+    this->PreloadLWPolicyContext(this->robot_name + "/robot_lab/leg_to_wheel");
+    this->PreloadLWPolicyContext(this->robot_name + "/robot_lab/wheel_to_leg");
 
     // 解析命令行参数
     for (int i = 1; i < argc; ++i) {
@@ -123,6 +127,12 @@ RL_Real::RL_Real(int argc, char **argv)
     this->InitControl();
     this->control.gait_frequency = this->params.Get<std::vector<float>>("gait_command")[0];
     this->gait_phase_time = 0.0f;
+    policy_input_snapshot_.publish(
+        {this->robot_state,
+         {this->control.x,
+          this->control.y,
+          this->control.yaw,
+          this->control.gait_frequency}});
 
     // loop
     this->loop_joystick = std::make_shared<LoopFunc>("loop_joystick", 0.01, std::bind(&RL_Real::GetSysJoystick, this));
@@ -131,10 +141,6 @@ RL_Real::RL_Real(int argc, char **argv)
     this->loop_joystick->start();
     this->loop_control->start();
     this->loop_rl->start();
-    // keyboard
-    this->loop_keyboard = std::make_shared<LoopFunc>("loop_keyboard", 0.05, std::bind(&RL_Real::KeyboardInterface, this));
-    this->loop_keyboard->start();
-
 #ifdef PLOT
     this->jointstate_plot_publisher_ = ros2_node->create_publisher<sensor_msgs::msg::JointState>(
         "/LW_joint_states", rclcpp::SystemDefaultsQoS()
@@ -155,13 +161,17 @@ RL_Real::~RL_Real()
     this->loop_joystick->shutdown();
     this->loop_rl->shutdown();
     this->loop_control->shutdown();
-    this->loop_keyboard->shutdown();
     //disable_lw_robot();
     std::cout << LOGGER::INFO << "RL_Real exit" << std::endl;
 }
 
 void RL_Real::jointstate_plot_callback(void)
 {
+    SimDebugSnapshot snapshot;
+    if (!debug_snapshot_.read(snapshot))
+    {
+        return;
+    }
     sensor_msgs::msg::JointState msg;
     // 强烈建议加上时间戳，保证 ROS 2 Bag 的时间对齐
     msg.header.stamp = this->ros2_node->get_clock()->now();
@@ -213,18 +223,21 @@ void RL_Real::jointstate_plot_callback(void)
 
     for (int i = 0; i < num_of_dofs; ++i)
     {
-        msg.position[i] = mj_data->sensordata[joint_mapping[i]];
-        msg.velocity[i] = mj_data->sensordata[joint_mapping[i] + num_of_dofs];
-        msg.effort[i]   = mj_data->sensordata[joint_mapping[i] + 2 * num_of_dofs];
+        msg.position[i] = snapshot.robot_state.motor_state.q[i];
+        msg.velocity[i] = snapshot.robot_state.motor_state.dq[i];
+        msg.effort[i] = snapshot.robot_state.motor_state.tau_est[i];
     }
     for (int i = num_of_dofs; i < 2 * num_of_dofs; ++i)
     {
-        msg.position[i] = this->lw_low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set;
+        msg.position[i] =
+            snapshot.robot_command.motor_command.q[
+                i - num_of_dofs];
     }
     for (int i : wheel_indices)
     {
         msg.position[i + num_of_dofs] = 0.0f;
-        msg.velocity[i + num_of_dofs] = this->lw_low_command.motorCmd[joint_mapping[i]].action_set;
+        msg.velocity[i + num_of_dofs] =
+            snapshot.robot_command.motor_command.dq[i];
     }
 
     // ================= 4. 填充步态数据 (脚端信息) =================
@@ -262,8 +275,8 @@ void RL_Real::jointstate_plot_callback(void)
     int offset_track = offset_gait + gait_data_names.size();
 
     // 记录期望指令
-    msg.position[offset_track + 0] = this->control.x;    // cmd_vel_x
-    msg.position[offset_track + 1] = this->control.yaw;  // cmd_vel_yaw
+    msg.position[offset_track + 0] = snapshot.control.x;
+    msg.position[offset_track + 1] = snapshot.control.yaw;
 
     // 提取传感器数据
     if (id_frame_pos >= 0) {
@@ -316,10 +329,18 @@ void RL_Real::disable_lw_robot(void)
 void RL_Real::RobotControl()
 {
 
+    ApplyPendingInput();
+    this->KeyboardInterface();
     ApplyJoystickFaultGate();
     this->GetState(&this->robot_state);
 
     this->StateController(&this->robot_state, &this->robot_command);
+    policy_input_snapshot_.publish(
+        {this->robot_state,
+         {this->control.x,
+          this->control.y,
+          this->control.yaw,
+          this->control.gait_frequency}});
 
     if (this->control.current_keyboard == Input::Keyboard::R || this->control.current_gamepad == Input::Gamepad::RB_Y)
     {
@@ -372,8 +393,19 @@ void RL_Real::RobotControl()
 
     this->control.ClearInput();
 
-    if (this->use_actuator_net_ && this->leg_actuator_model_ && this->foot_actuator_model_ 
-        && this->rl_init_done && this->output_dof_pos.size() == this->params.Get<int>("num_of_dofs"))
+    LWInferenceOutputSnapshot inference_output;
+    const auto activation = LoadLWPolicyActivation();
+    const bool has_current_inference_output =
+        activation
+        && inference_output_snapshot_.read(inference_output)
+        && inference_output.generation == activation->generation;
+    if (this->use_actuator_net_
+        && this->leg_actuator_model_
+        && this->foot_actuator_model_
+        && has_current_inference_output
+        && inference_output.dof_pos.size()
+            == static_cast<size_t>(
+                this->params.Get<int>("num_of_dofs")))
     {
         int num_dofs = this->params.Get<int>("num_of_dofs");
         std::vector<float> current_pos_err(num_dofs, 0.0f);
@@ -382,11 +414,11 @@ void RL_Real::RobotControl()
         // 获取最新瞬间的误差和速度
         for (int i = 0; i < num_dofs; ++i) {
             // this->output_dof_pos 是算出的目标点，robot_state.q 是 200Hz 最新的物理状态
-            current_pos_err[i] = this->output_dof_pos[i] - this->robot_state.motor_state.q[i];
+            current_pos_err[i] = inference_output.dof_pos[i] - this->robot_state.motor_state.q[i];
             current_vel[i] = this->robot_state.motor_state.dq[i];
         }
         // 在执行器网络启动的最初期，预填充历史
-        if (this->episode_length_buf <= 1) {
+        if (inference_output.frame <= 1) {
             for (size_t k = 0; k < this->pos_err_history_.size(); ++k) {
                 this->pos_err_history_[k] = current_pos_err;
                 this->vel_history_[k] = current_vel;
@@ -431,6 +463,7 @@ void RL_Real::RobotControl()
             auto output = this->foot_actuator_model_->forward({mlp_input});
             this->actuator_net_tau_[i] = output[0] * 1.0f; 
         }
+        actuator_net_generation_ = activation->generation;
     }
 
     // // ===================== [执行机身外部冲击力] =====================
@@ -463,158 +496,286 @@ void RL_Real::RobotControl()
     // // ============================================================================
 
     this->SetCommand(&this->robot_command);
+    debug_snapshot_.publish(
+        SimDebugSnapshot{
+            this->robot_state,
+            this->robot_command,
+            {this->control.x,
+             this->control.y,
+             this->control.yaw,
+             this->control.gait_frequency}});
 
 }
 
 void RL_Real::RunModel()
 {
-    if (this->rl_init_done)
+    const auto activation = LoadLWPolicyActivation();
+    if (!activation || !activation->definition)
     {
+        return;
+    }
+    if (!inference_activation_
+        || inference_activation_->generation
+            != activation->generation)
+    {
+        inference_activation_ = activation;
+        ResetInferenceWorkspace(*activation);
+    }
 
-        RobotState<float> local_state; 
-        local_state = this->robot_state;
+    LWPolicyInputSnapshot policy_input;
+    if (!policy_input_snapshot_.read(policy_input))
+    {
+        return;
+    }
+    const RobotState<float>& local_state =
+        policy_input.robot_state;
+    const LWControlSnapshot& local_control =
+        policy_input.control;
 
-        this->episode_length_buf += 1;
+    inference_motion_reference_ = LoadLWMotionReference();
+    const auto observations =
+        activation->definition->params.Get<std::vector<std::string>>(
+            "observations");
+    const bool needs_motion_reference =
+        std::find(
+            observations.begin(),
+            observations.end(),
+            "whole_body_tracking/motion_command")
+        != observations.end();
+    if (needs_motion_reference
+        && (!inference_motion_reference_
+            || inference_motion_reference_->generation
+                != activation->generation))
+    {
+        return;
+    }
+
+    ++inference_frame_;
 
 #ifdef ADD_ANGVEL_NOISE
-        // --- 添加Imu速度噪声的逻辑 ---
-        static std::default_random_engine generator;
-        // 可以从 0.01 逐渐增加到 0.5 来观察机器人反应
-        float noise_std = 0.4f; 
-        std::normal_distribution<float> distribution(0.0, noise_std);
-
-        this->obs.ang_vel.resize(local_state.imu.gyroscope.size());
-        for (size_t i = 0; i < local_state.imu.gyroscope.size(); ++i)
-        {
-            float noise = distribution(generator);
-            this->obs.ang_vel[i] = local_state.imu.gyroscope[i] + noise;
-        }
+    static std::default_random_engine generator;
+    std::normal_distribution<float> distribution(0.0, 0.4f);
+    inference_obs_.ang_vel.resize(
+        local_state.imu.gyroscope.size());
+    for (size_t i = 0;
+         i < local_state.imu.gyroscope.size();
+         ++i)
+    {
+        inference_obs_.ang_vel[i] =
+            local_state.imu.gyroscope[i]
+            + distribution(generator);
+    }
+#else
+    inference_obs_.ang_vel = local_state.imu.gyroscope;
 #endif
-
-        this->obs.ang_vel = local_state.imu.gyroscope;
-        if (joystick_fault_latch_.faulted())
-        {
-            this->obs.commands = {0.0f, 0.0f, 0.0f};
-        }
-        else
-        {
-            this->obs.commands = {
-                this->control.x,
-                this->control.y,
-                this->control.yaw
-            };
-        }
-        this->obs.base_quat = local_state.imu.quaternion;
-        this->obs.dof_pos = local_state.motor_state.q;
+    inference_obs_.commands =
+        joystick_fault_latch_.faulted()
+        ? std::vector<float>{0.0f, 0.0f, 0.0f}
+        : std::vector<float>{
+            local_control.x,
+            local_control.y,
+            local_control.yaw};
+    inference_obs_.base_quat = local_state.imu.quaternion;
+    inference_obs_.dof_pos = local_state.motor_state.q;
 
 #ifdef ADD_JOINTVEL_NOISE
-        // --- 添加关节速度噪声的逻辑 ---
-        static std::default_random_engine generator;
-        // 可以从 0.01 逐渐增加到 0.5 来观察机器人反应
-        float noise_std = 1.5f; 
-        std::normal_distribution<float> distribution(0.0, noise_std);
-
-        this->obs.dof_vel.resize(local_state.motor_state.dq.size());
-        for (size_t i = 0; i < local_state.motor_state.dq.size(); ++i)
-        {
-            float noise = distribution(generator);
-            this->obs.dof_vel[i] = local_state.motor_state.dq[i] + noise;
-        }
+    static std::default_random_engine velocity_generator;
+    std::normal_distribution<float> velocity_distribution(
+        0.0,
+        1.5f);
+    inference_obs_.dof_vel.resize(
+        local_state.motor_state.dq.size());
+    for (size_t i = 0;
+         i < local_state.motor_state.dq.size();
+         ++i)
+    {
+        inference_obs_.dof_vel[i] =
+            local_state.motor_state.dq[i]
+            + velocity_distribution(velocity_generator);
+    }
+#else
+    inference_obs_.dof_vel = local_state.motor_state.dq;
 #endif
-        this->obs.dof_vel = local_state.motor_state.dq;
 
-        this->gait_phase_time += this->params.Get<float>("dt") * this->params.Get<int>("decimation") * this->control.gait_frequency;
-        if (this->gait_phase_time >= 1.0f)
-        {
-            this->gait_phase_time -= 1.0f; 
-        }
+    const YamlParams& policy_params =
+        activation->definition->params;
+    inference_gait_phase_time_ +=
+        policy_params.Get<float>("dt")
+        * policy_params.Get<int>("decimation")
+        * local_control.gait_frequency;
+    if (inference_gait_phase_time_ >= 1.0f)
+    {
+        inference_gait_phase_time_ -= 1.0f;
+    }
+    const float command_norm = std::sqrt(
+        local_control.x * local_control.x
+        + local_control.y * local_control.y
+        + local_control.yaw * local_control.yaw);
+    const float is_moving =
+        command_norm > 0.1f ? 1.0f : 0.0f;
+    inference_obs_.gait_phase = {
+        is_moving * std::sin(
+            2 * static_cast<float>(M_PI)
+            * inference_gait_phase_time_),
+        is_moving * std::cos(
+            2 * static_cast<float>(M_PI)
+            * inference_gait_phase_time_)};
 
-        float vel_threshold = 0.1f;
-        float cmd_norm = std::sqrt(this->control.x * this->control.x + 
-                                   this->control.y * this->control.y + 
-                                   this->control.yaw * this->control.yaw);
-        float is_moving = (cmd_norm > vel_threshold) ? 1.0f : 0.0f;
-
-        this->obs.gait_phase = {is_moving * std::sin(2 * static_cast<float>(M_PI) * (this->gait_phase_time)), 
-                                is_moving * std::cos(2 * static_cast<float>(M_PI) * (this->gait_phase_time))};
-            
-        // this->obs.gait_command = {this->control.gait_frequency, 
-        //                           this->params.Get<std::vector<float>>("gait_command")[1], 
-        //                           this->params.Get<std::vector<float>>("gait_command")[2],
-        //                           this->params.Get<std::vector<float>>("gait_command")[3]};
-
-        this->obs.actions = this->Forward();
+    inference_obs_.actions = Forward();
 
 #ifdef ENABLE_FORWARD_LATENCY
-        // --- 模拟测试：人为添加推理延迟 ---
-        // 如果你的控制频率是 50Hz (20ms)，尝试延迟 5-10ms
-        std::this_thread::sleep_for(std::chrono::milliseconds(35));
+    std::this_thread::sleep_for(std::chrono::milliseconds(35));
 #endif
 
-        this->ComputeOutput(this->obs.actions, this->output_dof_pos, this->output_dof_vel, this->output_dof_tau);
+    ComputeLWOutput(
+        policy_params,
+        inference_obs_,
+        inference_obs_.actions,
+        inference_output_dof_pos_,
+        inference_output_dof_vel_,
+        inference_output_dof_tau_);
 
-        if (!this->output_dof_pos.empty())
-        {
-            output_dof_pos_queue.push(this->output_dof_pos);
-        }
-        if (!this->output_dof_vel.empty())
-        {
-            output_dof_vel_queue.push(this->output_dof_vel);
-        }
-        if (!this->output_dof_tau.empty())
-        {
-            output_dof_tau_queue.push(this->output_dof_tau);
-        }
+    if (!inference_output_dof_pos_.empty())
+    {
+        output_dof_pos_queue.push(inference_output_dof_pos_);
+    }
+    if (!inference_output_dof_vel_.empty())
+    {
+        output_dof_vel_queue.push(inference_output_dof_vel_);
+    }
+    if (!inference_output_dof_tau_.empty())
+    {
+        output_dof_tau_queue.push(inference_output_dof_tau_);
+    }
 
-        this->TorqueProtect(this->output_dof_tau);
-        // this->AttitudeProtect(this->robot_state.imu.quaternion, 75.0f, 75.0f);
+    TorqueProtect(inference_output_dof_tau_, policy_params);
+    PublishLWPolicyProgress(
+        activation->generation,
+        inference_frame_);
+    inference_output_snapshot_.publish(
+        {activation->generation,
+         inference_frame_,
+         inference_output_dof_pos_,
+         inference_output_dof_vel_,
+         inference_output_dof_tau_});
 
 #ifdef CSV_LOGGER
-        std::vector<float> tau_est = this->robot_state.motor_state.tau_est;
-        this->CSVLogger(this->output_dof_tau, tau_est, this->obs.dof_pos, this->output_dof_pos, this->obs.dof_vel);
+    this->CSVLogger(
+        inference_output_dof_tau_,
+        local_state.motor_state.tau_est,
+        inference_obs_.dof_pos,
+        inference_output_dof_pos_,
+        inference_obs_.dof_vel);
 #endif
-    }
 }
 
 std::vector<float> RL_Real::Forward()
 {
-    std::unique_lock<std::mutex> lock(this->model_mutex, std::try_to_lock);
-
-    // If model is being reinitialized, return previous actions to avoid blocking
-    if (!lock.owns_lock())
+    if (!inference_activation_
+        || !inference_activation_->definition
+        || !inference_activation_->definition->model)
     {
-        std::cout << LOGGER::WARNING << "Model is being reinitialized, using previous actions" << std::endl;
-        return this->obs.actions;
+        return {};
     }
-
-    std::vector<float> clamped_obs = this->ComputeObservation();
+    const auto& definition =
+        *inference_activation_->definition;
+    const auto& policy_params = definition.params;
+    const auto clamped_obs = ComputeLWObservation(
+        policy_params,
+        inference_obs_,
+        inference_obs_dims_,
+        inference_motion_reference_.get(),
+        inference_frame_,
+        inference_activation_->motion_length);
 
     std::vector<float> actions;
-    if (!this->params.Get<std::vector<int>>("observations_history").empty())
-    {   
-        // 在启动的第 1 帧，用当前的真实观测填满整个历史缓冲区
-        // 避免历史数据全为 0 导致的网络 OOD 抽搐
-        if (this->episode_length_buf == 1) 
+    const auto history_indices =
+        policy_params.Get<std::vector<int>>(
+            "observations_history");
+    if (!history_indices.empty())
+    {
+        if (inference_frame_ == 1)
         {
-            // {0} 代表只重置第 0 个 environment
-            this->history_obs_buf.reset({0}, clamped_obs);
+            inference_history_obs_buf_.reset(
+                {0},
+                clamped_obs);
         }
-        this->history_obs_buf.insert(clamped_obs);
-        this->history_obs = this->history_obs_buf.get_obs_vec(this->params.Get<std::vector<int>>("observations_history"));
-        actions = this->model->forward({this->history_obs});
+        inference_history_obs_buf_.insert(clamped_obs);
+        inference_history_obs_ =
+            inference_history_obs_buf_.get_obs_vec(
+                history_indices);
+        actions = definition.model->forward(
+            {inference_history_obs_});
     }
     else
     {
-        actions = this->model->forward({clamped_obs});
+        actions = definition.model->forward({clamped_obs});
     }
 
-    if (!this->params.Get<std::vector<float>>("clip_actions_upper").empty() && !this->params.Get<std::vector<float>>("clip_actions_lower").empty())
+    const auto upper =
+        policy_params.Get<std::vector<float>>(
+            "clip_actions_upper");
+    const auto lower =
+        policy_params.Get<std::vector<float>>(
+            "clip_actions_lower");
+    if (!upper.empty() && !lower.empty())
     {
-        return clamp(actions, this->params.Get<std::vector<float>>("clip_actions_lower"), this->params.Get<std::vector<float>>("clip_actions_upper"));
+        return clamp(actions, lower, upper);
     }
-    else
+    return actions;
+}
+
+void RL_Real::ResetInferenceWorkspace(
+    const LWPolicyActivation& activation)
+{
+    const YamlParams& policy_params =
+        activation.definition->params;
+    const size_t num_dofs = static_cast<size_t>(
+        policy_params.Get<int>("num_of_dofs"));
+
+    inference_frame_ = 0;
+    inference_gait_phase_time_ = 0.0f;
+    inference_motion_reference_.reset();
+    inference_obs_ = {};
+    inference_obs_.lin_vel = {0.0f, 0.0f, 0.0f};
+    inference_obs_.ang_vel = {0.0f, 0.0f, 0.0f};
+    inference_obs_.gravity_vec = {0.0f, 0.0f, -1.0f};
+    inference_obs_.commands = {0.0f, 0.0f, 0.0f};
+    inference_obs_.base_quat = {1.0f, 0.0f, 0.0f, 0.0f};
+    inference_obs_.dof_pos =
+        policy_params.Get<std::vector<float>>(
+            "default_dof_pos");
+    inference_obs_.dof_vel.assign(num_dofs, 0.0f);
+    inference_obs_.actions.assign(num_dofs, 0.0f);
+    inference_obs_.gait_phase = {0.0f, 1.0f};
+    inference_output_dof_pos_ = inference_obs_.dof_pos;
+    inference_output_dof_vel_.assign(num_dofs, 0.0f);
+    inference_output_dof_tau_.assign(num_dofs, 0.0f);
+    inference_history_obs_.clear();
+
+    ComputeLWObservation(
+        policy_params,
+        inference_obs_,
+        inference_obs_dims_,
+        nullptr,
+        0,
+        activation.motion_length);
+    const auto history_indices =
+        policy_params.Get<std::vector<int>>(
+            "observations_history");
+    if (!history_indices.empty())
     {
-        return actions;
+        const int history_length =
+            *std::max_element(
+                history_indices.begin(),
+                history_indices.end())
+            + 1;
+        inference_history_obs_buf_ = ObservationBuffer(
+            1,
+            inference_obs_dims_,
+            history_length,
+            policy_params.Get<std::string>(
+                "observations_history_priority"));
     }
 }
 
@@ -682,13 +843,18 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
 
     if (mj_data)
     {
+        const auto activation =
+            this->LoadLWPolicyActivation();
         for (int i = 0; i < this->params.Get<int>("num_of_dofs"); ++i)
         {
             float target_tau = 0.0f;
             
             // 判断当前关节是否需要被执行器网络接管
             bool is_actuator_net_controlled = false;
-            if (this->use_actuator_net_ && this->rl_init_done) {
+            if (this->use_actuator_net_
+                && activation
+                && actuator_net_generation_
+                    == activation->generation) {
                 if (std::find(this->leg_train_indices.begin(), this->leg_train_indices.end(), i) != this->leg_train_indices.end()) {
                     is_actuator_net_controlled = true;
                 }
@@ -731,6 +897,7 @@ void RL_Real::LatchJoystickFault(
     const LWJoystickSampleResult& result) noexcept
 {
     LWClearJoystickState(this->sys_js_button, this->sys_js_axis);
+    joystick_input_mailbox_.clear(Input::Gamepad::None);
     this->sys_js_active = false;
 
     if (joystick_fault_latch_.latch())
@@ -744,6 +911,19 @@ void RL_Real::LatchJoystickFault(
                      "simulation FSM will remain active. Restart is required "
                      "to restore joystick input."
                   << std::endl;
+    }
+}
+
+void RL_Real::ApplyPendingInput()
+{
+    const auto input = joystick_input_mailbox_.read();
+    this->control.x = input.x;
+    this->control.y = input.y;
+    this->control.yaw = input.yaw;
+    if (input.event_sequence != consumed_gamepad_sequence_)
+    {
+        consumed_gamepad_sequence_ = input.event_sequence;
+        this->control.SetGamepad(input.event);
     }
 }
 
@@ -823,39 +1003,39 @@ void RL_Real::GetSysJoystick()
 
 #ifdef JOYSTICK_1
     // 修改为自己的手柄映射
-    if (this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::A);
-    if (this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::B);
-    if (this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::X);
-    if (this->sys_js_button[4].on_press) this->control.SetGamepad(Input::Gamepad::Y);
-    if (this->sys_js_button[6].on_press) this->control.SetGamepad(Input::Gamepad::LB);
-    if (this->sys_js_button[7].on_press) this->control.SetGamepad(Input::Gamepad::RB);
-    if (this->sys_js_button[13].on_press) this->control.SetGamepad(Input::Gamepad::LStick);
-    if (this->sys_js_button[14].on_press) this->control.SetGamepad(Input::Gamepad::RStick);
-    if (this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::DPadUp);
-    if (this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::DPadDown);
-    if (this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::DPadLeft);
-    if (this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::DPadRight);
-    if (this->sys_js_button[6].pressed && this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::LB_A);
-    if (this->sys_js_button[6].pressed && this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::LB_B);
-    if (this->sys_js_button[6].pressed && this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::LB_X);
-    if (this->sys_js_button[6].pressed && this->sys_js_button[4].on_press) this->control.SetGamepad(Input::Gamepad::LB_Y);
-    if (this->sys_js_button[6].pressed && this->sys_js_button[13].on_press) this->control.SetGamepad(Input::Gamepad::LB_LStick);
-    if (this->sys_js_button[6].pressed && this->sys_js_button[14].on_press) this->control.SetGamepad(Input::Gamepad::LB_RStick);
-    if (this->sys_js_button[6].pressed && this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::LB_DPadUp);
-    if (this->sys_js_button[6].pressed && this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::LB_DPadDown);
-    if (this->sys_js_button[6].pressed && this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::LB_DPadRight);
-    if (this->sys_js_button[6].pressed && this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::LB_DPadLeft);
-    if (this->sys_js_button[7].pressed && this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::RB_A);
-    if (this->sys_js_button[7].pressed && this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::RB_B);
-    if (this->sys_js_button[7].pressed && this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::RB_X);
-    if (this->sys_js_button[7].pressed && this->sys_js_button[4].on_press) this->control.SetGamepad(Input::Gamepad::RB_Y);
-    if (this->sys_js_button[7].pressed && this->sys_js_button[13].on_press) this->control.SetGamepad(Input::Gamepad::RB_LStick);
-    if (this->sys_js_button[7].pressed && this->sys_js_button[14].on_press) this->control.SetGamepad(Input::Gamepad::RB_RStick);
-    if (this->sys_js_button[7].pressed && this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::RB_DPadUp);
-    if (this->sys_js_button[7].pressed && this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::RB_DPadDown);
-    if (this->sys_js_button[7].pressed && this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::RB_DPadRight);
-    if (this->sys_js_button[7].pressed && this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::RB_DPadLeft);
-    if (this->sys_js_button[6].pressed && this->sys_js_button[7].on_press) this->control.SetGamepad(Input::Gamepad::LB_RB);
+    if (this->sys_js_button[0].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::A);
+    if (this->sys_js_button[1].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::B);
+    if (this->sys_js_button[3].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::X);
+    if (this->sys_js_button[4].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::Y);
+    if (this->sys_js_button[6].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB);
+    if (this->sys_js_button[7].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB);
+    if (this->sys_js_button[13].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LStick);
+    if (this->sys_js_button[14].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RStick);
+    if (this->sys_js_axis[7] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadUp);
+    if (this->sys_js_axis[7] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadDown);
+    if (this->sys_js_axis[6] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadLeft);
+    if (this->sys_js_axis[6] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadRight);
+    if (this->sys_js_button[6].pressed && this->sys_js_button[0].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_A);
+    if (this->sys_js_button[6].pressed && this->sys_js_button[1].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_B);
+    if (this->sys_js_button[6].pressed && this->sys_js_button[3].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_X);
+    if (this->sys_js_button[6].pressed && this->sys_js_button[4].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_Y);
+    if (this->sys_js_button[6].pressed && this->sys_js_button[13].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_LStick);
+    if (this->sys_js_button[6].pressed && this->sys_js_button[14].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_RStick);
+    if (this->sys_js_button[6].pressed && this->sys_js_axis[7] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadUp);
+    if (this->sys_js_button[6].pressed && this->sys_js_axis[7] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadDown);
+    if (this->sys_js_button[6].pressed && this->sys_js_axis[6] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadRight);
+    if (this->sys_js_button[6].pressed && this->sys_js_axis[6] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadLeft);
+    if (this->sys_js_button[7].pressed && this->sys_js_button[0].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_A);
+    if (this->sys_js_button[7].pressed && this->sys_js_button[1].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_B);
+    if (this->sys_js_button[7].pressed && this->sys_js_button[3].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_X);
+    if (this->sys_js_button[7].pressed && this->sys_js_button[4].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_Y);
+    if (this->sys_js_button[7].pressed && this->sys_js_button[13].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_LStick);
+    if (this->sys_js_button[7].pressed && this->sys_js_button[14].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_RStick);
+    if (this->sys_js_button[7].pressed && this->sys_js_axis[7] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadUp);
+    if (this->sys_js_button[7].pressed && this->sys_js_axis[7] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadDown);
+    if (this->sys_js_button[7].pressed && this->sys_js_axis[6] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadRight);
+    if (this->sys_js_button[7].pressed && this->sys_js_axis[6] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadLeft);
+    if (this->sys_js_button[6].pressed && this->sys_js_button[7].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_RB);
 
     // 通过sys_js_max_value将各项指令归一化
     float ly = (-float(this->sys_js_axis[1]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[0];
@@ -866,39 +1046,39 @@ void RL_Real::GetSysJoystick()
 
 #ifdef JOYSTICK_2
     // 修改为自己的手柄映射
-    if (this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::A);
-    if (this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::B);
-    if (this->sys_js_button[2].on_press) this->control.SetGamepad(Input::Gamepad::X);
-    if (this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::Y);
-    if (this->sys_js_button[4].on_press) this->control.SetGamepad(Input::Gamepad::LB);
-    if (this->sys_js_button[5].on_press) this->control.SetGamepad(Input::Gamepad::RB);
-    if (this->sys_js_button[9].on_press) this->control.SetGamepad(Input::Gamepad::LStick);
-    if (this->sys_js_button[10].on_press) this->control.SetGamepad(Input::Gamepad::RStick);
-    if (this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::DPadUp);
-    if (this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::DPadDown);
-    if (this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::DPadLeft);
-    if (this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::DPadRight);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::LB_A);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::LB_B);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[2].on_press) this->control.SetGamepad(Input::Gamepad::LB_X);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::LB_Y);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[9].on_press) this->control.SetGamepad(Input::Gamepad::LB_LStick);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[10].on_press) this->control.SetGamepad(Input::Gamepad::LB_RStick);
-    if (this->sys_js_button[4].pressed && this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::LB_DPadUp);
-    if (this->sys_js_button[4].pressed && this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::LB_DPadDown);
-    if (this->sys_js_button[4].pressed && this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::LB_DPadRight);
-    if (this->sys_js_button[4].pressed && this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::LB_DPadLeft);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::RB_A);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::RB_B);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[2].on_press) this->control.SetGamepad(Input::Gamepad::RB_X);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::RB_Y);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[9].on_press) this->control.SetGamepad(Input::Gamepad::RB_LStick);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[10].on_press) this->control.SetGamepad(Input::Gamepad::RB_RStick);
-    if (this->sys_js_button[5].pressed && this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::RB_DPadUp);
-    if (this->sys_js_button[5].pressed && this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::RB_DPadDown);
-    if (this->sys_js_button[5].pressed && this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::RB_DPadRight);
-    if (this->sys_js_button[5].pressed && this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::RB_DPadLeft);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[5].on_press) this->control.SetGamepad(Input::Gamepad::LB_RB);
+    if (this->sys_js_button[0].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::A);
+    if (this->sys_js_button[1].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::B);
+    if (this->sys_js_button[2].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::X);
+    if (this->sys_js_button[3].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::Y);
+    if (this->sys_js_button[4].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB);
+    if (this->sys_js_button[5].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB);
+    if (this->sys_js_button[9].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LStick);
+    if (this->sys_js_button[10].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RStick);
+    if (this->sys_js_axis[7] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadUp);
+    if (this->sys_js_axis[7] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadDown);
+    if (this->sys_js_axis[6] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadLeft);
+    if (this->sys_js_axis[6] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadRight);
+    if (this->sys_js_button[4].pressed && this->sys_js_button[0].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_A);
+    if (this->sys_js_button[4].pressed && this->sys_js_button[1].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_B);
+    if (this->sys_js_button[4].pressed && this->sys_js_button[2].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_X);
+    if (this->sys_js_button[4].pressed && this->sys_js_button[3].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_Y);
+    if (this->sys_js_button[4].pressed && this->sys_js_button[9].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_LStick);
+    if (this->sys_js_button[4].pressed && this->sys_js_button[10].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_RStick);
+    if (this->sys_js_button[4].pressed && this->sys_js_axis[7] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadUp);
+    if (this->sys_js_button[4].pressed && this->sys_js_axis[7] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadDown);
+    if (this->sys_js_button[4].pressed && this->sys_js_axis[6] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadRight);
+    if (this->sys_js_button[4].pressed && this->sys_js_axis[6] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadLeft);
+    if (this->sys_js_button[5].pressed && this->sys_js_button[0].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_A);
+    if (this->sys_js_button[5].pressed && this->sys_js_button[1].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_B);
+    if (this->sys_js_button[5].pressed && this->sys_js_button[2].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_X);
+    if (this->sys_js_button[5].pressed && this->sys_js_button[3].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_Y);
+    if (this->sys_js_button[5].pressed && this->sys_js_button[9].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_LStick);
+    if (this->sys_js_button[5].pressed && this->sys_js_button[10].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_RStick);
+    if (this->sys_js_button[5].pressed && this->sys_js_axis[7] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadUp);
+    if (this->sys_js_button[5].pressed && this->sys_js_axis[7] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadDown);
+    if (this->sys_js_button[5].pressed && this->sys_js_axis[6] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadRight);
+    if (this->sys_js_button[5].pressed && this->sys_js_axis[6] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadLeft);
+    if (this->sys_js_button[4].pressed && this->sys_js_button[5].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_RB);
 
     // 通过sys_js_max_value将各项指令归一化
     // float ly = -float(this->sys_js_axis[1]) / float(this->sys_js_max_value);
@@ -914,16 +1094,15 @@ void RL_Real::GetSysJoystick()
 
     if (has_input)
     {
-        this->control.x = ly;
-        this->control.y = lx;
-        this->control.yaw = rx;
+        joystick_input_mailbox_.publishVelocity(ly, lx, rx);
         this->sys_js_active = true;
     }
     else if (this->sys_js_active)
     {
-        this->control.x = 0.0f;
-        this->control.y = 0.0f;
-        this->control.yaw = 0.0f;
+        joystick_input_mailbox_.publishVelocity(
+            0.0f,
+            0.0f,
+            0.0f);
         this->sys_js_active = false;
     }
 

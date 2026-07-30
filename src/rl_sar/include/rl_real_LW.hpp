@@ -50,6 +50,7 @@ private:
     void SetCommand(const RobotCommand<float> *command) override;
     void RunModel();
     void RobotControl();
+    void ApplyPendingInput();
     void HandleLoopError(const std::string& loop_name, std::exception_ptr error) noexcept;
     void EnterFailSafe(const std::string& reason) noexcept;
     void SendEmergencyDisableBurst() noexcept;
@@ -78,6 +79,8 @@ private:
     std::array<LWJoystickButton, LW_JOYSTICK_BUTTON_COUNT> sys_js_button{};
     std::array<int, LW_JOYSTICK_AXIS_COUNT> sys_js_axis{};
     LWJoystickFaultLatch joystick_fault_latch_;
+    LWInputMailbox<Input::Gamepad> joystick_input_mailbox_;
+    std::uint64_t consumed_gamepad_sequence_ = 0;
     bool sys_js_active = false;
     float axis_deadzone = 0.05f;
     int sys_js_max_value = (1 << (16 - 1)); // 即 2的15次方 = 32768
@@ -124,7 +127,31 @@ private:
 
     // others
     void disable_robot(void);
-    std::mutex state_mutex;
+    struct RealDebugSnapshot
+    {
+        RobotState<float> robot_state;
+        LowState low_state{};
+        LowCmd low_command{};
+        LWControlSnapshot control;
+    };
+
+    LWSnapshotBuffer<LWPolicyInputSnapshot> policy_input_snapshot_;
+    LWSnapshotBuffer<RealDebugSnapshot> debug_snapshot_;
+    LWSnapshotBuffer<LWInferenceOutputSnapshot> inference_output_snapshot_;
+
+    std::shared_ptr<const LWPolicyActivation> inference_activation_;
+    std::shared_ptr<const LWMotionReferenceSnapshot> inference_motion_reference_;
+    Observations<float> inference_obs_;
+    std::vector<int> inference_obs_dims_;
+    ObservationBuffer inference_history_obs_buf_;
+    std::vector<float> inference_history_obs_;
+    std::vector<float> inference_output_dof_pos_;
+    std::vector<float> inference_output_dof_vel_;
+    std::vector<float> inference_output_dof_tau_;
+    std::uint64_t inference_frame_ = 0;
+    float inference_gait_phase_time_ = 0.0f;
+    void ResetInferenceWorkspace(
+        const LWPolicyActivation& activation);
 
 };
 

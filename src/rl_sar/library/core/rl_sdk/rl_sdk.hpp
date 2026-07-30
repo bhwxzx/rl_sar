@@ -16,7 +16,9 @@
 #include <memory>
 #include <fstream>
 #include <mutex>
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <iomanip>
 
 #include <yaml-cpp/yaml.h>
@@ -27,6 +29,7 @@
 #include "logger.hpp"
 #include "motion_loader.hpp"
 #include "motion_loader_lw.hpp"
+#include "lw_runtime_sync.hpp"
 
 #include <unordered_map>
 
@@ -177,6 +180,58 @@ struct YamlParams
     }
 };
 
+struct LWMotionReferenceSnapshot
+{
+    std::uint64_t generation = 0;
+    std::vector<float> joint_pos;
+    std::vector<float> joint_vel;
+    std::vector<float> anchor_quat;
+    std::vector<float> init_quat;
+};
+
+struct LWPolicyDefinition
+{
+    std::string path;
+    YamlParams params;
+    std::shared_ptr<InferenceRuntime::Model> model;
+};
+
+struct LWPolicyActivation
+{
+    std::shared_ptr<const LWPolicyDefinition> definition;
+    std::uint64_t generation = 0;
+    float motion_length = 0.0f;
+};
+
+struct LWPolicyProgressSnapshot
+{
+    std::uint64_t generation = 0;
+    std::uint64_t frame = 0;
+};
+
+struct LWControlSnapshot
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float yaw = 0.0f;
+    float gait_frequency = 0.0f;
+};
+
+struct LWPolicyInputSnapshot
+{
+    RobotState<float> robot_state;
+    LWControlSnapshot control;
+};
+
+struct LWInferenceOutputSnapshot
+{
+    std::uint64_t generation = 0;
+    std::uint64_t frame = 0;
+    std::vector<float> dof_pos;
+    std::vector<float> dof_vel;
+    std::vector<float> dof_tau;
+};
+
 template <typename T>
 struct Observations
 {
@@ -223,14 +278,41 @@ public:
     void PreloadModel(const std::string& robot_config_path);
     // 存放已经加载好的 ONNX 模型的字典
     std::unordered_map<std::string, std::shared_ptr<InferenceRuntime::Model>> preloaded_models_;
+    void PreloadLWPolicyContext(const std::string& robot_config_path);
+    std::shared_ptr<const LWPolicyDefinition> GetLWPolicyDefinition(
+        const std::string& robot_config_path) const;
+    std::uint64_t ActivateLWPolicy(
+        const std::string& robot_config_path,
+        float motion_length = 0.0f);
+    void DeactivateLWPolicy();
+    std::shared_ptr<const LWPolicyActivation> LoadLWPolicyActivation() const noexcept;
+    void PublishLWMotionReference(LWMotionReferenceSnapshot reference);
+    void PublishCurrentLWMotionReference(std::uint64_t generation);
+    std::shared_ptr<const LWMotionReferenceSnapshot> LoadLWMotionReference() const noexcept;
+    void PublishLWPolicyProgress(std::uint64_t generation, std::uint64_t frame);
+    std::shared_ptr<const LWPolicyProgressSnapshot> LoadLWPolicyProgress() const noexcept;
 
     // rl functions
     virtual std::vector<float> Forward() = 0;
     std::vector<float> ComputeObservation();
+    std::vector<float> ComputeLWObservation(
+        const YamlParams& policy_params,
+        Observations<float>& policy_obs,
+        std::vector<int>& policy_obs_dims,
+        const LWMotionReferenceSnapshot* motion_reference,
+        std::uint64_t policy_frame,
+        float motion_length) const;
     virtual void GetState(RobotState<float> *state) = 0;
     virtual void SetCommand(const RobotCommand<float> *command) = 0;
     void StateController(const RobotState<float> *state, RobotCommand<float> *command);
     void ComputeOutput(const std::vector<float> &actions, std::vector<float> &output_dof_pos, std::vector<float> &output_dof_vel, std::vector<float> &output_dof_tau);
+    void ComputeLWOutput(
+        const YamlParams& policy_params,
+        const Observations<float>& policy_obs,
+        const std::vector<float>& actions,
+        std::vector<float>& output_dof_pos,
+        std::vector<float>& output_dof_vel,
+        std::vector<float>& output_dof_tau) const;
 
     // yaml params
     void ReadYaml(const std::string& file_path, const std::string& file_name);
@@ -264,6 +346,9 @@ public:
 
     // protect func
     void TorqueProtect(const std::vector<float> &origin_output_dof_tau);
+    void TorqueProtect(
+        const std::vector<float>& origin_output_dof_tau,
+        const YamlParams& policy_params) const;
     void AttitudeProtect(const std::vector<float> &quaternion, float pitch_threshold, float roll_threshold);
 
     // rl module
@@ -275,6 +360,15 @@ public:
 
     // thread safety
     std::mutex model_mutex;
+
+private:
+    std::unordered_map<
+        std::string,
+        std::shared_ptr<const LWPolicyDefinition>> lw_policy_definitions_;
+    LWAtomicSnapshot<LWPolicyActivation> lw_policy_activation_;
+    LWAtomicSnapshot<LWMotionReferenceSnapshot> lw_motion_reference_;
+    LWAtomicSnapshot<LWPolicyProgressSnapshot> lw_policy_progress_;
+    std::atomic<std::uint64_t> lw_next_policy_generation_{1};
 };
 
 class RLFSMState : public FSMState
