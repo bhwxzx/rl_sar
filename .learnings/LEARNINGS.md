@@ -121,3 +121,51 @@ LW FSM 接受 `current_keyboard`，核心库也实现了 `KeyboardInterface()`�
 - Last-Seen: 2026-07-31
 
 ---
+
+## [LRN-20260731-002] best_practice
+
+**Logged**: 2026-07-31T16:15:16+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: config
+
+### Summary
+Codex Accounts Manager 报 HTTPS 代理不支持 SOCKS 时，应检查 HTTPS 代理变量是否缺失并回退到了 `ALL_PROXY`。
+
+### Details
+虚拟机环境同时存在 `HTTP_PROXY=http://...` 和 `ALL_PROXY=socks://...`，
+但没有 `HTTPS_PROXY`。Codex Accounts Manager 为 HTTPS 请求选择代理时回退
+到了 `ALL_PROXY`，随后因只接受 `http://` 和 `https://` 代理 URL 而拒绝
+启动认证请求。
+
+排查时只输出环境变量名和协议，避免泄露代理凭据。将 `HTTPS_PROXY` 临时
+指向已有的 HTTP 代理并清空大小写的 `ALL_PROXY` 后，使用 `curl` 访问
+`https://auth.openai.com/` 得到代理隧道 `CONNECT 200`，证明该 HTTP 代理
+路径可用；目标站点根路径随后返回 `403` 不代表代理连接失败。
+
+VS Code 扩展读取的是扩展宿主进程环境。在终端中修改变量后，需要彻底重启
+VS Code；若扩展运行在 Remote SSH 端，还应终止远端 VS Code Server 并重新
+连接。不能只把纯 SOCKS 端口的 URL 从 `socks://` 改写成 `http://`，除非
+该监听端口确实支持 HTTP CONNECT 或 mixed 模式。
+
+### Suggested Action
+为启动 VS Code/远端扩展宿主的环境设置有效的
+`HTTPS_PROXY=http://<host>:<http-or-mixed-port>`，同步设置小写变量，并
+取消 `ALL_PROXY`/`all_proxy` 后重启扩展宿主。重启后再次验证 Codex 登录；
+确认成功后将本条状态更新为 `resolved`。
+
+### Metadata
+- Source: conversation
+- Related Files: N/A (VS Code/Codex runtime environment)
+- Tags: codex, vscode, proxy, socks, https-proxy, virtual-machine, authentication
+- Pattern-Key: config.codex_https_proxy_fallback
+- Recurrence-Count: 1
+- First-Seen: 2026-07-31
+- Last-Seen: 2026-07-31
+
+### Resolution
+- **Resolved**: 2026-07-31T16:16:20+08:00
+- **Commit/PR**: N/A (runtime environment configuration)
+- **Notes**: 用户确认按建议调整代理环境并重启插件后，Codex Accounts Manager 已恢复正常。
+
+---
