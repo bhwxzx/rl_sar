@@ -461,6 +461,20 @@ if(BUILD_TESTING)
         Threads::Threads
     )
     add_test(NAME lw_runtime_sync COMMAND test_lw_runtime_sync)
+
+    add_executable(test_lw_policy_output_transport
+        test/test_lw_policy_output_transport.cpp
+    )
+    target_link_libraries(test_lw_policy_output_transport PRIVATE
+        rl_sdk
+        observation_buffer
+        ${YAML_CPP_LIBRARIES}
+        Threads::Threads
+    )
+    add_test(
+        NAME lw_policy_output_transport
+        COMMAND test_lw_policy_output_transport
+    )
 endif()
 if(NOT USE_CMAKE)
     if($ENV{ROS_DISTRO} MATCHES "foxy|humble")

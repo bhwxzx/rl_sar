@@ -393,17 +393,26 @@ void RL_Real::RobotControl()
 
     this->control.ClearInput();
 
-    LWInferenceOutputSnapshot inference_output;
     const auto activation = LoadLWPolicyActivation();
+    const auto inference_output = LoadLWPolicyOutput();
+    const auto now = std::chrono::steady_clock::now();
     const bool has_current_inference_output =
         activation
-        && inference_output_snapshot_.read(inference_output)
-        && inference_output.generation == activation->generation;
+        && activation->definition
+        && EvaluateLWPolicyOutput(
+               inference_output.get(),
+               activation->generation,
+               static_cast<size_t>(
+                   activation->definition->params.Get<int>(
+                       "num_of_dofs")),
+               now,
+               GetLWPolicyOutputMaxAge(*activation))
+            == LWPolicyOutputStatus::Ready;
     if (this->use_actuator_net_
         && this->leg_actuator_model_
         && this->foot_actuator_model_
         && has_current_inference_output
-        && inference_output.dof_pos.size()
+        && inference_output->dof_pos.size()
             == static_cast<size_t>(
                 this->params.Get<int>("num_of_dofs")))
     {
@@ -414,11 +423,11 @@ void RL_Real::RobotControl()
         // 获取最新瞬间的误差和速度
         for (int i = 0; i < num_dofs; ++i) {
             // this->output_dof_pos 是算出的目标点，robot_state.q 是 200Hz 最新的物理状态
-            current_pos_err[i] = inference_output.dof_pos[i] - this->robot_state.motor_state.q[i];
+            current_pos_err[i] = inference_output->dof_pos[i] - this->robot_state.motor_state.q[i];
             current_vel[i] = this->robot_state.motor_state.dq[i];
         }
         // 在执行器网络启动的最初期，预填充历史
-        if (inference_output.frame <= 1) {
+        if (inference_output->frame <= 1) {
             for (size_t k = 0; k < this->pos_err_history_.size(); ++k) {
                 this->pos_err_history_[k] = current_pos_err;
                 this->vel_history_[k] = current_vel;
@@ -549,6 +558,8 @@ void RL_Real::RunModel()
     {
         return;
     }
+    const auto output_source_time =
+        std::chrono::steady_clock::now();
 
     ++inference_frame_;
 
@@ -635,29 +646,18 @@ void RL_Real::RunModel()
         inference_output_dof_vel_,
         inference_output_dof_tau_);
 
-    if (!inference_output_dof_pos_.empty())
-    {
-        output_dof_pos_queue.push(inference_output_dof_pos_);
-    }
-    if (!inference_output_dof_vel_.empty())
-    {
-        output_dof_vel_queue.push(inference_output_dof_vel_);
-    }
-    if (!inference_output_dof_tau_.empty())
-    {
-        output_dof_tau_queue.push(inference_output_dof_tau_);
-    }
-
     TorqueProtect(inference_output_dof_tau_, policy_params);
-    PublishLWPolicyProgress(
-        activation->generation,
-        inference_frame_);
-    inference_output_snapshot_.publish(
+    PublishLWPolicyOutput(
         {activation->generation,
+         0,
          inference_frame_,
+         output_source_time,
          inference_output_dof_pos_,
          inference_output_dof_vel_,
          inference_output_dof_tau_});
+    PublishLWPolicyProgress(
+        activation->generation,
+        inference_frame_);
 
 #ifdef CSV_LOGGER
     this->CSVLogger(

@@ -48,7 +48,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 5 | LW-005 | P0 / critical | resolved | Enforce finite commands and state-aware attitude protection |
 | 6 | LW-006 | P0 / critical | resolved | Latch joystick disconnects, clear commands, and validate indices |
 | 7 | LW-007 | P1 / high | resolved | Remove cross-thread data races with coherent snapshots |
-| 8 | LW-008 | P1 / high | pending | Replace split policy queues with one coherent output frame |
+| 8 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
 | 9 | LW-009 | P1 / high | pending | Use the configured 60 Hz wheel-to-leg reference rate |
 | 10 | LW-010 | P1 / high | pending | Make deployed binary, configuration, and models reproducible |
 | 11 | LW-011 | P2 / medium | pending | Make the control loop suitable for deterministic real-time execution |
@@ -524,7 +524,7 @@ The policy thread locks `state_mutex` while copying `robot_state`, but the contr
 ## [LW-008] Atomic policy output transport
 
 **Priority**: P1 / high
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-007
 
 ### Problem
@@ -548,6 +548,47 @@ Position, velocity, and torque are pushed into separate queues. The consumer can
 - A consumer can never observe a partial policy output.
 - Policy transitions cannot consume frames from the prior policy.
 - Delayed inference has a documented stale-frame response.
+
+### Resolution Evidence
+
+- Resolved: 2026-07-31
+- LW policy inference now publishes position, velocity, torque, source
+  timestamp, global sequence number, inference frame, and policy generation as
+  one immutable latest-frame snapshot. The real and simulation producers no
+  longer publish LW outputs through the three independent queues.
+- Publication rejects incomplete payloads and generations that are not active.
+  Activation and deactivation clear the latest-frame slot, and consumers
+  validate the frame against the currently active generation before applying
+  it. A policy-switch race may leave an old frame observable, but its generation
+  cannot pass the consumer check and therefore cannot be commanded.
+- Both the four LW FSM states and the simulator actuator-network path consume
+  the same coherent frame. The generic queue-based `RLControl()` path remains
+  available for non-LW robots and has a compatibility regression test.
+- Freshness is measured with `steady_clock` from immediately before inference.
+  The maximum accepted age is three policy periods
+  (`3 * dt * decimation`, currently 60 ms). At the boundary the frame remains
+  valid; after the boundary the consumer keeps the last already-applied command
+  and gains, emits a rate-limited warning, and automatically resumes on the
+  next complete fresh frame. It does not switch to passive, disable motors, or
+  exit ROS solely because inference output is delayed.
+- `test_lw_policy_output_transport` covers partial-frame and inactive-generation
+  rejection, latest-frame overwrite behavior, generation clearing, freshness
+  boundaries, concurrent readers, and non-LW queue compatibility.
+- Verified with:
+  - builds of `rl_sdk`, `rl_real_LW`, `rl_sim_LW`,
+    `test_lw_policy_output_transport`, and the existing LW test targets
+  - all eight selected CTest tests:
+    `loop_lifecycle`, `sensor_readiness`, `lw_serial_sdk`,
+    `lw_fsm_transitions`, `lw_control_safety`, `lw_joystick_safety`,
+    `lw_runtime_sync`, and `lw_policy_output_transport`
+  - 20 consecutive CTest runs each of `lw_fsm_transitions`,
+    `lw_runtime_sync`, and `lw_policy_output_transport`
+  - AddressSanitizer and UndefinedBehaviorSanitizer execution of
+    `test_lw_policy_output_transport`
+  - `-Wall -Wextra -Wpedantic` builds of the core library, the new transport
+    test, and both LW executables; only pre-existing initialization,
+    unused-parameter, and third-party warnings were reported
+- Hardware execution was intentionally not performed.
 
 ---
 

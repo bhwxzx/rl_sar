@@ -647,6 +647,8 @@ void RL_Real::RunModel()
     {
         return;
     }
+    const auto output_source_time =
+        std::chrono::steady_clock::now();
 
 #ifdef FOWARD_TIME_PRINT
     auto t_start = std::chrono::high_resolution_clock::now();
@@ -737,29 +739,18 @@ void RL_Real::RunModel()
         return;
     }
 
-    if (!inference_output_dof_pos_.empty())
-    {
-        output_dof_pos_queue.push(inference_output_dof_pos_);
-    }
-    if (!inference_output_dof_vel_.empty())
-    {
-        output_dof_vel_queue.push(inference_output_dof_vel_);
-    }
-    if (!inference_output_dof_tau_.empty())
-    {
-        output_dof_tau_queue.push(inference_output_dof_tau_);
-    }
-
     TorqueProtect(inference_output_dof_tau_, policy_params);
-    PublishLWPolicyProgress(
-        activation->generation,
-        inference_frame_);
-    inference_output_snapshot_.publish(
+    PublishLWPolicyOutput(
         {activation->generation,
+         0,
          inference_frame_,
+         output_source_time,
          inference_output_dof_pos_,
          inference_output_dof_vel_,
          inference_output_dof_tau_});
+    PublishLWPolicyProgress(
+        activation->generation,
+        inference_frame_);
 
 #ifdef CSV_LOGGER
     this->CSVLogger(

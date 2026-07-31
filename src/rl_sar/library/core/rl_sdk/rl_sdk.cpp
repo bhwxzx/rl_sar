@@ -5,6 +5,97 @@
 
 #include "rl_sdk.hpp"
 
+namespace
+{
+const char* LWPolicyOutputStatusName(
+    LWPolicyOutputStatus status) noexcept
+{
+    switch (status)
+    {
+    case LWPolicyOutputStatus::Ready:
+        return "ready";
+    case LWPolicyOutputStatus::Missing:
+        return "missing";
+    case LWPolicyOutputStatus::GenerationMismatch:
+        return "generation_mismatch";
+    case LWPolicyOutputStatus::Incomplete:
+        return "incomplete";
+    case LWPolicyOutputStatus::Stale:
+        return "stale";
+    }
+    return "unknown";
+}
+} // namespace
+
+bool LWPolicyOutputPayloadComplete(
+    const LWPolicyOutputFrame& output,
+    size_t expected_dofs) noexcept
+{
+    return output.dof_pos.size() == expected_dofs
+        && output.dof_vel.size() == expected_dofs
+        && output.dof_tau.size() == expected_dofs;
+}
+
+LWPolicyOutputStatus EvaluateLWPolicyOutput(
+    const LWPolicyOutputFrame* output,
+    std::uint64_t active_generation,
+    size_t expected_dofs,
+    std::chrono::steady_clock::time_point now,
+    std::chrono::steady_clock::duration max_age) noexcept
+{
+    if (output == nullptr)
+    {
+        return LWPolicyOutputStatus::Missing;
+    }
+    if (output->generation != active_generation)
+    {
+        return LWPolicyOutputStatus::GenerationMismatch;
+    }
+    if (output->sequence == 0
+        || output->source_time.time_since_epoch().count() == 0
+        || !LWPolicyOutputPayloadComplete(*output, expected_dofs))
+    {
+        return LWPolicyOutputStatus::Incomplete;
+    }
+    if (now < output->source_time
+        || now - output->source_time > max_age)
+    {
+        return LWPolicyOutputStatus::Stale;
+    }
+    return LWPolicyOutputStatus::Ready;
+}
+
+bool LWPolicyOutputTransport::publish(
+    LWPolicyOutputFrame output,
+    std::uint64_t active_generation,
+    size_t expected_dofs)
+{
+    if (output.generation != active_generation
+        || output.source_time.time_since_epoch().count() == 0
+        || !LWPolicyOutputPayloadComplete(output, expected_dofs))
+    {
+        return false;
+    }
+    output.sequence = next_sequence_.fetch_add(
+        1,
+        std::memory_order_relaxed);
+    latest_.store(
+        std::make_shared<LWPolicyOutputFrame>(
+            std::move(output)));
+    return true;
+}
+
+std::shared_ptr<const LWPolicyOutputFrame>
+LWPolicyOutputTransport::load() const noexcept
+{
+    return latest_.load();
+}
+
+void LWPolicyOutputTransport::clear() noexcept
+{
+    latest_.clear();
+}
+
 void RL::StateController(const RobotState<float>* state, RobotCommand<float>* command)
 {
     auto updateState = [&](std::shared_ptr<FSMState> statePtr)
@@ -529,12 +620,14 @@ std::uint64_t RL::ActivateLWPolicy(
             1,
             std::memory_order_relaxed);
     activation->motion_length = motion_length;
+    activation->activated_at = std::chrono::steady_clock::now();
     lw_policy_progress_.store(
         std::make_shared<LWPolicyProgressSnapshot>(
             LWPolicyProgressSnapshot{
                 activation->generation,
                 0}));
     lw_motion_reference_.clear();
+    lw_policy_output_transport_.clear();
     lw_policy_activation_.store(activation);
     return activation->generation;
 }
@@ -543,6 +636,7 @@ void RL::DeactivateLWPolicy()
 {
     lw_policy_activation_.clear();
     lw_motion_reference_.clear();
+    lw_policy_output_transport_.clear();
 }
 
 std::shared_ptr<const LWPolicyActivation>
@@ -605,6 +699,44 @@ std::shared_ptr<const LWPolicyProgressSnapshot>
 RL::LoadLWPolicyProgress() const noexcept
 {
     return lw_policy_progress_.load();
+}
+
+bool RL::PublishLWPolicyOutput(LWPolicyOutputFrame output)
+{
+    const auto activation = LoadLWPolicyActivation();
+    if (!activation
+        || !activation->definition
+        || output.generation != activation->generation)
+    {
+        return false;
+    }
+    const size_t expected_dofs = static_cast<size_t>(
+        activation->definition->params.Get<int>("num_of_dofs"));
+    return lw_policy_output_transport_.publish(
+        std::move(output),
+        activation->generation,
+        expected_dofs);
+}
+
+std::shared_ptr<const LWPolicyOutputFrame>
+RL::LoadLWPolicyOutput() const noexcept
+{
+    return lw_policy_output_transport_.load();
+}
+
+std::chrono::steady_clock::duration
+RL::GetLWPolicyOutputMaxAge(
+    const LWPolicyActivation& activation) const
+{
+    const YamlParams& policy_params =
+        activation.definition->params;
+    const float max_age_seconds =
+        3.0f
+        * policy_params.Get<float>("dt")
+        * policy_params.Get<int>("decimation");
+    return std::chrono::duration_cast<
+        std::chrono::steady_clock::duration>(
+            std::chrono::duration<float>(max_age_seconds));
 }
 
 void RL::InitRL(std::string robot_config_path)
@@ -1026,22 +1158,15 @@ bool RLFSMState::Interpolate(
 
 void RLFSMState::RLControl()
 {
-    const auto activation = rl.LoadLWPolicyActivation();
-    if (!activation || !activation->definition)
-    {
-        return;
-    }
-    const YamlParams& policy_params =
-        activation->definition->params;
     std::vector<float> _output_dof_pos, _output_dof_vel;
     if (rl.output_dof_pos_queue.try_pop(_output_dof_pos) && rl.output_dof_vel_queue.try_pop(_output_dof_vel))
     {
         const auto rl_kp =
-            policy_params.Get<std::vector<float>>("rl_kp");
+            rl.params.Get<std::vector<float>>("rl_kp");
         const auto rl_kd =
-            policy_params.Get<std::vector<float>>("rl_kd");
+            rl.params.Get<std::vector<float>>("rl_kd");
         for (int i = 0;
-             i < policy_params.Get<int>("num_of_dofs");
+             i < rl.params.Get<int>("num_of_dofs");
              ++i)
         {
             if (!_output_dof_pos.empty())
@@ -1056,5 +1181,123 @@ void RLFSMState::RLControl()
             fsm_command->motor_command.kd[i] = rl_kd[i];
             fsm_command->motor_command.tau[i] = 0;
         }
+    }
+}
+
+void RLFSMState::RLControlLW()
+{
+    const auto activation = rl.LoadLWPolicyActivation();
+    if (!activation || !activation->definition)
+    {
+        return;
+    }
+
+    const auto output = rl.LoadLWPolicyOutput();
+    const auto now = std::chrono::steady_clock::now();
+    const auto max_age =
+        rl.GetLWPolicyOutputMaxAge(*activation);
+    const size_t expected_dofs = static_cast<size_t>(
+        activation->definition->params.Get<int>("num_of_dofs"));
+    LWPolicyOutputStatus status = EvaluateLWPolicyOutput(
+        output.get(),
+        activation->generation,
+        expected_dofs,
+        now,
+        max_age);
+
+    if (status == LWPolicyOutputStatus::Ready
+        && last_lw_output_generation_
+            == activation->generation
+        && output->sequence < last_lw_output_sequence_)
+    {
+        status = LWPolicyOutputStatus::Stale;
+    }
+
+    if (status != LWPolicyOutputStatus::Ready)
+    {
+        const bool initial_wait_expired =
+            now >= activation->activated_at
+            && now - activation->activated_at > max_age;
+        if (status == LWPolicyOutputStatus::Stale
+            || status == LWPolicyOutputStatus::Incomplete
+            || initial_wait_expired)
+        {
+            lw_output_stale_ = true;
+            constexpr auto warning_interval =
+                std::chrono::seconds(1);
+            if (last_lw_output_warning_
+                    .time_since_epoch().count() == 0
+                || now - last_lw_output_warning_
+                    >= warning_interval)
+            {
+                last_lw_output_warning_ = now;
+                long long output_age_ms = -1;
+                if (output
+                    && output->source_time
+                        .time_since_epoch().count() != 0
+                    && now >= output->source_time)
+                {
+                    output_age_ms =
+                        std::chrono::duration_cast<
+                            std::chrono::milliseconds>(
+                            now - output->source_time)
+                            .count();
+                }
+                std::cout << LOGGER::WARNING
+                          << "LW policy output unavailable"
+                          << ", generation="
+                          << activation->generation
+                          << ", status="
+                          << LWPolicyOutputStatusName(status)
+                          << ", max_age_ms="
+                          << std::chrono::duration_cast<
+                                 std::chrono::milliseconds>(
+                                 max_age)
+                                 .count()
+                          << ", output_age_ms="
+                          << output_age_ms
+                          << ". Holding the last applied command."
+                          << std::endl;
+            }
+        }
+        return;
+    }
+
+    if (lw_output_stale_)
+    {
+        std::cout << LOGGER::INFO
+                  << "LW policy output recovered"
+                  << ", generation="
+                  << activation->generation
+                  << ", sequence="
+                  << output->sequence
+                  << std::endl;
+        lw_output_stale_ = false;
+    }
+
+    if (last_lw_output_generation_
+        != activation->generation)
+    {
+        last_lw_output_generation_ =
+            activation->generation;
+        last_lw_output_sequence_ = 0;
+    }
+    last_lw_output_sequence_ = output->sequence;
+
+    const YamlParams& policy_params =
+        activation->definition->params;
+    const auto rl_kp =
+        policy_params.Get<std::vector<float>>("rl_kp");
+    const auto rl_kd =
+        policy_params.Get<std::vector<float>>("rl_kd");
+    for (size_t i = 0; i < expected_dofs; ++i)
+    {
+        fsm_command->motor_command.q[i] =
+            output->dof_pos[i];
+        fsm_command->motor_command.dq[i] =
+            output->dof_vel[i];
+        fsm_command->motor_command.kp[i] = rl_kp[i];
+        fsm_command->motor_command.kd[i] = rl_kd[i];
+        fsm_command->motor_command.tau[i] = 0.0f;
     }
 }

@@ -289,7 +289,7 @@ public:
                 std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << std::flush;
             }
         }
-        RLControl();
+        RLControlLW();
     }
 
     void Exit() override
@@ -369,7 +369,7 @@ public:
                 std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << std::flush;
             }
         }
-        RLControl();
+        RLControlLW();
     }
 
     void Exit() override
@@ -476,7 +476,7 @@ public:
         rl.motion_loader_lw->Update(motion_time);
         rl.PublishCurrentLWMotionReference(policy_generation);
 
-        RLControl();
+        RLControlLW();
 
         if (motion_time / rl.motion_length == 1)
         {
@@ -580,7 +580,7 @@ public:
         rl.motion_loader_lw->Update(motion_time);
         rl.PublishCurrentLWMotionReference(policy_generation);
 
-        RLControl();
+        RLControlLW();
 
         if (motion_time / rl.motion_length == 1)
         {

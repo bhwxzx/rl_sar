@@ -201,6 +201,7 @@ struct LWPolicyActivation
     std::shared_ptr<const LWPolicyDefinition> definition;
     std::uint64_t generation = 0;
     float motion_length = 0.0f;
+    std::chrono::steady_clock::time_point activated_at{};
 };
 
 struct LWPolicyProgressSnapshot
@@ -223,13 +224,49 @@ struct LWPolicyInputSnapshot
     LWControlSnapshot control;
 };
 
-struct LWInferenceOutputSnapshot
+struct LWPolicyOutputFrame
 {
     std::uint64_t generation = 0;
+    std::uint64_t sequence = 0;
     std::uint64_t frame = 0;
+    std::chrono::steady_clock::time_point source_time{};
     std::vector<float> dof_pos;
     std::vector<float> dof_vel;
     std::vector<float> dof_tau;
+};
+
+enum class LWPolicyOutputStatus
+{
+    Ready,
+    Missing,
+    GenerationMismatch,
+    Incomplete,
+    Stale
+};
+
+bool LWPolicyOutputPayloadComplete(
+    const LWPolicyOutputFrame& output,
+    size_t expected_dofs) noexcept;
+LWPolicyOutputStatus EvaluateLWPolicyOutput(
+    const LWPolicyOutputFrame* output,
+    std::uint64_t active_generation,
+    size_t expected_dofs,
+    std::chrono::steady_clock::time_point now,
+    std::chrono::steady_clock::duration max_age) noexcept;
+
+class LWPolicyOutputTransport
+{
+public:
+    bool publish(
+        LWPolicyOutputFrame output,
+        std::uint64_t active_generation,
+        size_t expected_dofs);
+    std::shared_ptr<const LWPolicyOutputFrame> load() const noexcept;
+    void clear() noexcept;
+
+private:
+    LWAtomicSnapshot<LWPolicyOutputFrame> latest_;
+    std::atomic<std::uint64_t> next_sequence_{1};
 };
 
 template <typename T>
@@ -291,6 +328,10 @@ public:
     std::shared_ptr<const LWMotionReferenceSnapshot> LoadLWMotionReference() const noexcept;
     void PublishLWPolicyProgress(std::uint64_t generation, std::uint64_t frame);
     std::shared_ptr<const LWPolicyProgressSnapshot> LoadLWPolicyProgress() const noexcept;
+    bool PublishLWPolicyOutput(LWPolicyOutputFrame output);
+    std::shared_ptr<const LWPolicyOutputFrame> LoadLWPolicyOutput() const noexcept;
+    std::chrono::steady_clock::duration GetLWPolicyOutputMaxAge(
+        const LWPolicyActivation& activation) const;
 
     // rl functions
     virtual std::vector<float> Forward() = 0;
@@ -368,6 +409,7 @@ private:
     LWAtomicSnapshot<LWPolicyActivation> lw_policy_activation_;
     LWAtomicSnapshot<LWMotionReferenceSnapshot> lw_motion_reference_;
     LWAtomicSnapshot<LWPolicyProgressSnapshot> lw_policy_progress_;
+    LWPolicyOutputTransport lw_policy_output_transport_;
     std::atomic<std::uint64_t> lw_next_policy_generation_{1};
 };
 
@@ -391,6 +433,13 @@ public:
     );
 
     void RLControl();
+    void RLControlLW();
+
+private:
+    std::uint64_t last_lw_output_generation_ = 0;
+    std::uint64_t last_lw_output_sequence_ = 0;
+    bool lw_output_stale_ = false;
+    std::chrono::steady_clock::time_point last_lw_output_warning_{};
 };
 
 #endif // RL_SDK_HPP

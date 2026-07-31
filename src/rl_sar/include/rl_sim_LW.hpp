@@ -118,7 +118,6 @@ private:
 
     LWSnapshotBuffer<LWPolicyInputSnapshot> policy_input_snapshot_;
     LWSnapshotBuffer<SimDebugSnapshot> debug_snapshot_;
-    LWSnapshotBuffer<LWInferenceOutputSnapshot> inference_output_snapshot_;
 
     std::shared_ptr<const LWPolicyActivation> inference_activation_;
     std::shared_ptr<const LWMotionReferenceSnapshot> inference_motion_reference_;
