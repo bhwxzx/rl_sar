@@ -87,3 +87,37 @@ LW FSM 接受 `current_keyboard`，核心库也实现了 `KeyboardInterface()`�
 - Last-Seen: 2026-07-29
 
 ---
+
+## [LRN-20260731-001] best_practice
+
+**Logged**: 2026-07-31T15:29:07+08:00
+**Priority**: high
+**Status**: promoted
+**Area**: config
+**Promoted**: AGENTS.md
+
+### Summary
+同一会话自动压缩上下文过多时，应形成持久化交接文档并建议在新会话继续。
+
+### Details
+用户要求长任务在多次上下文自动压缩后，不再仅依赖压缩摘要维持连续性。
+同一会话出现第三次可见的自动压缩时，应先完成不可分割的当前操作，再将
+目标、已完成提交、用户决策与审批、约束、验证结果、需保留的未提交文件、
+未解决问题和下一步写入 `.learnings/session_handoffs/`。随后向用户说明
+连续性风险，建议开启新会话，并提供可直接复制的续接 prompt。
+
+### Suggested Action
+只统计会话中明确可见的压缩事件。达到三次时生成带时间和主题的交接文档，
+向用户提供文档链接及新会话 prompt；若用户选择继续当前会话，则每次新增
+压缩后刷新该文档。
+
+### Metadata
+- Source: user_feedback
+- Related Files: AGENTS.md, .learnings/session_handoffs/
+- Tags: context-compaction, handoff, long-session, continuity, prompt
+- Pattern-Key: workflow.context_compaction_handoff
+- Recurrence-Count: 1
+- First-Seen: 2026-07-31
+- Last-Seen: 2026-07-31
+
+---
