@@ -7,6 +7,12 @@
 namespace LW_fsm
 {
 
+inline float GetLWMotionSourceFPS(
+    const YamlParams& policy_params)
+{
+    return policy_params.Get<float>("motion_fps");
+}
+
 class RLFSMStatePassive : public RLFSMState
 {
 public:
@@ -424,7 +430,7 @@ public:
             // Initialize motion loader
             const YamlParams& policy_params = definition->params;
             std::string motion_file_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/" + policy_params.Get<std::string>("motion_file");
-            float fps = policy_params.Get<float>("motion_fps");
+            float fps = GetLWMotionSourceFPS(policy_params);
             rl.motion_loader_lw = std::make_unique<MotionLoaderLW>(motion_file_path, fps);
             rl.motion_length = rl.motion_loader_lw->GetDuration();
 
@@ -528,7 +534,7 @@ public:
             // Initialize motion loader
             const YamlParams& policy_params = definition->params;
             std::string motion_file_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/" + policy_params.Get<std::string>("motion_file");
-            float fps = 1.0f / (policy_params.Get<float>("dt") * policy_params.Get<int>("decimation"));
+            float fps = GetLWMotionSourceFPS(policy_params);
             rl.motion_loader_lw = std::make_unique<MotionLoaderLW>(motion_file_path, fps);
             rl.motion_length = rl.motion_loader_lw->GetDuration();
 

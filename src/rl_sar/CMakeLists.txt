@@ -475,6 +475,19 @@ if(BUILD_TESTING)
         NAME lw_policy_output_transport
         COMMAND test_lw_policy_output_transport
     )
+
+    add_executable(test_lw_motion_reference_rate
+        test/test_lw_motion_reference_rate.cpp
+    )
+    target_link_libraries(test_lw_motion_reference_rate PRIVATE
+        rl_sdk
+        observation_buffer
+        ${YAML_CPP_LIBRARIES}
+    )
+    add_test(
+        NAME lw_motion_reference_rate
+        COMMAND test_lw_motion_reference_rate
+    )
 endif()
 if(NOT USE_CMAKE)
     if($ENV{ROS_DISTRO} MATCHES "foxy|humble")

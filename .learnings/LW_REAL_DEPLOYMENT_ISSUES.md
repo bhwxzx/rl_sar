@@ -49,7 +49,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 6 | LW-006 | P0 / critical | resolved | Latch joystick disconnects, clear commands, and validate indices |
 | 7 | LW-007 | P1 / high | resolved | Remove cross-thread data races with coherent snapshots |
 | 8 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
-| 9 | LW-009 | P1 / high | pending | Use the configured 60 Hz wheel-to-leg reference rate |
+| 9 | LW-009 | P1 / high | resolved | Use the configured 60 Hz wheel-to-leg reference rate |
 | 10 | LW-010 | P1 / high | pending | Make deployed binary, configuration, and models reproducible |
 | 11 | LW-011 | P2 / medium | pending | Make the control loop suitable for deterministic real-time execution |
 | 12 | LW-012 | P2 / medium | pending | Harden motion loading and correct its time convention |
@@ -595,7 +595,7 @@ Position, velocity, and torque are pushed into separate queues. The consumer can
 ## [LW-009] Wheel-to-leg motion reference rate
 
 **Priority**: P1 / high
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-007, LW-008
 
 ### Problem
@@ -619,6 +619,45 @@ Position, velocity, and torque are pushed into separate queues. The consumer can
 - Both transition loaders report the configured 60 Hz source rate.
 - Reference duration and velocities match an offline calculation from the CSV.
 - A regression test compares selected timestamps against expected interpolated values.
+
+### Resolution Evidence
+
+- Resolved: 2026-07-31
+- Both morphology-transition states now obtain the motion source rate from the
+  immutable policy configuration's `motion_fps` field. Wheel-to-leg no longer
+  derives a 50 Hz source rate from the independent 20 ms policy inference
+  period.
+- Policy inference remains at 50 Hz. `MotionLoaderLW` continues to interpolate
+  the configured 60 Hz motion source at each inference timestamp, so this
+  change does not alter control-loop or inference scheduling.
+- Offline verification found 167 frames for leg-to-wheel and 170 frames for
+  wheel-to-leg. Under the current loader convention their configured 60 Hz
+  durations are 2.78333 s and 2.83333 s respectively; wheel-to-leg was
+  previously stretched to 3.4 s. Joint reference velocities now use
+  `(q[n+1] - q[n]) * 60` instead of a 50 Hz scale.
+- `test_lw_motion_reference_rate` verifies that source FPS remains independent
+  of policy `dt * decimation`, both YAML files select 60 Hz, CSV frame counts
+  and widths are as expected, durations and forward-difference velocities
+  match offline calculations, midpoint interpolation is correct, and the final
+  CSV frame is reached.
+- Verified with:
+  - builds of `test_lw_motion_reference_rate`, `test_lw_fsm_transitions`,
+    `rl_real_LW`, and `rl_sim_LW`
+  - all nine selected CTest tests:
+    `loop_lifecycle`, `sensor_readiness`, `lw_serial_sdk`,
+    `lw_fsm_transitions`, `lw_control_safety`, `lw_joystick_safety`,
+    `lw_runtime_sync`, `lw_policy_output_transport`, and
+    `lw_motion_reference_rate`
+  - 20 consecutive CTest runs each of `lw_fsm_transitions` and
+    `lw_motion_reference_rate`
+  - a `-Wall -Wextra -Wpedantic` build of the new test and both LW
+    executables; only pre-existing initialization, unused-parameter, and
+    third-party warnings were reported
+  - targeted `cppcheck` of the new test with no findings
+- Hardware execution was intentionally not performed.
+- Scope boundary: `MotionLoaderLW` still uses its existing `num_frames * dt`
+  duration convention. Defining and correcting that convention remains
+  LW-012 and was intentionally not changed here.
 
 ---
 
