@@ -15,10 +15,22 @@
 
 ## Context Compaction Handoff
 
-- Count only context compactions that are explicitly visible in the current
-  session; do not guess an unseen count.
-- Treat the third automatic context compaction in one session as the handoff
-  threshold.
+- Determine the current session's compaction count by running:
+
+  ```bash
+  python3 .agents/skills/inspect-context-compactions/scripts/inspect_context_compactions.py --threshold 5
+  ```
+
+- Read the JSON `status` before using the result. Only when `status=available`
+  may `compaction_count` and `threshold_reached` be treated as exact. If the
+  status is `unavailable` or `inconsistent`, do not infer a count; finish the
+  current atomic operation, create or refresh a precautionary handoff before
+  starting more substantial work, tell the user that exact inspection failed,
+  and recommend continuing in a new session.
+- Treat `threshold_reached=true` at the repository threshold of five verified
+  context compactions as the handoff threshold. The inspector counts verified
+  compactions regardless of whether they were triggered manually or
+  automatically.
 - At that threshold, finish any in-progress atomic operation, then create
   `.learnings/session_handoffs/YYYYMMDD-HHMM-<topic>.md` before starting more
   substantial work.
@@ -41,4 +53,5 @@
   ```
 
 - If the user explicitly chooses to remain in the current session, continue,
-  but refresh the handoff document after each additional visible compaction.
+  but rerun the inspector after any subsequent compaction indication and
+  refresh the handoff document whenever its verified count increases.

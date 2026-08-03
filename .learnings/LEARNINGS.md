@@ -169,3 +169,41 @@ VS Code；若扩展运行在 Remote SSH 端，还应终止远端 VS Code Server 
 - **Notes**: 用户确认按建议调整代理环境并重启插件后，Codex Accounts Manager 已恢复正常。
 
 ---
+
+## [LRN-20260801-001] knowledge_gap
+
+**Logged**: 2026-08-01T12:09:28+08:00
+**Priority**: medium
+**Status**: promoted_to_skill
+**Area**: config
+**Skill-Path**: .agents/skills/inspect-context-compactions/
+
+### Summary
+上下文压缩阈值必须通过专用 inspector 核验，不能根据模型可见摘要或手工读取 rollout 内容推断。
+
+### Details
+精确计数属于 `.agents/skills/inspect-context-compactions/` 的职责。该技能以
+只读方式定位当前会话，验证顶层压缩记录、连续窗口编号、镜像事件和会话
+身份，并且不会输出消息或替换历史。`self-improvement` 只保留本晋升记录，
+不实现 rollout 解析或压缩计数。
+
+### Suggested Action
+涉及压缩阈值或会话交接时，运行 inspector 并先检查其 `status`；仅信任
+`available` 结果，遇到 `unavailable` 或 `inconsistent` 时不得推断精确次数。
+
+### Metadata
+- Source: conversation
+- Related Files: AGENTS.md, .agents/skills/inspect-context-compactions/
+- Tags: codex, context-compaction, inspector, session-handoff
+- See Also: LRN-20260731-001
+- Pattern-Key: workflow.context_compaction_counting
+- Recurrence-Count: 1
+- First-Seen: 2026-08-01
+- Last-Seen: 2026-08-01
+
+### Resolution
+- **Resolved**: 2026-08-01T12:09:28+08:00
+- **Commit/PR**: N/A
+- **Notes**: 计数与隐私校验职责已晋升到 `inspect-context-compactions` 技能；项目交接规则改为使用其结构化结果。
+
+---
