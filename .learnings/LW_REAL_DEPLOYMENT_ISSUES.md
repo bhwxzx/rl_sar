@@ -50,7 +50,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 7 | LW-007 | P1 / high | resolved | Remove cross-thread data races with coherent snapshots |
 | 8 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
 | 9 | LW-009 | P1 / high | resolved | Use the configured 60 Hz wheel-to-leg reference rate |
-| 10 | LW-010 | P1 / high | in_progress | Make deployed binary, configuration, and models reproducible |
+| 10 | LW-010 | P1 / high | resolved | Make deployed binary, configuration, and models reproducible |
 | 11 | LW-011 | P2 / medium | pending | Make the control loop suitable for deterministic real-time execution |
 | 12 | LW-012 | P2 / medium | pending | Harden motion loading and correct its time convention |
 | 13 | LW-013 | P2 / medium | pending | Validate YAML, mappings, observation sizes, and model outputs |
@@ -664,7 +664,7 @@ Position, velocity, and torque are pushed into separate queues. The consumer can
 ## [LW-010] Reproducible deployment artifacts
 
 **Priority**: P1 / high
-**Status**: in_progress
+**Status**: resolved
 **Dependencies**: LW-004, LW-005, LW-009
 
 ### Problem
@@ -691,6 +691,52 @@ The installed launcher currently resolves to an executable older than the source
 - Moving the installed workspace does not break policy lookup.
 - Dirty or untracked production model files are not silently loaded.
 - The launched binary contains all approved source changes.
+
+### Resolution Evidence
+
+- Resolved: 2026-08-04
+- Implementation commits:
+  - `8803e6d` adds the verified deployment bundle, approved ONNX models,
+    manifest generator, policy-root isolation, fail-closed startup, and tests.
+  - `8d18532` initializes pinned Git submodules in the clean temporary worktree.
+  - `2cf311a` adds a verification-only startup path that performs the same
+    deployment checks without initializing ROS, joystick, serial, or control
+    workers.
+- `build_lw_deployment.sh` built commit
+  `2cf311adf55f3a2afffd4c18751cc11877a218de` from a clean detached worktree in
+  `Release` mode and installed a non-symlink bundle at
+  `build/lw010_release_2cf311a/`.
+- The generated manifest records the source commit, the installed
+  `rl_real_LW` SHA-256
+  `5d7d92057fa6f1aced0e0f71d9a383754e42a5bcbc25d71c0b01ee2c72e0a667`,
+  and hashes for the five YAML files, four ONNX models, and two transition CSV
+  files.
+- The installed executable and deployment tree contained no symbolic links.
+  The real executable uses an explicit verified policy root and no longer
+  contains `/home/lfr/rl_sar/policy`.
+- The complete install prefix was copied to
+  `build/lw010_relocated_2cf311a/`. After sourcing the relocated prefix,
+  `ros2 pkg prefix rl_sar` resolved to that directory and
+  `rl_real_LW --verify-deployment-only` passed all binary, source-commit,
+  manifest, path-containment, and resource-hash checks.
+- `test_lw_deployment_bundle` covers valid and relocated bundles, missing or
+  tampered assets, tampered executables, source-commit mismatch, symbolic
+  links, and non-normalized paths. The Python generator tests cover complete
+  manifests, symlink rejection, non-Release builds, and invalid commits.
+- Verified with a successful `rl_real_LW` build and 11 selected LW CTest tests:
+  `loop_lifecycle`, `sensor_readiness`, `lw_serial_sdk`,
+  `lw_deployment_bundle`, `lw_deployment_manifest_generator`,
+  `lw_fsm_transitions`, `lw_control_safety`, `lw_joystick_safety`,
+  `lw_runtime_sync`, `lw_policy_output_transport`, and
+  `lw_motion_reference_rate`.
+- Targeted `-Wall -Wextra -Wpedantic -Werror`, AddressSanitizer,
+  UndefinedBehaviorSanitizer, `cppcheck`, Python syntax/tests, shell syntax,
+  and `git diff --check` also passed.
+- Hardware execution was intentionally not performed.
+- Scope boundary: the manifest binds the installed executable and all LW
+  policy/configuration artifacts required by this issue. Compatible external
+  ROS, inference-runtime, Python, and operating-system shared libraries remain
+  deployment prerequisites and are not vendored or hashed by this manifest.
 
 ---
 
