@@ -1,13 +1,20 @@
 
 #include "rl_real_LW.hpp"
+#include "lw_deployment_bundle.hpp"
 
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cmath>
+#include <filesystem>
 #include <stdexcept>
 
 using namespace std::chrono_literals;
 
-RL_Real::RL_Real(int argc, char **argv)
+RL_Real::RL_Real(
+    int argc,
+    char **argv,
+    const std::string& policy_root)
 {
+    this->SetPolicyRoot(policy_root);
     ros2_node = std::make_shared<rclcpp::Node>("rl_real_LW_node");
     // subscribe qos config
     auto subscribers_qos = rclcpp::SystemDefaultsQoS();
@@ -1252,7 +1259,21 @@ int main(int argc, char **argv)
     rclcpp::init(argc, argv);
     try
     {
-        auto rl_sar = std::make_shared<RL_Real>(argc, argv);
+        const std::filesystem::path package_share =
+            ament_index_cpp::get_package_share_directory("rl_sar");
+        const std::filesystem::path running_executable =
+            std::filesystem::canonical("/proc/self/exe");
+        const LWDeploymentBundleInfo deployment =
+            LWDeploymentBundle::Verify(
+                package_share,
+                running_executable,
+                RL_SAR_SOURCE_COMMIT);
+        std::cout << LOGGER::INFO
+                  << "[Deployment] Verified LW bundle for source commit "
+                  << deployment.source_commit
+                  << " at " << deployment.bundle_root << std::endl;
+        auto rl_sar = std::make_shared<RL_Real>(
+            argc, argv, deployment.policy_root.string());
         rclcpp::spin(rl_sar->ros2_node);
         rclcpp::shutdown();
         return 0;

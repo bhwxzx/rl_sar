@@ -495,10 +495,59 @@ void RL::InitJointNum(size_t num_joints)
     this->robot_command.motor_command.resize(num_joints);
 }
 
+void RL::SetPolicyRoot(const std::filesystem::path& policy_root)
+{
+    std::error_code error;
+    if (policy_root.empty()
+        || !std::filesystem::is_directory(policy_root, error)
+        || error)
+    {
+        throw std::runtime_error(
+            "Policy root is not a readable directory: "
+            + policy_root.string());
+    }
+    policy_root_ = std::filesystem::canonical(policy_root, error);
+    if (error)
+    {
+        throw std::runtime_error(
+            "Failed to resolve policy root: " + error.message());
+    }
+}
+
+std::string RL::ResolvePolicyPath(
+    const std::string& relative_path) const
+{
+    if (policy_root_.empty())
+    {
+        throw std::runtime_error(
+            "Policy root must be configured before loading resources");
+    }
+    const std::filesystem::path requested(relative_path);
+    const std::filesystem::path normalized = requested.lexically_normal();
+    if (relative_path.empty() || requested.is_absolute()
+        || normalized.empty()
+        || normalized.generic_string() != relative_path)
+    {
+        throw std::runtime_error(
+            "Invalid policy-relative path: " + relative_path);
+    }
+    for (const auto& component : normalized)
+    {
+        if (component == "." || component == "..")
+        {
+            throw std::runtime_error(
+                "Policy path escapes the configured root: "
+                + relative_path);
+        }
+    }
+    return (policy_root_ / normalized).string();
+}
+
 void RL::PreloadModel(const std::string& robot_config_path)
 {
     // 读取对应的 YAML 拿到模型名字
-    std::string config_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/config.yaml";
+    std::string config_path = ResolvePolicyPath(
+        robot_config_path + "/config.yaml");
     YAML::Node config;
     try {
         config = YAML::LoadFile(config_path)[robot_config_path];
@@ -508,7 +557,8 @@ void RL::PreloadModel(const std::string& robot_config_path)
     }
 
     std::string model_name = config["model_name"].as<std::string>();
-    std::string model_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/" + model_name;
+    std::string model_path = ResolvePolicyPath(
+        robot_config_path + "/" + model_name);
     
     std::cout << LOGGER::INFO << "Preloading ONNX model into memory: " << model_path << std::endl;
     
@@ -552,9 +602,8 @@ void RL::PreloadModel(const std::string& robot_config_path)
 void RL::PreloadLWPolicyContext(
     const std::string& robot_config_path)
 {
-    const std::string config_path =
-        std::string(POLICY_DIR) + "/" + robot_config_path
-        + "/config.yaml";
+    const std::string config_path = ResolvePolicyPath(
+        robot_config_path + "/config.yaml");
     const YAML::Node loaded =
         YAML::LoadFile(config_path)[robot_config_path];
     if (!loaded || !loaded.IsMap())
@@ -769,7 +818,9 @@ void RL::InitRL(std::string robot_config_path)
     {
         // 如果没预加载，就现场读
         std::cout << LOGGER::WARNING << "Model not preloaded! Loading from disk (WILL CAUSE LAG): " << robot_config_path << std::endl;
-        std::string model_path = std::string(POLICY_DIR) + "/" + robot_config_path + "/" + this->params.Get<std::string>("model_name");
+        std::string model_path = ResolvePolicyPath(
+            robot_config_path + "/"
+            + this->params.Get<std::string>("model_name"));
         auto loaded_model = InferenceRuntime::ModelFactory::load_model(model_path);
         this->model = std::shared_ptr<InferenceRuntime::Model>(std::move(loaded_model));
     }
@@ -1038,7 +1089,8 @@ std::vector<T> ReadVectorFromYaml(const YAML::Node &node)
 
 void RL::ReadYaml(const std::string& file_path, const std::string& file_name)
 {
-    std::string config_path = std::string(POLICY_DIR) + "/" + file_path + "/" + file_name;
+    std::string config_path = ResolvePolicyPath(
+        file_path + "/" + file_name);
     YAML::Node config;
     try
     {
@@ -1059,7 +1111,7 @@ void RL::ReadYaml(const std::string& file_path, const std::string& file_name)
 
 void RL::CSVInit(std::string robot_path)
 {
-    csv_filename = std::string(POLICY_DIR) + "/" + robot_path + "/motor";
+    csv_filename = ResolvePolicyPath(robot_path + "/motor");
 
     // Uncomment these lines if need timestamp for file name
     // auto now = std::chrono::system_clock::now();

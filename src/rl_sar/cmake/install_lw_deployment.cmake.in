@@ -1,0 +1,18 @@
+execute_process(
+    COMMAND
+        "@Python3_EXECUTABLE@"
+        "@CMAKE_CURRENT_SOURCE_DIR@/scripts/generate_lw_deployment_manifest.py"
+        --install-prefix "${CMAKE_INSTALL_PREFIX}"
+        --source-commit "@RL_SAR_SOURCE_COMMIT@"
+        --build-type "@CMAKE_BUILD_TYPE@"
+    RESULT_VARIABLE LW_MANIFEST_RESULT
+    OUTPUT_VARIABLE LW_MANIFEST_OUTPUT
+    ERROR_VARIABLE LW_MANIFEST_ERROR
+)
+
+if(NOT LW_MANIFEST_RESULT EQUAL 0)
+    message(FATAL_ERROR
+        "Failed to generate LW deployment manifest:\n${LW_MANIFEST_ERROR}")
+endif()
+
+message(STATUS "${LW_MANIFEST_OUTPUT}")

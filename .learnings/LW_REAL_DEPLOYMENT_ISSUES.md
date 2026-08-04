@@ -50,7 +50,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 7 | LW-007 | P1 / high | resolved | Remove cross-thread data races with coherent snapshots |
 | 8 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
 | 9 | LW-009 | P1 / high | resolved | Use the configured 60 Hz wheel-to-leg reference rate |
-| 10 | LW-010 | P1 / high | pending | Make deployed binary, configuration, and models reproducible |
+| 10 | LW-010 | P1 / high | in_progress | Make deployed binary, configuration, and models reproducible |
 | 11 | LW-011 | P2 / medium | pending | Make the control loop suitable for deterministic real-time execution |
 | 12 | LW-012 | P2 / medium | pending | Harden motion loading and correct its time convention |
 | 13 | LW-013 | P2 / medium | pending | Validate YAML, mappings, observation sizes, and model outputs |
@@ -664,7 +664,7 @@ Position, velocity, and torque are pushed into separate queues. The consumer can
 ## [LW-010] Reproducible deployment artifacts
 
 **Priority**: P1 / high
-**Status**: pending
+**Status**: in_progress
 **Dependencies**: LW-004, LW-005, LW-009
 
 ### Problem

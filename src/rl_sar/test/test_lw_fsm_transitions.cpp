@@ -1,6 +1,7 @@
 #include "fsm_LW.hpp"
 
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -51,6 +52,36 @@ public:
     void GetState(RobotState<float>*) override {}
     void SetCommand(const RobotCommand<float>*) override {}
 };
+
+void testPolicyRootResolution(TestRL& rl)
+{
+    const std::filesystem::path root =
+        std::filesystem::canonical(POLICY_DIR);
+    rl.SetPolicyRoot(root);
+    require(
+        rl.ResolvePolicyPath("LW/base.yaml")
+            == (root / "LW/base.yaml").string(),
+        "policy root did not resolve a valid relative path");
+
+    for (const std::string& invalid : {
+             "../policy/LW/base.yaml",
+             "LW/../base.yaml",
+             "/tmp/base.yaml",
+             "LW//base.yaml",
+         })
+    {
+        bool rejected = false;
+        try
+        {
+            rl.ResolvePolicyPath(invalid);
+        }
+        catch (const std::runtime_error&)
+        {
+            rejected = true;
+        }
+        require(rejected, "unsafe policy path was accepted: " + invalid);
+    }
+}
 
 void testCoreRejectsUnregisteredTargets()
 {
@@ -346,6 +377,7 @@ int main()
         testCoreRejectsUnregisteredTargets();
 
         TestRL rl;
+        testPolicyRootResolution(rl);
         std::unordered_set<std::string> registered_names;
         const auto states = createLWStates(rl, registered_names);
         testAcceptedTransitionTable(rl, states, registered_names);

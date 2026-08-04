@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cstdint>
 #include <iomanip>
+#include <filesystem>
 
 #include <yaml-cpp/yaml.h>
 #include "fsm.hpp"
@@ -311,6 +312,8 @@ public:
     void InitControl();
     void InitRL(std::string robot_config_path);
     void InitJointNum(size_t num_joints);
+    void SetPolicyRoot(const std::filesystem::path& policy_root);
+    std::string ResolvePolicyPath(const std::string& relative_path) const;
     // 预加载模型函数
     void PreloadModel(const std::string& robot_config_path);
     // 存放已经加载好的 ONNX 模型的字典
@@ -332,6 +335,12 @@ public:
     std::shared_ptr<const LWPolicyOutputFrame> LoadLWPolicyOutput() const noexcept;
     std::chrono::steady_clock::duration GetLWPolicyOutputMaxAge(
         const LWPolicyActivation& activation) const;
+
+#ifdef RL_REQUIRE_EXPLICIT_POLICY_ROOT
+    std::filesystem::path policy_root_;
+#else
+    std::filesystem::path policy_root_{POLICY_DIR};
+#endif
 
     // rl functions
     virtual std::vector<float> Forward() = 0;

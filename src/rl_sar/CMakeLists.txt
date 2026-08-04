@@ -42,6 +42,44 @@ endif()
 # Get project root directory
 get_filename_component(PROJECT_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 
+option(
+    LW_PRODUCTION_DEPLOYMENT
+    "Build a verified, relocatable LW real-robot deployment bundle"
+    OFF
+)
+set(RL_SAR_SOURCE_COMMIT "unverified")
+if(LW_PRODUCTION_DEPLOYMENT)
+    if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+        message(FATAL_ERROR
+            "LW_PRODUCTION_DEPLOYMENT requires CMAKE_BUILD_TYPE=Release")
+    endif()
+    find_package(Git REQUIRED)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} -C "${PROJECT_ROOT_DIR}" rev-parse HEAD
+        RESULT_VARIABLE LW_GIT_REVISION_RESULT
+        OUTPUT_VARIABLE RL_SAR_SOURCE_COMMIT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    string(LENGTH "${RL_SAR_SOURCE_COMMIT}" LW_SOURCE_COMMIT_LENGTH)
+    if(NOT LW_GIT_REVISION_RESULT EQUAL 0
+       OR NOT LW_SOURCE_COMMIT_LENGTH EQUAL 40
+       OR NOT RL_SAR_SOURCE_COMMIT MATCHES "^[0-9a-f]+$")
+        message(FATAL_ERROR
+            "Cannot determine the source commit for LW deployment")
+    endif()
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} -C "${PROJECT_ROOT_DIR}"
+                status --porcelain --untracked-files=all
+        RESULT_VARIABLE LW_GIT_STATUS_RESULT
+        OUTPUT_VARIABLE LW_GIT_STATUS
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT LW_GIT_STATUS_RESULT EQUAL 0 OR NOT LW_GIT_STATUS STREQUAL "")
+        message(FATAL_ERROR
+            "LW production deployment must be built from a clean Git worktree")
+    endif()
+endif()
+
 add_definitions(-DCMAKE_CURRENT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_definitions(-DPOLICY_DIR="${PROJECT_ROOT_DIR}/policy")
 add_definitions(-DBOOST_BIND_GLOBAL_PLACEHOLDERS)
@@ -69,6 +107,7 @@ if(NOT USE_CMAKE)
         )
     elseif($ENV{ROS_DISTRO} MATCHES "foxy|humble")
         find_package(ament_cmake REQUIRED)
+        find_package(ament_index_cpp REQUIRED)
         find_package(joint_state_broadcaster REQUIRED)
         find_package(robot_state_publisher REQUIRED)
         find_package(rclcpp REQUIRED)
@@ -90,7 +129,11 @@ endif()
 
 # Inference Runtime
 
-set(INFERENCE_RUNTIME_DIR "${PROJECT_ROOT_DIR}/library/inference_runtime")
+set(
+    INFERENCE_RUNTIME_DIR
+    "${PROJECT_ROOT_DIR}/library/inference_runtime"
+    CACHE PATH "Inference runtime dependency root"
+)
 
 # ONNX Runtime Setup
 set(USE_ONNX "OFF")
@@ -271,6 +314,19 @@ if(SYSTEM_TYPE STREQUAL "Linux")
     set(YAML_CPP_LIBRARIES yaml-cpp)
 link_directories(/usr/local/lib)
 include_directories(${YAML_CPP_INCLUDE_DIR})
+    find_package(OpenSSL REQUIRED)
+    add_library(
+        lw_deployment_bundle
+        library/core/deployment/lw_deployment_bundle.cpp
+    )
+    target_include_directories(
+        lw_deployment_bundle
+        PUBLIC library/core/deployment
+    )
+    target_link_libraries(
+        lw_deployment_bundle
+        PUBLIC ${YAML_CPP_LIBRARIES} OpenSSL::Crypto
+    )
 elseif(SYSTEM_TYPE STREQUAL "Darwin")
     find_library(YAML_CPP_LIB yaml-cpp REQUIRED)
     set(YAML_CPP_LIBRARIES ${YAML_CPP_LIB})
@@ -414,21 +470,54 @@ add_library(motion_loader_lw library/core/motion_loader/motion_loader_lw.cpp)
 
 # library for rl sdk
 add_library(rl_sdk library/core/rl_sdk/rl_sdk.cpp)
-target_link_libraries(rl_sdk PUBLIC
-    motion_loader
-    motion_loader_lw
-    inference_runtime
-    Python3::Python
-    Python3::Module
-    TBB::tbb
+add_library(
+    rl_sdk_lw_deployment
+    library/core/rl_sdk/rl_sdk.cpp
 )
+target_compile_definitions(
+    rl_sdk_lw_deployment
+    PUBLIC RL_REQUIRE_EXPLICIT_POLICY_ROOT
+)
+foreach(RL_SDK_TARGET rl_sdk rl_sdk_lw_deployment)
+    target_link_libraries(${RL_SDK_TARGET} PUBLIC
+        motion_loader
+        motion_loader_lw
+        inference_runtime
+        Python3::Python
+        Python3::Module
+        TBB::tbb
+    )
+endforeach()
 find_package(Python3 COMPONENTS NumPy)
 if(Python3_NumPy_FOUND)
     target_link_libraries(rl_sdk PUBLIC Python3::NumPy)
+    target_link_libraries(rl_sdk_lw_deployment PUBLIC Python3::NumPy)
 else()
     target_compile_definitions(rl_sdk PUBLIC WITHOUT_NUMPY)
+    target_compile_definitions(rl_sdk_lw_deployment PUBLIC WITHOUT_NUMPY)
 endif()
 if(BUILD_TESTING)
+    if(SYSTEM_TYPE STREQUAL "Linux")
+        add_executable(
+            test_lw_deployment_bundle
+            test/test_lw_deployment_bundle.cpp
+        )
+        target_link_libraries(
+            test_lw_deployment_bundle
+            PRIVATE lw_deployment_bundle
+        )
+        add_test(
+            NAME lw_deployment_bundle
+            COMMAND test_lw_deployment_bundle
+        )
+        add_test(
+            NAME lw_deployment_manifest_generator
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_generate_lw_deployment_manifest.py
+                    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_lw_deployment_manifest.py
+        )
+    endif()
+
     add_executable(test_lw_fsm_transitions
         test/test_lw_fsm_transitions.cpp
     )
@@ -656,7 +745,9 @@ endif()
 # endif()
 
 # executable for rl sim LW
-if(SYSTEM_TYPE STREQUAL "Linux" AND NOT IS_JETSON)
+if(SYSTEM_TYPE STREQUAL "Linux"
+   AND NOT IS_JETSON
+   AND NOT LW_PRODUCTION_DEPLOYMENT)
     if(NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
         add_compile_definitions(USE_MUJOCO)
         set(MUJOCO_DIR "${PROJECT_ROOT_DIR}/library/mujoco")
@@ -734,16 +825,22 @@ if(SYSTEM_TYPE STREQUAL "Linux")
         )
         target_link_libraries(rl_real_LW
             LW_sdk
-            rl_sdk
+            rl_sdk_lw_deployment
+            lw_deployment_bundle
             observation_buffer
             ${YAML_CPP_LIBRARIES}
             Threads::Threads
         )
         ament_target_dependencies(rl_real_LW
+            ament_index_cpp
             rclcpp
             geometry_msgs
             sensor_msgs
             realtime_tools
+        )
+        target_compile_definitions(
+            rl_real_LW
+            PRIVATE RL_SAR_SOURCE_COMMIT="${RL_SAR_SOURCE_COMMIT}"
         )
         install(TARGETS rl_real_LW DESTINATION lib/${PROJECT_NAME})
     endif()
@@ -767,9 +864,46 @@ endif()
 if(NOT USE_CMAKE)
     if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
         install(
-            DIRECTORY launch worlds ${PROJECT_ROOT_DIR}/policy
+            DIRECTORY launch worlds
             DESTINATION share/${PROJECT_NAME}/${dir}
         )
+        if(LW_PRODUCTION_DEPLOYMENT)
+            set(LW_DEPLOYMENT_POLICY_FILES
+                LW/base.yaml
+                LW/robot_lab/leg_loco/config.yaml
+                LW/robot_lab/leg_loco/policy.onnx
+                LW/robot_lab/leg_to_wheel/config.yaml
+                LW/robot_lab/leg_to_wheel/leg_to_wheel_transform_60hz.csv
+                LW/robot_lab/leg_to_wheel/policy.onnx
+                LW/robot_lab/wheel_loco/config.yaml
+                LW/robot_lab/wheel_loco/policy.onnx
+                LW/robot_lab/wheel_to_leg/config.yaml
+                LW/robot_lab/wheel_to_leg/policy.onnx
+                LW/robot_lab/wheel_to_leg/wheel_to_leg_transform_60hz.csv
+            )
+            foreach(LW_POLICY_FILE IN LISTS LW_DEPLOYMENT_POLICY_FILES)
+                get_filename_component(
+                    LW_POLICY_DIRECTORY "${LW_POLICY_FILE}" DIRECTORY)
+                install(
+                    FILES "${PROJECT_ROOT_DIR}/policy/${LW_POLICY_FILE}"
+                    DESTINATION
+                        "share/${PROJECT_NAME}/deployment/LW/policy/${LW_POLICY_DIRECTORY}"
+                )
+            endforeach()
+            configure_file(
+                cmake/install_lw_deployment.cmake.in
+                "${CMAKE_CURRENT_BINARY_DIR}/install_lw_deployment.cmake"
+                @ONLY
+            )
+            install(
+                SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/install_lw_deployment.cmake"
+            )
+        else()
+            install(
+                DIRECTORY ${PROJECT_ROOT_DIR}/policy
+                DESTINATION share/${PROJECT_NAME}/${dir}
+            )
+        endif()
     endif()
 endif()
 

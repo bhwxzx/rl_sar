@@ -38,7 +38,7 @@ namespace plt = matplotlibcpp;
 class RL_Real : public RL
 {
 public:
-    RL_Real(int argc, char **argv);
+    RL_Real(int argc, char **argv, const std::string& policy_root);
     ~RL_Real();
 
     std::shared_ptr<rclcpp::Node> ros2_node;
