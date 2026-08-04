@@ -1256,7 +1256,10 @@ void RL_Real::GetSysJoystick()
 
 int main(int argc, char **argv)
 {
-    rclcpp::init(argc, argv);
+    const bool verify_deployment_only =
+        argc == 2
+        && std::string(argv[1]) == "--verify-deployment-only";
+    bool ros_initialized = false;
     try
     {
         const std::filesystem::path package_share =
@@ -1272,6 +1275,16 @@ int main(int argc, char **argv)
                   << "[Deployment] Verified LW bundle for source commit "
                   << deployment.source_commit
                   << " at " << deployment.bundle_root << std::endl;
+        if (verify_deployment_only)
+        {
+            std::cout << LOGGER::INFO
+                      << "[Deployment] Verification-only check passed"
+                      << std::endl;
+            return 0;
+        }
+
+        rclcpp::init(argc, argv);
+        ros_initialized = true;
         auto rl_sar = std::make_shared<RL_Real>(
             argc, argv, deployment.policy_root.string());
         rclcpp::spin(rl_sar->ros2_node);
@@ -1282,7 +1295,7 @@ int main(int argc, char **argv)
     {
         std::cerr << LOGGER::ERROR << "[Startup] rl_real_LW failed: "
                   << exception.what() << std::endl;
-        if (rclcpp::ok())
+        if (ros_initialized && rclcpp::ok())
         {
             rclcpp::shutdown();
         }

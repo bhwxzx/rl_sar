@@ -69,6 +69,11 @@ if find "$output_prefix/lib/rl_sar/rl_real_LW" \
     echo "Production bundle contains symbolic links" >&2
     exit 1
 fi
+LW_DEPLOYMENT_PREFIX="$output_prefix" bash -c '
+    source "$LW_DEPLOYMENT_PREFIX/setup.bash"
+    "$LW_DEPLOYMENT_PREFIX/lib/rl_sar/rl_real_LW" \
+        --verify-deployment-only
+'
 
 echo "LW deployment created from commit $source_commit"
 echo "Install prefix: $output_prefix"
