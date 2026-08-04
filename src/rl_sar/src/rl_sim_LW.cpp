@@ -1,8 +1,40 @@
 
 #include "rl_sim_LW.hpp"
 
+#include <iomanip>
+#include <sstream>
+
 using namespace std::chrono_literals;
 RL_Real* RL_Real::instance = nullptr;
+
+namespace
+{
+const char* LWOperatorModeName(LWOperatorMode mode)
+{
+    switch (mode)
+    {
+    case LWOperatorMode::Passive: return "passive";
+    case LWOperatorMode::GetUpLeg: return "get-up-leg";
+    case LWOperatorMode::GetUpWheel: return "get-up-wheel";
+    case LWOperatorMode::GetDown: return "get-down";
+    case LWOperatorMode::LegLocomotion: return "leg-locomotion";
+    case LWOperatorMode::WheelLocomotion: return "wheel-locomotion";
+    case LWOperatorMode::LegToWheel: return "leg-to-wheel";
+    case LWOperatorMode::WheelToLeg: return "wheel-to-leg";
+    case LWOperatorMode::Unknown: return "unknown";
+    }
+    return "unknown";
+}
+
+bool LWOperatorModeHasProgress(LWOperatorMode mode)
+{
+    return mode == LWOperatorMode::GetUpLeg
+        || mode == LWOperatorMode::GetUpWheel
+        || mode == LWOperatorMode::GetDown
+        || mode == LWOperatorMode::LegToWheel
+        || mode == LWOperatorMode::WheelToLeg;
+}
+} // namespace
 
 // // ===================== [定义抗冲击实验状态变量] =====================
 // static double g_impact_start_time = -1.0;  // 记录冲击开始的物理时间
@@ -141,6 +173,9 @@ RL_Real::RL_Real(int argc, char **argv)
     this->loop_joystick->start();
     this->loop_control->start();
     this->loop_rl->start();
+    this->operator_status_timer_ = ros2_node->create_wall_timer(
+        100ms,
+        std::bind(&RL_Real::OperatorStatusCallback, this));
 #ifdef PLOT
     this->jointstate_plot_publisher_ = ros2_node->create_publisher<sensor_msgs::msg::JointState>(
         "/LW_joint_states", rclcpp::SystemDefaultsQoS()
@@ -311,6 +346,34 @@ void RL_Real::jointstate_plot_callback(void)
     // ==============================================================================
     this->jointstate_plot_publisher_->publish(msg);
 
+}
+
+void RL_Real::OperatorStatusCallback()
+{
+    LWOperatorStatusSnapshot status;
+    if (!ReadLWOperatorStatus(status)
+        || (operator_status_seen_
+            && status.sequence == last_operator_status_sequence_))
+    {
+        return;
+    }
+
+    operator_status_seen_ = true;
+    last_operator_status_sequence_ = status.sequence;
+    std::ostringstream message;
+    message << LOGGER::INFO << "[LW Sim2Sim] mode="
+            << LWOperatorModeName(status.mode)
+            << std::fixed << std::setprecision(3)
+            << ", x=" << status.x
+            << ", y=" << status.y
+            << ", yaw=" << status.yaw
+            << ", gait=" << status.gait_frequency;
+    if (LWOperatorModeHasProgress(status.mode))
+    {
+        message << std::setprecision(1)
+                << ", progress=" << status.progress * 100.0f << '%';
+    }
+    std::cout << message.str() << std::endl;
 }
 
 void RL_Real::disable_lw_robot(void)

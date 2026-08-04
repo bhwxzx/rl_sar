@@ -313,6 +313,38 @@ ros2 launch rl_sar rl_real_LW.launch.py
 
 正常启动会加载 AHRS 驱动并运行 `rl_real_LW`，随后可能访问真实硬件。不要跳过离线验收，也不要用正常启动命令测试部署包是否完整。
 
+### 实机控制循环的默认保护行为
+
+LW 实机控制循环按绝对时间点以 5 ms 周期运行。某次执行过慢时，程序会跳过已经过期的周期，不会为了“补次数”而连续突发执行控制回调。终端状态和周期统计由 ROS 定时器输出，不在 200 Hz 电机命令线程中打印。
+
+正式版本使用其清单内的 `policy/LW/base.yaml`。当前默认值的含义如下：
+
+```yaml
+control_loop_cpu: -1
+control_loop_realtime_priority: 0
+control_loop_require_realtime: false
+control_loop_degraded_consecutive_misses: 3
+control_loop_degraded_lateness: 0.02
+control_loop_fatal_consecutive_misses: 0
+control_loop_fatal_lateness: 0.0
+```
+
+- `cpu: -1` 表示暂不固定 CPU；`realtime_priority: 0` 表示使用普通的 `SCHED_OTHER` 调度。这是未经部署机测量前的可移植默认值。
+- 连续错过 3 个控制周期，或者单次唤醒或执行晚到达到 20 ms，会进入“时序降级”状态。
+- 时序降级会永久锁住本次进程的 `x/y/yaw` 为零，但保留 FSM 按钮输入。操作员仍可请求 `GetDown`；处理完现场安全后必须重启进程才能清除该锁存。
+- 默认的两个 `fatal` 值为零，表示控制循环晚到不会直接调用 `EnterFailSafe()` 硬失能。传感器过期、非法命令、姿态越界和控制回调异常等既有严重故障保护不受影响。
+- 每秒一条 `[Timing] loop_control` 日志会报告平均/最大唤醒晚到、最大截止时间晚到、最大回调执行时间、错过截止时间和跳过周期数。应把实机吊装测试时的这些日志保存到验收记录中。
+
+不要直接修改已经生成的部署目录来调整参数。参数调整应在项目的 `policy/LW/base.yaml` 中完成，经过开发机测试和 Sim2Sim、提交，再由部署机从新提交生成新的部署版本。
+
+### 可选的 CPU 固定和实时优先级
+
+只有在目标部署机上完成负载测量后，才应设置 `control_loop_cpu` 或正数的 `control_loop_realtime_priority`。先用 `lscpu` 确认可用 CPU，再确认运行账户具备设置 `SCHED_FIFO` 的权限；具体授权方式应遵守部署机的 systemd 或安全配置，不要仅为绕过权限错误而以 root 身份运行整个控制程序。
+
+当设置了正数优先级但 `control_loop_require_realtime: false` 时，权限不足会记录警告并回退到 `SCHED_OTHER`；设为 `true` 后，实时调度失败会使控制回调在首次执行前拒绝启动。只要显式配置了 CPU 编号，CPU 固定失败就会拒绝启动，不受该开关影响。这些配置必须先在吊装状态下验收。
+
+`control_loop_fatal_consecutive_misses` 和 `control_loop_fatal_lateness` 只应在取得部署机时序数据、确认电机板端看门狗行为并决定硬失能策略后显式启用；后一个值的单位是秒。启用任一严重阈值后，达到阈值会调用现有 `EnterFailSafe()`：锁死命令门、发送约 100 ms 的电机失能包并请求 ROS 关闭，机器人不会自动执行受控趴下。
+
 ## 8. 升级和回滚
 
 ### 升级
@@ -397,4 +429,4 @@ ros2 pkg prefix rl_sar
 - 构建脚本：`src/rl_sar/scripts/build_lw_deployment.sh`
 - 清单生成器：`src/rl_sar/scripts/generate_lw_deployment_manifest.py`
 - LW 实机启动文件：`src/rl_sar/launch/rl_real_LW.launch.py`
-- LW 实机部署问题记录：`.learnings/LW_REAL_DEPLOYMENT_ISSUES.md` 中的 `LW-010`
+- LW 实机部署问题记录：`.learnings/LW_REAL_DEPLOYMENT_ISSUES.md` 中的 `LW-010` 和 `LW-011`

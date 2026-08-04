@@ -52,6 +52,10 @@ private:
     void RobotControl();
     void ApplyPendingInput();
     void HandleLoopError(const std::string& loop_name, std::exception_ptr error) noexcept;
+    void HandleLoopTiming(
+        const std::string& loop_name,
+        LoopTimingLevel level,
+        const LoopTimingSnapshot& timing) noexcept;
     void EnterFailSafe(const std::string& reason) noexcept;
     void SendEmergencyDisableBurst() noexcept;
     bool HandleSensorReadiness();
@@ -63,6 +67,7 @@ private:
     std::shared_ptr<LoopFunc> loop_control;
     std::shared_ptr<LoopFunc> loop_rl;
     std::shared_ptr<LoopFunc> loop_plot;
+    std::atomic<bool> control_timing_degraded_latched_{false};
 
     // LW interface
     LWSDK lw_sdk;
@@ -123,7 +128,14 @@ private:
     std::shared_ptr<rclcpp::Publisher<sensor_msgs::msg::JointState>> jointstate_plot_publisher_ = nullptr;
     std::shared_ptr<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>> realtime_debug_publisher_ = nullptr;
     rclcpp::TimerBase::SharedPtr timer_;
+    rclcpp::TimerBase::SharedPtr runtime_diagnostics_timer_;
     void jointstate_plot_callback(void);
+    void RuntimeDiagnosticsCallback();
+    std::uint64_t last_operator_status_sequence_ = 0;
+    std::uint64_t runtime_diagnostics_ticks_ = 0;
+    bool operator_status_seen_ = false;
+    bool timing_degraded_logged_ = false;
+    bool realtime_fallback_logged_ = false;
 
     // others
     void disable_robot(void);

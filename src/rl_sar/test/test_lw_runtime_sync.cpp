@@ -241,6 +241,73 @@ void testInputMailboxKeepsVelocityCoherentAndEventsSequenced()
             == before_clear.event_sequence + 1,
         "input clear was not published as a new event generation");
 }
+
+void testOperatorStatusMailboxPublishesCoherentFramesWithoutBlocking()
+{
+    LWOperatorStatusMailbox mailbox;
+    std::atomic<bool> start{false};
+    std::atomic<bool> failed{false};
+
+    std::thread writer([&]()
+    {
+        while (!start.load(std::memory_order_acquire))
+        {
+        }
+        for (std::uint64_t sequence = 1; sequence <= 50000; ++sequence)
+        {
+            const float value = static_cast<float>(sequence);
+            mailbox.publish(
+                {sequence,
+                 LWOperatorMode::WheelLocomotion,
+                 value,
+                 2.0f * value,
+                 3.0f * value,
+                 4.0f * value,
+                 5.0f * value});
+        }
+    });
+
+    std::vector<std::thread> readers;
+    for (int reader = 0; reader < 4; ++reader)
+    {
+        readers.emplace_back([&]()
+        {
+            while (!start.load(std::memory_order_acquire))
+            {
+            }
+            std::uint64_t last_sequence = 0;
+            for (int iteration = 0; iteration < 50000; ++iteration)
+            {
+                LWOperatorStatusSnapshot status;
+                if (!mailbox.read(status))
+                {
+                    continue;
+                }
+                if (status.mode != LWOperatorMode::WheelLocomotion
+                    || status.sequence < last_sequence
+                    || status.y != 2.0f * status.x
+                    || status.yaw != 3.0f * status.x
+                    || status.gait_frequency != 4.0f * status.x
+                    || status.progress != 5.0f * status.x)
+                {
+                    failed.store(true, std::memory_order_release);
+                    return;
+                }
+                last_sequence = status.sequence;
+            }
+        });
+    }
+
+    start.store(true, std::memory_order_release);
+    writer.join();
+    for (auto& reader : readers)
+    {
+        reader.join();
+    }
+    require(
+        !failed.load(std::memory_order_acquire),
+        "operator status mailbox exposed a partially published frame");
+}
 } // namespace
 
 int main()
@@ -250,6 +317,7 @@ int main()
         testSnapshotBufferPublishesWholeFrames();
         testAtomicSnapshotKeepsContextCoherent();
         testInputMailboxKeepsVelocityCoherentAndEventsSequenced();
+        testOperatorStatusMailboxPublishesCoherentFramesWithoutBlocking();
         std::cout << "LW runtime synchronization tests passed"
                   << std::endl;
         return EXIT_SUCCESS;

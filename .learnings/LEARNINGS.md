@@ -284,3 +284,40 @@ LW 发布流程必须把 Sim2Sim 行为验证明确放在开发机，部署机�
 - **Notes**: LW-015 已将整个 zoo 纳入盘点、非 LW 描述清理和可复现版本跟踪范围，并要求保留当前 LW MJCF/terrain 修改、上游来源及许可证；实际暂未删除或暂存文件。
 
 ---
+
+## [LRN-20260804-003] correction
+
+**Logged**: 2026-08-04T17:55:02+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: docs
+
+### Summary
+权威问题表只能有一套按优先级排列的总顺序，状态筛选不能被描述成另一套“剩余事项顺序”。
+
+### Details
+在新增 LW-016 后，表格本身已按 P0、P1、P2 排列，并在同一优先级内按实机
+风险和依赖排序；但回复和记录措辞同时使用“剩余事项首位”和“总顺序第 11”，
+容易让人误解为存在两套独立顺序。正确语义是：`Order` 始终是唯一权威优先级
+顺序，`Status` 只表示完成状态；过滤掉 `resolved` 行只是查看下一项工作，不会
+产生新的排序规则。
+
+### Suggested Action
+维护权威任务表时，明确先按优先级分组、再在同级内按风险和依赖排序；汇报时
+直接给出总表位置，并可补充“过滤已解决项后是下一项”，但不得称为另一套顺序。
+
+### Metadata
+- Source: user_feedback
+- Related Files: .learnings/LW_REAL_DEPLOYMENT_ISSUES.md
+- Tags: issue-register, priority, ordering, status, documentation
+- Pattern-Key: workflow.authoritative_issue_priority_order
+- Recurrence-Count: 1
+- First-Seen: 2026-08-04
+- Last-Seen: 2026-08-04
+
+### Resolution
+- **Resolved**: 2026-08-04T17:55:02+08:00
+- **Commit/PR**: this commit
+- **Notes**: 问题记录已明确 `Order` 是唯一权威优先级顺序，状态仅用于筛选；LW-016 在 P1 内因安全风险排在 LW-013 前。
+
+---

@@ -284,6 +284,18 @@ if(BUILD_TESTING)
     )
     add_test(NAME loop_lifecycle COMMAND test_loop_lifecycle)
 
+    add_executable(test_loop_timing
+        test/test_loop_timing.cpp
+    )
+    target_include_directories(test_loop_timing PRIVATE
+        library/core/logger
+        library/core/loop
+    )
+    target_link_libraries(test_loop_timing
+        Threads::Threads
+    )
+    add_test(NAME loop_timing COMMAND test_loop_timing)
+
     add_executable(test_sensor_readiness
         test/test_sensor_readiness.cpp
     )

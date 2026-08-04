@@ -20,8 +20,7 @@ public:
 
     void Enter() override
     {
-        std::cout << LOGGER::NOTE << "Entered passive mode. \n Press '0' (Keyboard) or 'A' (Gamepad) to switch to RLFSMStateGetUp_Leg. \n"
-                                     "Press '2' (Keyboard) or 'Y' (Gamepad) to switch to RLFSMStateGetUp_Wheel." << std::endl;
+        rl.PublishLWOperatorStatus(LWOperatorMode::Passive);
     }
 
     void Run() override
@@ -89,13 +88,13 @@ public:
         if(stand_from_passive)
         {
 
-            if (Interpolate(percent_pre_getup, rl.now_state.motor_state.q, pre_running_pos, 2.0f, "Pre Getting up", true)) return;
+            if (Interpolate(percent_pre_getup, rl.now_state.motor_state.q, pre_running_pos, 2.0f, "Pre Getting up", true, LWOperatorMode::GetUpLeg)) return;
             // 这里的params是从base.yaml中读取的
-            if (Interpolate(percent_getup, pre_running_pos, rl.params.Get<std::vector<float>>("default_dof_pos_leg"), 2.0f, "Getting up", true)) return;
+            if (Interpolate(percent_getup, pre_running_pos, rl.params.Get<std::vector<float>>("default_dof_pos_leg"), 2.0f, "Getting up", true, LWOperatorMode::GetUpLeg)) return;
         }
         else
         {
-            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos_leg"), 3.0f, "Getting up", true)) return;
+            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos_leg"), 3.0f, "Getting up", true, LWOperatorMode::GetUpLeg)) return;
         }
     }
 
@@ -163,12 +162,12 @@ public:
         if(stand_from_passive)
         {
 
-            if (Interpolate(percent_pre_getup, rl.now_state.motor_state.q, pre_running_pos, 2.0f, "Pre Getting up", true)) return;
-            if (Interpolate(percent_getup, pre_running_pos, rl.params.Get<std::vector<float>>("default_dof_pos_wheel"), 2.0f, "Getting up", true)) return;
+            if (Interpolate(percent_pre_getup, rl.now_state.motor_state.q, pre_running_pos, 2.0f, "Pre Getting up", true, LWOperatorMode::GetUpWheel)) return;
+            if (Interpolate(percent_getup, pre_running_pos, rl.params.Get<std::vector<float>>("default_dof_pos_wheel"), 2.0f, "Getting up", true, LWOperatorMode::GetUpWheel)) return;
         }
         else
         {
-            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos_wheel"), 3.0f, "Getting up", true)) return;
+            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos_wheel"), 3.0f, "Getting up", true, LWOperatorMode::GetUpWheel)) return;
         }
     }
 
@@ -222,7 +221,7 @@ public:
     void Run() override
     {
         // Interpolate(percent_getdown, rl.now_state.motor_state.q, rl.start_state.motor_state.q, 3.0f, "Getting down", true);
-        Interpolate(percent_getdown, rl.now_state.motor_state.q, pre_running_pos, 3.0f, "Getting down", true);
+        Interpolate(percent_getdown, rl.now_state.motor_state.q, pre_running_pos, 3.0f, "Getting down", true, LWOperatorMode::GetDown);
     }
 
     void Exit() override {}
@@ -284,16 +283,9 @@ public:
         // position transition from last default_dof_pos to current default_dof_pos
         // if (Interpolate(percent_transition, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos"), 0.5f, "Policy transition", true)) return;
 
-        if (print_count++ % 20 == 0) // 10Hz
+        if (print_count++ % 20 == 0) // 10Hz status publication
         {
-            if ( rl.robot_name == "LW" )
-            {
-                std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << std::flush;
-            }
-            else
-            {
-                std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << std::flush;
-            }
+            rl.PublishLWOperatorStatus(LWOperatorMode::LegLocomotion);
         }
         RLControlLW();
     }
@@ -364,16 +356,9 @@ public:
         // position transition from last default_dof_pos to current default_dof_pos
         // if (Interpolate(percent_transition, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos"), 0.5f, "Policy transition", true)) return;
 
-        if (print_count++ % 20 == 0) // 10Hz
+        if (print_count++ % 20 == 0) // 10Hz status publication
         {
-            if ( rl.robot_name == "LW" )
-            {
-                std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << " gait_fr:" << rl.control.gait_frequency << std::flush;
-            }
-            else
-            {
-                std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << std::flush;
-            }
+            rl.PublishLWOperatorStatus(LWOperatorMode::WheelLocomotion);
         }
         RLControlLW();
     }
@@ -444,8 +429,6 @@ public:
                     rl.motion_length);
             rl.PublishCurrentLWMotionReference(policy_generation);
 
-            std::cout << LOGGER::INFO << "Motion duration: " << rl.motion_length << "s" << std::endl;
-
             rl.now_state = *fsm_state;
         }
         catch (const std::exception& e)
@@ -479,7 +462,7 @@ public:
             * policy_params.Get<int>("decimation");
         motion_time = std::fmin(motion_time, rl.motion_length);
         float percent = motion_time / rl.motion_length;
-        LOGGER::PrintProgress(percent, rl.config_name);
+        rl.PublishLWOperatorStatus(LWOperatorMode::LegToWheel, percent);
 
         rl.motion_loader_lw->Update(motion_time);
         rl.PublishCurrentLWMotionReference(policy_generation);
@@ -550,8 +533,6 @@ public:
                     rl.motion_length);
             rl.PublishCurrentLWMotionReference(policy_generation);
 
-            std::cout << LOGGER::INFO << "Motion duration: " << rl.motion_length << "s" << std::endl;
-
             rl.now_state = *fsm_state;
         }
         catch (const std::exception& e)
@@ -585,7 +566,7 @@ public:
             * policy_params.Get<int>("decimation");
         motion_time = std::fmin(motion_time, rl.motion_length);
         float percent = motion_time / rl.motion_length;
-        LOGGER::PrintProgress(percent, rl.config_name);
+        rl.PublishLWOperatorStatus(LWOperatorMode::WheelToLeg, percent);
 
         rl.motion_loader_lw->Update(motion_time);
         rl.PublishCurrentLWMotionReference(policy_generation);

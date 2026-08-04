@@ -331,6 +331,10 @@ public:
     std::shared_ptr<const LWMotionReferenceSnapshot> LoadLWMotionReference() const noexcept;
     void PublishLWPolicyProgress(std::uint64_t generation, std::uint64_t frame);
     std::shared_ptr<const LWPolicyProgressSnapshot> LoadLWPolicyProgress() const noexcept;
+    void PublishLWOperatorStatus(
+        LWOperatorMode mode,
+        float progress = 0.0f) noexcept;
+    bool ReadLWOperatorStatus(LWOperatorStatusSnapshot& status) const noexcept;
     bool PublishLWPolicyOutput(LWPolicyOutputFrame output);
     std::shared_ptr<const LWPolicyOutputFrame> LoadLWPolicyOutput() const noexcept;
     std::chrono::steady_clock::duration GetLWPolicyOutputMaxAge(
@@ -418,6 +422,8 @@ private:
     LWAtomicSnapshot<LWPolicyActivation> lw_policy_activation_;
     LWAtomicSnapshot<LWMotionReferenceSnapshot> lw_motion_reference_;
     LWAtomicSnapshot<LWPolicyProgressSnapshot> lw_policy_progress_;
+    LWOperatorStatusMailbox lw_operator_status_;
+    std::atomic<std::uint64_t> lw_operator_status_sequence_{1};
     LWPolicyOutputTransport lw_policy_output_transport_;
     std::atomic<std::uint64_t> lw_next_policy_generation_{1};
 };
@@ -438,7 +444,8 @@ public:
         const std::vector<float>& target_pos,
         float duration_seconds,
         const std::string& description = "",
-        bool use_fixed_gains = true
+        bool use_fixed_gains = true,
+        LWOperatorMode lw_status_mode = LWOperatorMode::Unknown
     );
 
     void RLControl();

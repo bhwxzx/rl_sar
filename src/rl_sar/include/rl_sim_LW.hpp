@@ -94,7 +94,11 @@ private:
     // plot
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr jointstate_plot_publisher_;
     rclcpp::TimerBase::SharedPtr timer_;
+    rclcpp::TimerBase::SharedPtr operator_status_timer_;
     void jointstate_plot_callback(void);
+    void OperatorStatusCallback();
+    std::uint64_t last_operator_status_sequence_ = 0;
+    bool operator_status_seen_ = false;
 
     // actuator net
     bool use_actuator_net_ = false; // 是否使用执行器网络的 Flag

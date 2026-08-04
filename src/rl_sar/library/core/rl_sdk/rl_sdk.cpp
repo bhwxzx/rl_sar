@@ -750,6 +750,27 @@ RL::LoadLWPolicyProgress() const noexcept
     return lw_policy_progress_.load();
 }
 
+void RL::PublishLWOperatorStatus(
+    LWOperatorMode mode,
+    float progress) noexcept
+{
+    lw_operator_status_.publish(
+        {lw_operator_status_sequence_.fetch_add(
+             1, std::memory_order_relaxed),
+         mode,
+         control.x,
+         control.y,
+         control.yaw,
+         control.gait_frequency,
+         progress});
+}
+
+bool RL::ReadLWOperatorStatus(
+    LWOperatorStatusSnapshot& status) const noexcept
+{
+    return lw_operator_status_.read(status);
+}
+
 bool RL::PublishLWPolicyOutput(LWPolicyOutputFrame output)
 {
     const auto activation = LoadLWPolicyActivation();
@@ -1156,7 +1177,8 @@ bool RLFSMState::Interpolate(
     const std::vector<float>& target_pos,
     float duration_seconds,
     const std::string& description,
-    bool use_fixed_gains)
+    bool use_fixed_gains,
+    LWOperatorMode lw_status_mode)
 {
     if (percent >= 1.0f)
     {
@@ -1195,7 +1217,11 @@ bool RLFSMState::Interpolate(
         fsm_command->motor_command.tau[i] = 0;
     }
 
-    if (!description.empty())
+    if (lw_status_mode != LWOperatorMode::Unknown)
+    {
+        rl.PublishLWOperatorStatus(lw_status_mode, percent);
+    }
+    else if (!description.empty())
     {
         LOGGER::PrintProgress(percent, description);
     }

@@ -42,9 +42,14 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 - Updated: 2026-08-04
 - The current product scope is LW-only, while the repository should retain a
   clear, documented extension boundary for adding other robots later.
-- Remaining work is ordered by real-robot safety impact first, transition-data
-  correctness second, repository-scope cleanup third, and optional debug
-  behavior last.
+- The `Order` column is the single authoritative priority order. Rows are
+  grouped by `Priority`; within the same priority, real-robot safety impact and
+  dependencies decide the order. `Status` does not create a separate ordering
+  scheme; filtering out resolved rows merely shows the next pending work.
+- `LW-016` is ordered ahead of `LW-013` within P1 because a safety action that
+  is stronger than its trigger warrants can itself cause a fall or prevent a
+  controlled recovery. The review must preserve genuinely necessary hard
+  stops rather than weakening protections indiscriminately.
 - Existing issue IDs remain stable; only the authoritative execution order and
   risk-based priorities changed.
 
@@ -62,11 +67,12 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 8 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
 | 9 | LW-009 | P1 / high | resolved | Use the configured 60 Hz wheel-to-leg reference rate |
 | 10 | LW-010 | P1 / high | resolved | Make deployed binary, configuration, and models reproducible |
-| 11 | LW-013 | P1 / high | pending | Validate YAML, mappings, observation sizes, and model outputs |
-| 12 | LW-011 | P1 / high | pending | Make the control loop suitable for deterministic real-time execution |
-| 13 | LW-012 | P2 / medium | pending | Harden motion loading and correct its time convention |
-| 14 | LW-015 | P2 / medium | pending | Remove non-LW robot implementations while preserving future extension points |
-| 15 | LW-014 | P2 / low | pending | Isolate and correct production debug/plot publishing |
+| 11 | LW-016 | P1 / high | pending | Audit every safety trigger for proportional and recoverable behavior |
+| 12 | LW-013 | P1 / high | pending | Validate YAML, mappings, observation sizes, and model outputs |
+| 13 | LW-011 | P1 / high | resolved | Make the control loop suitable for deterministic real-time execution |
+| 14 | LW-012 | P2 / medium | pending | Harden motion loading and correct its time convention |
+| 15 | LW-015 | P2 / medium | pending | Remove non-LW robot implementations while preserving future extension points |
+| 16 | LW-014 | P2 / low | pending | Isolate and correct production debug/plot publishing |
 
 ---
 
@@ -752,6 +758,89 @@ The installed launcher currently resolves to an executable older than the source
 
 ---
 
+## [LW-016] Safety-action proportionality and recovery audit
+
+**Priority**: P1 / high
+**Status**: pending
+**Dependencies**: LW-001, LW-002, LW-003, LW-005, LW-006, LW-011
+
+### Problem
+
+LW safety behavior has accumulated across loop exceptions, sensor freshness,
+serial delivery, feedback and command validation, attitude limits, motor
+protection, joystick loss, timing degradation, startup, and shutdown. There is
+no single decision matrix proving that every trigger invokes an action with the
+right severity and recovery policy.
+
+`EnterFailSafe()` currently latches the command gate closed, sends 20 hard
+motor-disable packets over roughly 100 ms, and requests ROS shutdown. That is
+appropriate only when immediately removing torque is safer than retaining a
+controlled state. Applied to a transient or recoverable condition, the same
+behavior could make an upright robot fall or remove the operator's opportunity
+to request `GetDown`. Conversely, weakening a genuinely fatal response could
+leave unsafe commands active. The complete boundary therefore needs an
+evidence-based proportionality audit rather than a blanket relaxation.
+
+### Evidence
+
+- `src/rl_sar/src/rl_real_LW.cpp:492-746`
+- `src/rl_sar/src/rl_real_LW.cpp:776-787`
+- `src/rl_sar/src/rl_real_LW.cpp:1298-1344`
+- `src/rl_sar/library/core/loop/command_gate.hpp`
+- `src/rl_sar/library/core/safety/lw_control_safety.hpp`
+- `src/rl_sar/library/core/safety/lw_joystick_safety.hpp`
+- Resolution evidence and documented safety boundaries for `LW-001` through
+  `LW-006` and `LW-011`.
+
+### Intended Scope
+
+- Inventory every path that warns, zeros velocity, latches an input source,
+  requests a state transition, sends damping/disable commands, closes
+  `CommandGate`, calls `EnterFailSafe()`, or shuts down ROS.
+- For every trigger, record the originating fault, robot/FSM state, persistence
+  or debounce rule, assumed hardware condition, selected action, operator
+  options, restart requirement, and worst credible consequence of both acting
+  and not acting.
+- Define an explicit action hierarchy such as diagnostic-only, bounded command
+  reduction, zero-velocity latch with operator-controlled `GetDown`, controlled
+  passive/damping behavior, and immediate hard disable plus shutdown. Do not
+  assume every tier is safe in every state.
+- Review thresholds, hysteresis, transient handling, retry limits, latch
+  permanence, and recovery authority. A recoverable event must not silently
+  escalate to an irreversible action without a documented reason.
+- Require a specific physical-safety justification for every hard-disable path,
+  including why immediate torque removal is safer than maintaining support or
+  allowing a controlled descent in the affected state.
+- Separate host guarantees from motor-board watchdog, acknowledgement, power,
+  cable-loss, physical emergency-stop, and mechanical-support assumptions.
+- Add focused tests for the approved decision matrix. Any resulting behavioral
+  change remains confined to `LW-016` and requires the normal explicit code
+  approval before implementation.
+
+### Acceptance Criteria
+
+- A reviewed decision matrix accounts for every production LW safety trigger
+  and every terminal safety action; no call site is left with implicit
+  severity or recovery semantics.
+- Every `EnterFailSafe()`/hard-disable call site has evidence that immediate
+  torque removal is the least dangerous available response for its fault and
+  applicable FSM states.
+- Transient or degraded conditions use no stronger action, no longer latch, and
+  require no more operator intervention than the approved matrix specifies.
+- Cases that retain FSM input state exactly when `GetDown` remains safe and
+  available; cases with corrupt state/command data do not claim a controlled
+  recovery that cannot be guaranteed.
+- Logs distinguish degraded, recoverable, latched, and fatal states and state
+  whether restart, `GetDown`, hardware disable, or physical support is required.
+- Automated tests force each trigger and verify command-gate state, motor packet
+  ordering, ROS-shutdown behavior, retained/cleared inputs, latch persistence,
+  and permitted recovery actions without weakening unrelated protections.
+- Deployment documentation states the remaining board-watchdog and physical
+  emergency-stop assumptions and records any behavior that still requires
+  suspended-robot validation.
+
+---
+
 ## [LW-013] Configuration and dimension validation
 
 **Priority**: P1 / high
@@ -788,7 +877,7 @@ The control path assumes every YAML vector has the correct length and every mapp
 ## [LW-011] Deterministic control-loop timing
 
 **Priority**: P1 / high
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-001, LW-007
 
 ### Problem
@@ -822,6 +911,47 @@ IO and flushes inside the 200 Hz control path.
 - Production builds use the approved optimized profile.
 - A timing test reports control and inference jitter, maximum latency, and missed deadlines.
 - Blocking terminal or ROS debug IO cannot delay motor command generation.
+
+### Resolution Evidence
+
+- Resolved: 2026-08-04T17:35:45+08:00
+- Commit: this commit
+- Approved Scope: absolute high-resolution scheduling without catch-up bursts;
+  timing metrics and configurable CPU affinity/`SCHED_FIFO`; soft zero-velocity
+  degradation after three consecutive skipped periods or one 20 ms deadline
+  lateness; hard timing fail-safe disabled by default; periodic LW terminal
+  output moved from the control callback to ROS timers in real and Sim2Sim.
+- Changed Files: `policy/LW/base.yaml`, `docs/LW_BUILD_DEPLOYMENT_CN.md`,
+  `src/rl_sar/CMakeLists.txt`, `src/rl_sar/fsm_robot/fsm_LW.hpp`, both LW
+  headers and sources, `library/core/loop/loop.hpp`, `rl_sdk.hpp/.cpp`,
+  `lw_runtime_sync.hpp`, `test_loop_timing.cpp`, and
+  `test_lw_runtime_sync.cpp`.
+- `LoopFunc` now schedules against `steady_clock` absolute deadlines, skips
+  expired periods instead of replaying callbacks, exposes wakeup/deadline/
+  execution statistics, validates scheduling settings before the first
+  callback, and supports optional affinity and `SCHED_FIFO` with explicit
+  required-versus-fallback behavior.
+- LW real control latches `x/y/yaw` to zero at the approved degraded threshold
+  while preserving FSM button events so the operator can request `GetDown`.
+  Timing-triggered `EnterFailSafe()` remains inactive until a nonzero fatal
+  threshold is deliberately configured.
+- Periodic FSM status passes through a coherent nonblocking single-writer
+  mailbox. Real and Sim2Sim ROS timers perform formatting and terminal IO away
+  from the 200 Hz callback; real control also reports one-second timing
+  summaries and scheduling fallback/degradation warnings.
+- Verified with fresh Release configuration in
+  `build/lw011_release_current`: both `rl_real_LW` and `rl_sim_LW` built and all
+  12 registered tests passed. The new `loop_timing` test passed 10 consecutive
+  runs and reports control/inference average and maximum wakeup lateness,
+  maximum deadline lateness, maximum execution time, missed deadlines, and
+  skipped periods.
+- Standalone `-Wall -Wextra -Wpedantic` plus AddressSanitizer and
+  UndefinedBehaviorSanitizer execution of `test_loop_timing` passed. Targeted
+  `cppcheck` reported only the pre-existing `CSVInit(std::string)`
+  pass-by-value performance suggestion.
+- Hardware execution and deployment-host `SCHED_FIFO`/CPU-affinity tuning were
+  intentionally not performed. Fatal timing thresholds remain zero until
+  target-host measurements and board-watchdog behavior are reviewed.
 
 ---
 

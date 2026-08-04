@@ -5,6 +5,19 @@ LW:
   sensor_timeout: 0.1
   # Shared deadline for queuing a complete command packet to both serial ports.
   serial_write_timeout: 0.002
+  # Control-loop scheduling. CPU -1 and priority 0 keep portable SCHED_OTHER
+  # defaults; set a positive FIFO priority only after target-host validation.
+  control_loop_cpu: -1
+  control_loop_realtime_priority: 0
+  control_loop_require_realtime: false
+  # A degraded timing event latches velocity commands to zero but keeps FSM
+  # buttons active so the operator can request GetDown.
+  control_loop_degraded_consecutive_misses: 3
+  control_loop_degraded_lateness: 0.02
+  # Hard motor disable is intentionally disabled until target timing and the
+  # robot's board-side watchdog behavior have been measured.
+  control_loop_fatal_consecutive_misses: 0
+  control_loop_fatal_lateness: 0.0
   rl_kp: [90.0, 90.0,
           90.0, 90.0,
           90.0, 90.0,

@@ -5,9 +5,96 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cmath>
 #include <filesystem>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 
 using namespace std::chrono_literals;
+
+namespace
+{
+std::chrono::nanoseconds ReadNonnegativeDuration(
+    const YamlParams& params,
+    const std::string& key,
+    float default_seconds)
+{
+    const float seconds = params.Get<float>(key, default_seconds);
+    if (!std::isfinite(seconds) || seconds < 0.0f)
+    {
+        throw std::runtime_error("LW " + key + " must be finite and nonnegative");
+    }
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::duration<double>(seconds));
+}
+
+std::uint64_t ReadNonnegativeCount(
+    const YamlParams& params,
+    const std::string& key,
+    int default_value)
+{
+    const int value = params.Get<int>(key, default_value);
+    if (value < 0)
+    {
+        throw std::runtime_error("LW " + key + " must be nonnegative");
+    }
+    return static_cast<std::uint64_t>(value);
+}
+
+LoopConfig BuildLWControlLoopConfig(const YamlParams& params)
+{
+    LoopConfig config = LoopConfig::FromSeconds(params.Get<float>("dt"));
+    config.cpu_affinity = params.Get<int>("control_loop_cpu", -1);
+    config.realtime_priority =
+        params.Get<int>("control_loop_realtime_priority", 0);
+    config.require_realtime =
+        params.Get<bool>("control_loop_require_realtime", false);
+    config.timing_policy.degraded_consecutive_misses =
+        ReadNonnegativeCount(
+            params,
+            "control_loop_degraded_consecutive_misses",
+            3);
+    config.timing_policy.degraded_lateness = ReadNonnegativeDuration(
+        params,
+        "control_loop_degraded_lateness",
+        0.02f);
+    config.timing_policy.fatal_consecutive_misses =
+        ReadNonnegativeCount(
+            params,
+            "control_loop_fatal_consecutive_misses",
+            0);
+    config.timing_policy.fatal_lateness = ReadNonnegativeDuration(
+        params,
+        "control_loop_fatal_lateness",
+        0.0f);
+    return config;
+}
+
+const char* LWOperatorModeName(LWOperatorMode mode)
+{
+    switch (mode)
+    {
+    case LWOperatorMode::Passive: return "passive";
+    case LWOperatorMode::GetUpLeg: return "get-up-leg";
+    case LWOperatorMode::GetUpWheel: return "get-up-wheel";
+    case LWOperatorMode::GetDown: return "get-down";
+    case LWOperatorMode::LegLocomotion: return "leg-locomotion";
+    case LWOperatorMode::WheelLocomotion: return "wheel-locomotion";
+    case LWOperatorMode::LegToWheel: return "leg-to-wheel";
+    case LWOperatorMode::WheelToLeg: return "wheel-to-leg";
+    case LWOperatorMode::Unknown: return "unknown";
+    }
+    return "unknown";
+}
+
+bool LWOperatorModeHasProgress(LWOperatorMode mode)
+{
+    return mode == LWOperatorMode::GetUpLeg
+        || mode == LWOperatorMode::GetUpWheel
+        || mode == LWOperatorMode::GetDown
+        || mode == LWOperatorMode::LegToWheel
+        || mode == LWOperatorMode::WheelToLeg;
+}
+} // namespace
 
 RL_Real::RL_Real(
     int argc,
@@ -115,16 +202,32 @@ RL_Real::RL_Real(
     {
         this->HandleLoopError(loop_name, error);
     };
+    const auto loop_timing_handler = [this](
+        const std::string& loop_name,
+        LoopTimingLevel level,
+        const LoopTimingSnapshot& timing)
+    {
+        this->HandleLoopTiming(loop_name, level, timing);
+    };
     this->loop_joystick = std::make_shared<LoopFunc>(
         "loop_joystick", 0.01, std::bind(&RL_Real::GetSysJoystick, this), -1, loop_error_handler);
+    LoopConfig control_loop_config = BuildLWControlLoopConfig(this->params);
     this->loop_control = std::make_shared<LoopFunc>(
-        "loop_control", this->params.Get<float>("dt"), std::bind(&RL_Real::RobotControl, this), -1, loop_error_handler);
+        "loop_control",
+        control_loop_config,
+        std::bind(&RL_Real::RobotControl, this),
+        loop_error_handler,
+        loop_timing_handler);
     this->loop_rl = std::make_shared<LoopFunc>(
         "loop_rl",
         this->params.Get<float>("dt") * this->params.Get<int>("decimation"),
         std::bind(&RL_Real::RunModel, this),
         -1,
         loop_error_handler);
+
+    this->runtime_diagnostics_timer_ = ros2_node->create_wall_timer(
+        100ms,
+        std::bind(&RL_Real::RuntimeDiagnosticsCallback, this));
 
 #ifdef PLOT
     this->jointstate_plot_publisher_ = ros2_node->create_publisher<sensor_msgs::msg::JointState>(
@@ -300,6 +403,92 @@ void RL_Real::jointstate_plot_callback(void)
     }
 }
 
+void RL_Real::RuntimeDiagnosticsCallback()
+{
+    LWOperatorStatusSnapshot operator_status;
+    if (ReadLWOperatorStatus(operator_status)
+        && (!operator_status_seen_
+            || operator_status.sequence != last_operator_status_sequence_))
+    {
+        operator_status_seen_ = true;
+        last_operator_status_sequence_ = operator_status.sequence;
+
+        std::ostringstream message;
+        message << LOGGER::INFO << "[LW] mode="
+                << LWOperatorModeName(operator_status.mode)
+                << std::fixed << std::setprecision(3)
+                << ", x=" << operator_status.x
+                << ", y=" << operator_status.y
+                << ", yaw=" << operator_status.yaw
+                << ", gait=" << operator_status.gait_frequency;
+        if (LWOperatorModeHasProgress(operator_status.mode))
+        {
+            message << std::setprecision(1)
+                    << ", progress=" << operator_status.progress * 100.0f
+                    << '%';
+        }
+        std::cout << message.str() << std::endl;
+    }
+
+    if (!loop_control)
+    {
+        return;
+    }
+
+    const LoopStartupSnapshot startup = loop_control->startupSnapshot();
+    if (!realtime_fallback_logged_
+        && startup.requested_realtime_priority > 0
+        && !startup.realtime_applied)
+    {
+        realtime_fallback_logged_ = true;
+        std::cerr << LOGGER::WARNING
+                  << "[Timing] SCHED_FIFO priority "
+                  << startup.requested_realtime_priority
+                  << " was not applied (error " << startup.realtime_error
+                  << "); loop_control is running with SCHED_OTHER"
+                  << std::endl;
+    }
+
+    if (!timing_degraded_logged_
+        && control_timing_degraded_latched_.load(std::memory_order_acquire))
+    {
+        timing_degraded_logged_ = true;
+        std::cerr << LOGGER::WARNING
+                  << "[Timing] Control timing is degraded: x/y/yaw are latched "
+                     "to zero, FSM buttons remain active so GetDown can be "
+                     "requested, and restart is required to clear the latch"
+                  << std::endl;
+    }
+
+    ++runtime_diagnostics_ticks_;
+    if (runtime_diagnostics_ticks_ % 10 != 0)
+    {
+        return;
+    }
+
+    const LoopTimingSnapshot timing = loop_control->timingSnapshot();
+    const double average_wakeup_us = timing.cycles == 0
+        ? 0.0
+        : std::chrono::duration<double, std::micro>(
+              timing.total_wakeup_lateness).count()
+              / static_cast<double>(timing.cycles);
+    std::ostringstream message;
+    message << LOGGER::INFO << "[Timing] loop_control cycles=" << timing.cycles
+            << ", wakeup_us(avg/max)=" << std::fixed << std::setprecision(1)
+            << average_wakeup_us << '/'
+            << std::chrono::duration<double, std::micro>(
+                   timing.max_wakeup_lateness).count()
+            << ", deadline_late_us(max)="
+            << std::chrono::duration<double, std::micro>(
+                   timing.max_deadline_lateness).count()
+            << ", execution_us(max)="
+            << std::chrono::duration<double, std::micro>(
+                   timing.max_execution_time).count()
+            << ", missed_deadlines=" << timing.missed_deadlines
+            << ", skipped_periods=" << timing.skipped_periods;
+    std::cout << message.str() << std::endl;
+}
+
 LWSendResult RL_Real::disable_lw_robot(bool latch_commands)
 {
     LowCmd cmd = {0};
@@ -348,6 +537,34 @@ void RL_Real::HandleLoopError(const std::string& loop_name, std::exception_ptr e
 
     EnterFailSafe(
         "[Loop] Fatal callback exception - name: " + loop_name + ", error: " + message);
+}
+
+void RL_Real::HandleLoopTiming(
+    const std::string& loop_name,
+    LoopTimingLevel level,
+    const LoopTimingSnapshot& timing) noexcept
+{
+    if (loop_name != "loop_control")
+    {
+        return;
+    }
+
+    if (level == LoopTimingLevel::Degraded)
+    {
+        control_timing_degraded_latched_.store(
+            true, std::memory_order_release);
+        return;
+    }
+
+    if (level == LoopTimingLevel::Fatal)
+    {
+        control_timing_degraded_latched_.store(
+            true, std::memory_order_release);
+        EnterFailSafe(
+            "[Timing] Fatal control-loop timing fault after "
+            + std::to_string(timing.missed_deadlines)
+            + " missed deadlines; hard-disable threshold was explicitly enabled");
+    }
 }
 
 void RL_Real::SendEmergencyDisableBurst() noexcept
@@ -534,6 +751,12 @@ void RL_Real::RobotControl()
     auto t_start = std::chrono::high_resolution_clock::now();
 #endif
     ApplyPendingInput();
+    if (control_timing_degraded_latched_.load(std::memory_order_acquire))
+    {
+        this->control.x = 0.0f;
+        this->control.y = 0.0f;
+        this->control.yaw = 0.0f;
+    }
     ApplyJoystickFaultGate();
     this->GetState(&this->robot_state);
     if (fatal_error_latched_.load(std::memory_order_acquire))
@@ -567,6 +790,12 @@ void RL_Real::RobotControl()
 #endif
 
     this->StateController(&this->robot_state, &this->robot_command);
+    if (control_timing_degraded_latched_.load(std::memory_order_acquire))
+    {
+        this->control.x = 0.0f;
+        this->control.y = 0.0f;
+        this->control.yaw = 0.0f;
+    }
     policy_input_snapshot_.publish(
         {this->robot_state,
          {this->control.x,
