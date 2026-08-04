@@ -39,6 +39,7 @@ cleanup()
 trap cleanup EXIT
 
 git -C "$repository_root" worktree add --detach "$source_tree" "$source_commit"
+git -C "$source_tree" submodule update --init --recursive
 if [[ -n $(git -C "$source_tree" status --porcelain --untracked-files=all) ]]; then
     echo "Temporary source worktree is not clean" >&2
     exit 1
