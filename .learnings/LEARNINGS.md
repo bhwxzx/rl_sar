@@ -244,3 +244,43 @@ LW 发布流程必须把 Sim2Sim 行为验证明确放在开发机，部署机�
 - **Notes**: 中文部署文档已增加开发机 `rl_sim_LW` 构建、启动和行为检查步骤，并明确部署机的只读验收不能代替 Sim2Sim，部署机只进行部署验收和实机实验。
 
 ---
+
+## [LRN-20260804-002] correction
+
+**Logged**: 2026-08-04T16:47:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: config
+
+### Summary
+`src/rl_sar_zoo/` 必须纳入 LW-only 清理和版本跟踪范围，不能继续作为外部未跟踪用户目录排除。
+
+### Details
+先前的 LW-015 方案把 `src/rl_sar_zoo/` 视为清理范围之外的用户资产，用户
+明确纠正为：同样删除其中的非 LW 机器人描述，并将保留的 LW 仿真资源纳入
+版本跟踪。当前目录是约 588 MB 的嵌套 Git 仓库，LW 的三个 MJCF 文件已有
+本地修改，另有未跟踪 terrain 资源。直接从根仓库执行普通 `git add` 可能只
+形成不完整的嵌套仓库引用，因此实施前必须盘点并批准正式集成策略，同时保留
+所有当前 LW 修改。
+
+### Suggested Action
+在 LW-015 中纳入 zoo 清理、LW 资源保留、来源/许可证和可复现获取要求；
+删除前明确选择清理后内置到根仓库或配置为正式固定版本子模块，并逐项核对
+当前 LW 修改和新增资源，禁止静默丢弃。
+
+### Metadata
+- Source: user_feedback
+- Related Files: .learnings/LW_REAL_DEPLOYMENT_ISSUES.md, src/rl_sar_zoo/
+- Tags: LW, robot-description, nested-git, tracking, cleanup, sim2sim
+- See Also: LRN-20260804-001
+- Pattern-Key: workflow.lw_zoo_tracking_scope
+- Recurrence-Count: 1
+- First-Seen: 2026-08-04
+- Last-Seen: 2026-08-04
+
+### Resolution
+- **Resolved**: 2026-08-04T16:49:00+08:00
+- **Commit/PR**: N/A（随本次范围记录提交）
+- **Notes**: LW-015 已将整个 zoo 纳入盘点、非 LW 描述清理和可复现版本跟踪范围，并要求保留当前 LW MJCF/terrain 修改、上游来源及许可证；实际暂未删除或暂存文件。
+
+---

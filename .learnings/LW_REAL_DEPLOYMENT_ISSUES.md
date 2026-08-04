@@ -37,6 +37,17 @@ This file is the authoritative remediation order for the LW real-robot deploymen
   - `wheel_to_leg/policy.onnx` was untracked.
   - The installed `rl_real_LW` target resolved to a binary built on 2026-07-10, older than the current source change from 2026-07-23.
 
+## Reprioritization Note
+
+- Updated: 2026-08-04
+- The current product scope is LW-only, while the repository should retain a
+  clear, documented extension boundary for adding other robots later.
+- Remaining work is ordered by real-robot safety impact first, transition-data
+  correctness second, repository-scope cleanup third, and optional debug
+  behavior last.
+- Existing issue IDs remain stable; only the authoritative execution order and
+  risk-based priorities changed.
+
 ## Ordered Summary
 
 | Order | ID | Priority | Status | Summary |
@@ -51,10 +62,11 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 8 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
 | 9 | LW-009 | P1 / high | resolved | Use the configured 60 Hz wheel-to-leg reference rate |
 | 10 | LW-010 | P1 / high | resolved | Make deployed binary, configuration, and models reproducible |
-| 11 | LW-011 | P2 / medium | pending | Make the control loop suitable for deterministic real-time execution |
-| 12 | LW-012 | P2 / medium | pending | Harden motion loading and correct its time convention |
-| 13 | LW-013 | P2 / medium | pending | Validate YAML, mappings, observation sizes, and model outputs |
-| 14 | LW-014 | P2 / low | pending | Isolate and correct production debug/plot publishing |
+| 11 | LW-013 | P1 / high | pending | Validate YAML, mappings, observation sizes, and model outputs |
+| 12 | LW-011 | P1 / high | pending | Make the control loop suitable for deterministic real-time execution |
+| 13 | LW-012 | P2 / medium | pending | Harden motion loading and correct its time convention |
+| 14 | LW-015 | P2 / medium | pending | Remove non-LW robot implementations while preserving future extension points |
+| 15 | LW-014 | P2 / low | pending | Isolate and correct production debug/plot publishing |
 
 ---
 
@@ -740,27 +752,66 @@ The installed launcher currently resolves to an executable older than the source
 
 ---
 
+## [LW-013] Configuration and dimension validation
+
+**Priority**: P1 / high
+**Status**: pending
+**Dependencies**: LW-005, LW-010
+
+### Problem
+
+The control path assumes every YAML vector has the correct length and every mapping/index is valid. Model input/output sizes are not explicitly checked against configuration before control starts. `InitObservations()` also initializes a `w,x,y,z` quaternion as `{0,0,0,1}` rather than the identity `{1,0,0,0}`.
+
+### Evidence
+
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:221-235`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:317-375`
+- `src/rl_sar/src/rl_real_LW.cpp:127-203`
+- `src/rl_sar/src/rl_real_LW.cpp:447-479`
+- `policy/LW/base.yaml`
+- `policy/LW/robot_lab/*/config.yaml`
+
+### Intended Scope
+
+- Validate required keys, vector lengths, mapping uniqueness, index ranges, positive timing values, and finite limits.
+- Verify ONNX input/output shapes against computed observation/action dimensions.
+- Correct the quaternion identity initialization.
+
+### Acceptance Criteria
+
+- Invalid configuration fails before serial command loops start.
+- Every current LW configuration passes a standalone validation test.
+- Model dimension mismatches produce a clear startup error.
+
+---
+
 ## [LW-011] Deterministic control-loop timing
 
-**Priority**: P2 / medium
+**Priority**: P1 / high
 **Status**: pending
 **Dependencies**: LW-001, LW-007
 
 ### Problem
 
-The project defaults to a Debug build, loop timing truncates execution duration to integer milliseconds and uses relative sleeps, callbacks run without real-time scheduling, and progress output performs terminal IO and flushes inside the 200 Hz control path. Production plotting is enabled by default.
+LW-010 now guarantees a Release production bundle, but loop timing still
+truncates callback duration to integer milliseconds and uses relative sleeps.
+Callbacks run without a defined real-time scheduling policy, missed deadlines
+are not measured or handled, and locomotion/transition status performs terminal
+IO and flushes inside the 200 Hz control path.
 
 ### Evidence
 
 - `src/rl_sar/CMakeLists.txt:34-40`
-- `src/rl_sar/library/core/loop/loop.hpp:73-101`
+- `src/rl_sar/library/core/loop/loop.hpp:105-135`
 - `src/rl_sar/library/core/logger/logger.hpp:47-92`
-- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:635-690`
-- `src/rl_sar/include/rl_real_LW.hpp:4-7`
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:291-295`
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:371-375`
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:464-482`
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:570-588`
 
 ### Intended Scope
 
-- Use an explicit Release/RelWithDebInfo production profile.
+- Preserve the LW-010 Release production-build guarantee.
 - Schedule against absolute deadlines with high-resolution durations.
 - Define overrun detection and a safe overrun policy.
 - Move terminal IO and progress formatting out of the control thread.
@@ -804,36 +855,91 @@ Motion duration is calculated as `num_frames * dt` even though the interval from
 
 ---
 
-## [LW-013] Configuration and dimension validation
+## [LW-015] LW-only repository scope and future robot extension boundary
 
 **Priority**: P2 / medium
 **Status**: pending
-**Dependencies**: LW-005, LW-010
+**Dependencies**: LW-010
 
 ### Problem
 
-The control path assumes every YAML vector has the correct length and every mapping/index is valid. Model input/output sizes are not explicitly checked against configuration before control starts. `InitObservations()` also initializes a `w,x,y,z` quaternion as `{0,0,0,1}` rather than the identity `{1,0,0,0}`.
+The current repository still carries production policies for eleven non-LW
+robots, eleven non-LW FSM headers, five non-LW real-robot entry points, and
+multiple vendor SDKs/submodules. Several non-LW SDKs are configured by CMake
+even though their executable targets are disabled. This increases dependency,
+build, review, and maintenance surface for an LW-only product.
+`src/rl_sar_zoo/` is also an approximately 588 MB nested Git repository with
+LW plus eleven non-LW robot-description directories. Its LW MJCF/terrain
+content has local changes required by the current Sim2Sim workflow but is not
+tracked by the parent repository. Blind deletion or naive parent-repository
+staging could lose those changes, record an unusable embedded repository, or
+remove generic simulation/core facilities needed for future robot additions.
 
 ### Evidence
 
-- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:221-235`
-- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:317-375`
-- `src/rl_sar/src/rl_real_LW.cpp:127-203`
-- `src/rl_sar/src/rl_real_LW.cpp:447-479`
-- `policy/LW/base.yaml`
-- `policy/LW/robot_lab/*/config.yaml`
+- `policy/{a1,b2,b2w,g1,go2,go2w,gr1t1,gr1t2,l4w4,lite3,tita}/`
+- `src/rl_sar/fsm_robot/fsm_*.hpp`
+- `src/rl_sar/src/rl_real_{a1,g1,go2,l4w4,lite3}.cpp`
+- `src/rl_sar/library/thirdparty/robot_sdk/{unitree,deeprobotics,zhinao}/`
+- `.gitmodules`
+- `src/rl_sar/CMakeLists.txt:355-422`
+- `README.md` and `README_CN.md`
+- `scripts/download_robot_descriptions.sh`
+- `src/rl_sar_zoo/`, including its nested Git metadata and LW local changes
 
 ### Intended Scope
 
-- Validate required keys, vector lengths, mapping uniqueness, index ranges, positive timing values, and finite limits.
-- Verify ONNX input/output shapes against computed observation/action dimensions.
-- Correct the quaternion identity initialization.
+- Produce an explicit tracked inventory that classifies robot-related paths as
+  remove, retain as shared infrastructure, retain for LW, or external/user-owned.
+- Remove tracked non-LW policies, FSM implementations, real-robot entry points,
+  vendor SDKs/submodules, inactive CMake targets, and obsolete build/download
+  and documentation references.
+- Retain the LW policy/FSM/SDK, generic RL runtime, loop and inference
+  infrastructure, FSM factory/registration mechanism, and generic simulation
+  facilities needed for future robot integration.
+- Reduce `fsm_all.hpp` to current LW registration while keeping a clear,
+  documented extension point for registering another robot later.
+- Include `src/rl_sar_zoo/` in the approved inventory. Preserve its current
+  `LW_description` MJCF changes and new terrain assets, remove non-LW robot
+  descriptions, and remove unrelated editor/download artifacts that are not
+  part of the approved LW simulation input.
+- Select and document one valid parent-repository integration strategy before
+  staging the zoo: either vendor the cleaned LW description as ordinary tracked
+  files with nested Git metadata removed, or configure a proper pinned
+  submodule whose committed revision contains the approved LW changes. Do not
+  create an unmanaged embedded-repository gitlink.
+- Preserve upstream provenance and applicable license/version information for
+  retained LW description assets.
+- Keep current LW Sim2Sim and production-deployment workflows functional.
+- Update `scripts/download_robot_descriptions.sh` and build behavior so a clean
+  checkout obtains exactly the tracked/pinned LW description without silently
+  downloading the former multi-robot zoo.
+- Update the main documentation to describe LW as the current supported robot
+  while retaining a concise guide for adding a future robot.
+- Do not combine generic-core redesign or LW runtime behavior changes with this
+  repository-scope cleanup.
 
 ### Acceptance Criteria
 
-- Invalid configuration fails before serial command loops start.
-- Every current LW configuration passes a standalone validation test.
-- Model dimension mismatches produce a clear startup error.
+- An approved pre-deletion inventory identifies every tracked path and
+  submodule to remove or retain, including every top-level zoo entry and every
+  currently modified/untracked LW zoo asset.
+- No active build/runtime reference to a removed robot or vendor SDK remains,
+  except explicit historical/license text or future-extension documentation.
+- A clean parent-repository checkout reproduces the approved
+  `src/rl_sar_zoo/LW_description` without an unmanaged nested Git repository,
+  manual download, or missing local MJCF/terrain changes.
+- No non-LW robot-description directory remains in `src/rl_sar_zoo/`.
+- A clean ROS 2 development build produces `rl_sim_LW`, and the LW Sim2Sim
+  startup path remains available.
+- A clean production build produces `rl_real_LW`; the deployment manifest and
+  `--verify-deployment-only` acceptance pass.
+- All existing LW unit/regression tests pass after the removal.
+- The documentation identifies the bounded files/interfaces needed to add a
+  future robot without restoring unrelated legacy implementations.
+- The unrelated user-owned `.agents/skills/inspect-context-compactions/`
+  directory remains unchanged and absent from the cleanup commit; all approved
+  LW zoo files are intentionally tracked or pinned rather than silently omitted.
 
 ---
 
@@ -845,19 +951,26 @@ The control path assumes every YAML vector has the correct length and every mapp
 
 ### Problem
 
-Plot publishing is enabled at compile time for production, reads shared control and robot data without a coherent snapshot, and initializes the message timestamp only once rather than on each publication.
+Plot publishing is unconditionally enabled at compile time for production and
+creates a 250 Hz ROS timer/publisher even when debug output is not wanted.
+LW-007 already made its data source coherent and publication nonblocking, but
+the message timestamp is still initialized only once instead of being refreshed
+for each sample.
 
 ### Evidence
 
-- `src/rl_sar/include/rl_real_LW.hpp:4-7`
-- `src/rl_sar/src/rl_real_LW.cpp:62-110`
-- `src/rl_sar/src/rl_real_LW.cpp:127-203`
+- `src/rl_sar/include/rl_real_LW.hpp:4`
+- `src/rl_sar/src/rl_real_LW.cpp:129-178`
+- `src/rl_sar/src/rl_real_LW.cpp:218-309`
 
 ### Intended Scope
 
 - Make plotting opt-in through a build or runtime setting.
-- Publish from a coherent nonblocking snapshot.
+- Preserve the coherent snapshot and nonblocking real-time publisher introduced
+  by LW-007.
 - Refresh timestamps on every message.
+- Avoid constructing the plot publisher/timer in production when plotting is
+  disabled.
 
 ### Acceptance Criteria
 
