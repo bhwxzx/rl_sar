@@ -116,6 +116,9 @@ sudo apt install ros-$ROS_DISTRO-teleop-twist-keyboard ros-$ROS_DISTRO-ros2-cont
 ./build.sh -m  # or ./build.sh --cmake
 ```
 
+> [!NOTE]
+> LW 实机正式部署请使用独立的干净工作树构建、部署清单和只读验收流程，详见 [LW 编译与部署使用说明](docs/LW_BUILD_DEPLOYMENT_CN.md)。
+
 若想使用Mujoco仿真器
 
 ```bash
