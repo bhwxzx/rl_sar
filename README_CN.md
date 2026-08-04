@@ -117,7 +117,7 @@ sudo apt install ros-$ROS_DISTRO-teleop-twist-keyboard ros-$ROS_DISTRO-ros2-cont
 ```
 
 > [!NOTE]
-> LW 实机正式部署请使用独立的干净工作树构建、部署清单和只读验收流程，详见 [LW 编译与部署使用说明](docs/LW_BUILD_DEPLOYMENT_CN.md)。
+> LW 发布时，应先在开发机完成 Sim2Sim 验证并提交确认版本，再由部署机在自己的 `rl_sar` 项目中完成干净构建、离线验收和实机实验。具体步骤见 [LW 编译与部署使用说明](docs/LW_BUILD_DEPLOYMENT_CN.md)。
 
 若想使用Mujoco仿真器
 

@@ -207,3 +207,40 @@ VS Code；若扩展运行在 Remote SSH 端，还应终止远端 VS Code Server 
 - **Notes**: 计数与隐私校验职责已晋升到 `inspect-context-compactions` 技能；项目交接规则改为使用其结构化结果。
 
 ---
+
+## [LRN-20260804-001] correction
+
+**Logged**: 2026-08-04T16:18:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: docs
+
+### Summary
+LW 发布流程必须把 Sim2Sim 行为验证明确放在开发机，部署机只进行部署验收和实机实验。
+
+### Details
+先前的编译部署文档只把开发机描述为修改、测试和提交，没有明确要求在开发机
+构建并运行 `rl_sim_LW` 完成 Sim2Sim 验证，容易让读者误以为部署机的
+`--verify-deployment-only` 可以覆盖仿真验证。正确职责是：开发机完成代码、
+模型和配置修改以及 Sim2Sim 行为验证；验证通过的 Git 提交再交给部署机；
+部署机从该提交生成正式部署版本，完成清单和动态库检查后才进行实机实验。
+
+### Suggested Action
+在 LW 编译部署文档中把开发机 Sim2Sim 设为正式交付前置门槛，给出构建、
+启动和检查步骤；明确部署机只读验收只验证发布物完整性，不能代替策略行为验证。
+
+### Metadata
+- Source: user_feedback
+- Related Files: docs/LW_BUILD_DEPLOYMENT_CN.md, README_CN.md
+- Tags: LW, sim2sim, deployment, real-robot, release-gate, documentation
+- Pattern-Key: workflow.lw_dev_sim2sim_deploy_real
+- Recurrence-Count: 1
+- First-Seen: 2026-08-04
+- Last-Seen: 2026-08-04
+
+### Resolution
+- **Resolved**: 2026-08-04T16:21:00+08:00
+- **Commit/PR**: 本次文档提交
+- **Notes**: 中文部署文档已增加开发机 `rl_sim_LW` 构建、启动和行为检查步骤，并明确部署机的只读验收不能代替 Sim2Sim，部署机只进行部署验收和实机实验。
+
+---
