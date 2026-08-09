@@ -417,8 +417,16 @@ public:
             std::string motion_file_path = this->rl.ResolvePolicyPath(
                 robot_config_path + "/"
                 + policy_params.Get<std::string>("motion_file"));
-            float fps = GetLWMotionSourceFPS(policy_params);
-            rl.motion_loader_lw = std::make_unique<MotionLoaderLW>(motion_file_path, fps);
+            const float fps = GetLWMotionSourceFPS(policy_params);
+            const int time_offset_frames =
+                policy_params.Get<int>("motion_time_offset_frames");
+            const std::size_t num_dofs = static_cast<std::size_t>(
+                policy_params.Get<int>("num_of_dofs"));
+            rl.motion_loader_lw = std::make_unique<MotionLoaderLW>(
+                motion_file_path,
+                fps,
+                time_offset_frames,
+                num_dofs);
             rl.motion_length = rl.motion_loader_lw->GetDuration();
 
             rl.motion_loader_lw->Reset(fsm_state->imu.quaternion);
@@ -469,7 +477,7 @@ public:
 
         RLControlLW();
 
-        if (motion_time / rl.motion_length == 1)
+        if (motion_time >= rl.motion_length)
         {
             rl.fsm.RequestStateChange("RLFSMStateRLLocomotion_Wheel");
         }
@@ -521,8 +529,16 @@ public:
             std::string motion_file_path = this->rl.ResolvePolicyPath(
                 robot_config_path + "/"
                 + policy_params.Get<std::string>("motion_file"));
-            float fps = GetLWMotionSourceFPS(policy_params);
-            rl.motion_loader_lw = std::make_unique<MotionLoaderLW>(motion_file_path, fps);
+            const float fps = GetLWMotionSourceFPS(policy_params);
+            const int time_offset_frames =
+                policy_params.Get<int>("motion_time_offset_frames");
+            const std::size_t num_dofs = static_cast<std::size_t>(
+                policy_params.Get<int>("num_of_dofs"));
+            rl.motion_loader_lw = std::make_unique<MotionLoaderLW>(
+                motion_file_path,
+                fps,
+                time_offset_frames,
+                num_dofs);
             rl.motion_length = rl.motion_loader_lw->GetDuration();
 
             rl.motion_loader_lw->Reset(fsm_state->imu.quaternion);
@@ -573,7 +589,7 @@ public:
 
         RLControlLW();
 
-        if (motion_time / rl.motion_length == 1)
+        if (motion_time >= rl.motion_length)
         {
             rl.fsm.RequestStateChange("RLFSMStateRLLocomotion_Leg");
         }

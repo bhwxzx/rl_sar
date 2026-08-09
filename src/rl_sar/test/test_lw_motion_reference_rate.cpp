@@ -82,10 +82,15 @@ void verifyMotion(
     policy_params.config_node = config;
     const float source_fps =
         LW_fsm::GetLWMotionSourceFPS(policy_params);
+    const int time_offset_frames =
+        policy_params.Get<int>("motion_time_offset_frames");
     requireNear(
         source_fps,
         60.0f,
         policy_name + " did not use the configured source rate");
+    require(
+        time_offset_frames == 1,
+        policy_name + " did not record the removed t=0 source frame");
 
     const std::string motion_path =
         policy_path + "/"
@@ -108,10 +113,16 @@ void verifyMotion(
             policy_name + " has inconsistent CSV row widths");
     }
 
-    MotionLoaderLW loader(motion_path, source_fps);
+    MotionLoaderLW loader(
+        motion_path,
+        source_fps,
+        time_offset_frames,
+        columns - 7);
     requireNear(
         loader.GetDuration(),
-        static_cast<float>(rows.size()) / source_fps,
+        static_cast<float>(
+            time_offset_frames + rows.size() - 1)
+            / source_fps,
         policy_name + " duration does not match its source rate");
 
     loader.Update(0.0f);
@@ -137,26 +148,41 @@ void verifyMotion(
             policy_name + " velocity does not use 60 Hz");
     }
 
-    loader.Update(loader.GetDuration() * 0.5f);
+    loader.Update(
+        static_cast<float>(time_offset_frames) / source_fps);
+    require(
+        loader.GetJointPos() == start_position,
+        policy_name + " did not hold its first row before its source time");
+
+    const size_t intermediate_index = rows.size() / 2;
+    loader.Update(
+        static_cast<float>(
+            time_offset_frames + intermediate_index)
+            / source_fps);
+    const auto intermediate_position = loader.GetJointPos();
+    for (size_t joint = 0;
+         joint < intermediate_position.size();
+         ++joint)
+    {
+        requireNear(
+            intermediate_position[joint],
+            rows[intermediate_index][joint + 7],
+            policy_name + " source timestamp does not select its exact row");
+    }
+
+    loader.Update(
+        (static_cast<float>(
+             time_offset_frames + intermediate_index)
+         + 0.5f)
+        / source_fps);
     const auto midpoint_position = loader.GetJointPos();
-    const float midpoint_frame =
-        0.5f * static_cast<float>(rows.size() - 1);
-    const size_t midpoint_index_0 =
-        static_cast<size_t>(std::floor(midpoint_frame));
-    const size_t midpoint_index_1 =
-        std::min(midpoint_index_0 + 1, rows.size() - 1);
-    const float midpoint_blend =
-        midpoint_frame
-        - static_cast<float>(midpoint_index_0);
     for (size_t joint = 0;
          joint < midpoint_position.size();
          ++joint)
     {
         const float expected =
-            rows[midpoint_index_0][joint + 7]
-                * (1.0f - midpoint_blend)
-            + rows[midpoint_index_1][joint + 7]
-                * midpoint_blend;
+            0.5f * rows[intermediate_index][joint + 7]
+            + 0.5f * rows[intermediate_index + 1][joint + 7];
         requireNear(
             midpoint_position[joint],
             expected,

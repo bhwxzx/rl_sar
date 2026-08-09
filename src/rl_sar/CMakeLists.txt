@@ -607,6 +607,17 @@ if(BUILD_TESTING)
         COMMAND test_lw_motion_reference_rate
     )
 
+    add_executable(test_lw_motion_loader
+        test/test_lw_motion_loader.cpp
+    )
+    target_link_libraries(test_lw_motion_loader PRIVATE
+        motion_loader_lw
+    )
+    add_test(
+        NAME lw_motion_loader
+        COMMAND test_lw_motion_loader
+    )
+
     add_executable(test_lw_configuration_validation
         test/test_lw_configuration_validation.cpp
     )

@@ -358,3 +358,43 @@ CPU 编号与实时优先级，解释 `-1`、`0`、`false` 等特殊值，说明
 - **Notes**: `base.yaml` 已逐项说明 CPU 绑定、实时调度回退、计数与时间单位、阈值“或”关系、锁存清除方式以及致命时序动作，未改变任何参数值或控制逻辑。
 
 ---
+
+## [LRN-20260809-002] correction
+
+**Logged**: 2026-08-09T15:23:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: docs
+
+### Summary
+讨论离散动作时间轴时必须区分“第几帧”的自然编号与相对起始时间，不能用“第 0 帧”混淆两者。
+
+### Details
+在 LW-012 方案中使用“第 0 帧发生在 0 秒”的表述，用户指出动作数据只有第 1
+帧、第 2 帧等自然编号。真正需要决定的是：第 1 帧相对动作激活时刻是位于
+`t=0`，还是位于 `t=1/fps`；若选择后者，还必须定义 `[0, 1/fps]` 内控制器
+输出什么参考。用户随后提供了实际 CSV 生成代码：目标时间轴从 `t=0` 开始，
+但导出前执行 `csv_data[1:-1]` 删除绝对起点和终点。因此当前 CSV 第一行确实
+对应原轨迹的 `t=1/fps`，第 N 行对应 `t=N/fps`；数组下标从 0 开始不能替代
+这一生成端时间语义。
+
+### Suggested Action
+LW-012 应记录生成端契约并保留 `duration=N/fps`；运行时明确首帧前区间的参考，
+从 `t=1/fps` 起按 `frame=t*fps-1` 对齐 60 Hz 样本，再统一速度、FSM 完成判断
+和测试。
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/rl_sar/library/core/motion_loader/motion_loader_lw.cpp, .learnings/LW_REAL_DEPLOYMENT_ISSUES.md
+- Tags: LW, motion, frame-index, timestamp, terminology
+- Pattern-Key: docs.motion_frame_number_vs_timestamp
+- Recurrence-Count: 1
+- First-Seen: 2026-08-09
+- Last-Seen: 2026-08-09
+
+### Resolution
+- **Resolved**: 2026-08-09T15:53:18+08:00
+- **Commit/PR**: 本提交（基线 `6853b6c`）
+- **Notes**: LW-012 现以 `motion_time_offset_frames` 明确区分自然帧编号、数组下标和相对动作时间；当前 CSV 配置为偏移 1，首个样本前保持第一行，并通过偏移 0/1、时间边界、插值、速度及错误输入测试。
+
+---

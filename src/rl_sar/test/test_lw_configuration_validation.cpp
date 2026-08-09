@@ -275,6 +275,32 @@ void testInvalidPolicyConfigurationIsRejected()
                 base, duplicate_history, "history-policy");
         },
         "duplicate index 1");
+
+    const fs::path motion_config_path =
+        policy_root / "LW/robot_lab/leg_to_wheel/config.yaml";
+    const YAML::Node motion_original = loadConfig(
+        motion_config_path, "LW/robot_lab/leg_to_wheel");
+    YAML::Node missing_time_offset = YAML::Clone(motion_original);
+    missing_time_offset.remove("motion_time_offset_frames");
+    requireFailure(
+        [&]() {
+            ValidateLWPolicyConfiguration(
+                base,
+                missing_time_offset,
+                "missing-motion-time-offset");
+        },
+        "missing required key 'motion_time_offset_frames'");
+
+    YAML::Node negative_time_offset = YAML::Clone(motion_original);
+    negative_time_offset["motion_time_offset_frames"] = -1;
+    requireFailure(
+        [&]() {
+            ValidateLWPolicyConfiguration(
+                base,
+                negative_time_offset,
+                "negative-motion-time-offset");
+        },
+        "motion_time_offset_frames' must be nonnegative");
 }
 
 void testModelDimensionMismatchIsRejected()

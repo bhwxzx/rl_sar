@@ -63,3 +63,5 @@ LW/robot_lab/wheel_to_leg:
   gait_command: [1.25, 0.5, 0.5]
   vel_command: [0.7, 0.0, 0.5]
   motion_fps: 60.0
+  # CSV 第一行对应原轨迹第 1 个 60 Hz 周期；以后保留 t=0 首帧时改为 0。
+  motion_time_offset_frames: 1

@@ -70,7 +70,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 11 | LW-016 | P1 / high | resolved | Audit every safety trigger for proportional and recoverable behavior |
 | 12 | LW-013 | P1 / high | resolved | Validate YAML, mappings, observation sizes, and model outputs |
 | 13 | LW-011 | P1 / high | resolved | Make the control loop suitable for deterministic real-time execution |
-| 14 | LW-012 | P2 / medium | pending | Harden motion loading and correct its time convention |
+| 14 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
 | 15 | LW-015 | P2 / medium | pending | Remove non-LW robot implementations while preserving future extension points |
 | 16 | LW-014 | P2 / low | pending | Isolate and correct production debug/plot publishing |
 
@@ -1056,7 +1056,7 @@ IO and flushes inside the 200 Hz control path.
 ## [LW-012] Motion-loader robustness and time convention
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-009
 
 ### Problem
@@ -1080,6 +1080,40 @@ Motion duration is calculated as `num_frames * dt` even though the interval from
 - Duration tests cover 0, 1, 2, and many frames.
 - Malformed CSV input fails before any indexed access.
 - First, intermediate, and final timestamp interpolation is verified.
+
+### Resolution Evidence
+
+- Resolved: 2026-08-09T15:53:18+08:00
+- Commit: 本提交（基线 `6853b6c`）
+- The loader now uses an explicit nonnegative `motion_time_offset_frames`
+  contract. CSV row `i` is sampled at
+  `(motion_time_offset_frames + i) / motion_fps`; both current transition
+  configurations set the offset to `1` because their exporter removes the
+  original `t=0` row. Future CSV files that retain that row can select offset
+  `0` without another loader change.
+- Times before the first retained sample hold the first row, times after the
+  last sample hold the last row, and interpolation and forward-difference
+  velocities use the configured motion rate. FSM completion now uses
+  `motion_time >= motion_length`.
+- Startup validation rejects invalid FPS/offset/joint-count parameters, empty
+  or one-row files, blank or malformed fields, non-finite values, inconsistent
+  row widths, unexpected joint counts, and invalid quaternions. Loaded
+  quaternions are normalized and velocity storage is preallocated.
+- `test_lw_motion_loader` covers offset `0` and `1`, duration, first/exact/
+  intermediate/final timestamps, boundary holding, velocities, quaternion
+  normalization, and malformed inputs. The reference-rate and configuration
+  tests cover both formal 60 Hz CSV/configuration pairs and the new field.
+- The targeted CTest selection passed 3/3 in the existing build. The complete
+  existing suite passed 15/15.
+- Fresh Debug and Release configurations in `build/lw012_debug_clean` and
+  `build/lw012_release_clean` each built `test_lw_motion_loader`,
+  `test_lw_motion_reference_rate`, `test_lw_configuration_validation`,
+  `rl_real_LW`, and `rl_sim_LW`; the three selected tests passed 3/3 in each
+  configuration.
+- `git diff --check` passed. Targeted `cppcheck` reported no correctness
+  warning and one non-blocking test-fixture initialization-list performance
+  suggestion.
+- No serial device, simulator UI, or real robot was started.
 
 ---
 

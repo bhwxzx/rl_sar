@@ -2,15 +2,11 @@
 #ifndef MOTION_LOADER_LW_HPP
 #define MOTION_LOADER_LW_HPP
 
-#include <vector>
+#include <cstddef>
 #include <string>
-#include <fstream>
-#include <sstream>
-#include <iostream>
-#include <cmath>
-#include <algorithm>
+#include <vector>
+
 #include "vector_math.hpp"
-#include "../logger/logger.hpp"
 
 /**
  * @brief Motion data loader for mimic/dance tasks
@@ -29,8 +25,14 @@ public:
      * @brief Constructor
      * @param motion_file Path to CSV motion file
      * @param fps Frames per second of the motion data
+     * @param time_offset_frames Source-frame index represented by the first CSV row
+     * @param expected_num_joints Required number of joint columns
      */
-    MotionLoaderLW(const std::string& motion_file, float fps);
+    MotionLoaderLW(
+        const std::string& motion_file,
+        float fps,
+        int time_offset_frames,
+        std::size_t expected_num_joints);
 
     /**
      * @brief Update motion to a specific time
@@ -121,14 +123,15 @@ private:
     std::vector<std::vector<float>> joint_velocities_;   // [T, N]
 
     // Motion properties
-    int num_frames_;
-    int num_joints_;
+    std::size_t num_frames_;
+    std::size_t num_joints_;
+    int time_offset_frames_;
     float dt_;           // Time between frames
     float duration_;     // Total duration
 
     // Current interpolation state
-    int index_0_;        // Current frame index
-    int index_1_;        // Next frame index
+    std::size_t index_0_; // Current frame index
+    std::size_t index_1_; // Next frame index
     float blend_;        // Interpolation factor [0, 1]
 
     // Coordinate transformation

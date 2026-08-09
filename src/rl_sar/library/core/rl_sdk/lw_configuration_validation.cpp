@@ -595,6 +595,14 @@ LWValidatedPolicyConfiguration ValidateLWPolicyConfiguration(
             fail(source, "key 'motion_file' must not be empty");
         }
         requirePositiveFinite(policy_config, "motion_fps", source);
+        const int time_offset_frames = requireValue<int>(
+            policy_config, "motion_time_offset_frames", source);
+        if (time_offset_frames < 0)
+        {
+            fail(
+                source,
+                "key 'motion_time_offset_frames' must be nonnegative");
+        }
     }
 
     const std::size_t history_frames = history.empty() ? 1 : history.size();
