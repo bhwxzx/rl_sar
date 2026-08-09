@@ -481,6 +481,14 @@ add_library(motion_loader library/core/motion_loader/motion_loader.cpp)
 add_library(motion_loader_lw library/core/motion_loader/motion_loader_lw.cpp)
 
 # library for rl sdk
+add_library(
+    lw_configuration_validation
+    library/core/rl_sdk/lw_configuration_validation.cpp
+)
+target_link_libraries(lw_configuration_validation PUBLIC
+    inference_runtime
+    ${YAML_CPP_LIBRARIES}
+)
 add_library(rl_sdk library/core/rl_sdk/rl_sdk.cpp)
 add_library(
     rl_sdk_lw_deployment
@@ -495,6 +503,7 @@ foreach(RL_SDK_TARGET rl_sdk rl_sdk_lw_deployment)
         motion_loader
         motion_loader_lw
         inference_runtime
+        lw_configuration_validation
         Python3::Python
         Python3::Module
         TBB::tbb
@@ -550,6 +559,14 @@ if(BUILD_TESTING)
     )
     add_test(NAME lw_control_safety COMMAND test_lw_control_safety)
 
+    add_executable(test_lw_safety_policy
+        test/test_lw_safety_policy.cpp
+    )
+    target_include_directories(test_lw_safety_policy PRIVATE
+        library/core/safety
+    )
+    add_test(NAME lw_safety_policy COMMAND test_lw_safety_policy)
+
     add_executable(test_lw_joystick_safety
         test/test_lw_joystick_safety.cpp
     )
@@ -588,6 +605,19 @@ if(BUILD_TESTING)
     add_test(
         NAME lw_motion_reference_rate
         COMMAND test_lw_motion_reference_rate
+    )
+
+    add_executable(test_lw_configuration_validation
+        test/test_lw_configuration_validation.cpp
+    )
+    target_link_libraries(test_lw_configuration_validation PRIVATE
+        rl_sdk
+        observation_buffer
+        ${YAML_CPP_LIBRARIES}
+    )
+    add_test(
+        NAME lw_configuration_validation
+        COMMAND test_lw_configuration_validation
     )
 endif()
 if(NOT USE_CMAKE)

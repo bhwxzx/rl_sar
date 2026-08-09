@@ -1,21 +1,39 @@
 LW:
   dt: 0.005
   decimation: 4
-  # Maximum age of IMU and each motor-board feedback frame before fail-safe.
+  # IMU 和每个电机板反馈帧在触发故障保护前允许的最大时效。
   sensor_timeout: 0.1
-  # Shared deadline for queuing a complete command packet to both serial ports.
+  # 将完整命令包排队写入两个串口时共用的截止时间。
   serial_write_timeout: 0.002
-  # Control-loop scheduling. CPU -1 and priority 0 keep portable SCHED_OTHER
-  # defaults; set a positive FIFO priority only after target-host validation.
+  # 控制线程绑定的逻辑 CPU：
+  # -1 表示不绑定，由操作系统调度；0、1、2... 表示绑定到对应逻辑 CPU。
+  # 指定的 CPU 不存在或绑定失败时，控制循环将无法启动。
   control_loop_cpu: -1
+
+  # Linux SCHED_FIFO 实时优先级：
+  # 0 表示不申请实时调度，使用普通 SCHED_OTHER；
+  # 正数表示申请 SCHED_FIFO，允许范围和所需权限由部署机决定。
   control_loop_realtime_priority: 0
+
+  # 是否强制要求实时调度申请成功：
+  # false：申请失败时告警并回退到 SCHED_OTHER，程序继续运行；
+  # true：申请失败时终止控制循环启动，且必须配合正数实时优先级。
   control_loop_require_realtime: false
-  # A degraded timing event latches velocity commands to zero but keeps FSM
-  # buttons active so the operator can request GetDown.
+
+  # 时序降级条件一：连续累计跳过的控制周期数。
+  # 0 表示禁用；3 表示累计跳过 3 个周期时触发。
+  # 一次严重超时可以跳过多个周期；出现未跳周期后，连续计数清零。
   control_loop_degraded_consecutive_misses: 3
+
+  # 时序降级条件二：单次截止时间晚到，单位为秒。
+  # 0 表示禁用；0.02 表示晚到达到 20 ms 时触发。
+  # 两个降级条件为“或”关系。触发后永久锁存本进程的 x/y/yaw 为 0，
+  # 但保留 FSM 按钮以便请求 GetDown；重启程序后才能清除锁存。
   control_loop_degraded_lateness: 0.02
-  # Hard motor disable is intentionally disabled until target timing and the
-  # robot's board-side watchdog behavior have been measured.
+
+  # 致命时序条件：连续跳过周期数和单次晚到秒数，任一满足即触发。
+  # 0 表示禁用对应条件；当前两项均为 0，因此时序异常不会触发致命动作。
+  # 启用后触发将关闭命令发送，约 100 ms 连续发送电机失能包，并请求 ROS 关闭。
   control_loop_fatal_consecutive_misses: 0
   control_loop_fatal_lateness: 0.0
   rl_kp: [90.0, 90.0,

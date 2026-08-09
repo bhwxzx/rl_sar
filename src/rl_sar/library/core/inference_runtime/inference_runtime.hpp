@@ -6,6 +6,7 @@
 #ifndef INFERENCE_RUNTIME_HPP
 #define INFERENCE_RUNTIME_HPP
 
+#include <cstdint>
 #include <vector>
 #include <string>
 #include <memory>
@@ -23,6 +24,19 @@
 
 namespace InferenceRuntime
 {
+
+enum class TensorElementType
+{
+    Unknown,
+    Float32,
+};
+
+struct TensorMetadata
+{
+    std::string name;
+    std::vector<int64_t> shape;
+    TensorElementType element_type = TensorElementType::Unknown;
+};
 
 /**
  * @brief Model interface base class
@@ -59,6 +73,16 @@ public:
      * @return Model type ("torch" or "onnx")
      */
     virtual std::string get_model_type() const = 0;
+
+    /**
+     * @brief Return immutable input tensor metadata when supported.
+     */
+    virtual const std::vector<TensorMetadata>& input_metadata() const;
+
+    /**
+     * @brief Return immutable output tensor metadata when supported.
+     */
+    virtual const std::vector<TensorMetadata>& output_metadata() const;
 };
 
 /**
@@ -124,6 +148,8 @@ private:
     std::vector<std::vector<int64_t>> input_shapes_;        ///< Input shapes
     std::vector<std::vector<int64_t>> output_shapes_;       ///< Output shapes
 #endif
+    std::vector<TensorMetadata> input_metadata_;
+    std::vector<TensorMetadata> output_metadata_;
 
 public:
     ONNXModel();
@@ -133,6 +159,14 @@ public:
     bool is_loaded() const override { return loaded_; }
     std::vector<float> forward(const std::vector<std::vector<float>>& inputs) override;
     std::string get_model_type() const override { return "onnx"; }
+    const std::vector<TensorMetadata>& input_metadata() const override
+    {
+        return input_metadata_;
+    }
+    const std::vector<TensorMetadata>& output_metadata() const override
+    {
+        return output_metadata_;
+    }
 
 private:
 #ifdef USE_ONNX

@@ -15,6 +15,25 @@
 namespace InferenceRuntime
 {
 
+namespace
+{
+const std::vector<TensorMetadata>& emptyTensorMetadata()
+{
+    static const std::vector<TensorMetadata> empty;
+    return empty;
+}
+} // namespace
+
+const std::vector<TensorMetadata>& Model::input_metadata() const
+{
+    return emptyTensorMetadata();
+}
+
+const std::vector<TensorMetadata>& Model::output_metadata() const
+{
+    return emptyTensorMetadata();
+}
+
 // ============================================================================
 // TorchModel Implementation
 // ============================================================================
@@ -231,6 +250,13 @@ std::vector<float> ONNXModel::forward(const std::vector<std::vector<float>>& inp
 #ifdef USE_ONNX
 void ONNXModel::setup_input_output_info()
 {
+    input_node_names_.clear();
+    output_node_names_.clear();
+    input_shapes_.clear();
+    output_shapes_.clear();
+    input_metadata_.clear();
+    output_metadata_.clear();
+
     // Get input node information
     size_t num_input_nodes = session_->GetInputCount();
     input_node_names_.reserve(num_input_nodes);
@@ -246,6 +272,14 @@ void ONNXModel::setup_input_output_info()
         Ort::TypeInfo input_type_info = session_->GetInputTypeInfo(i);
         auto input_tensor_info = input_type_info.GetTensorTypeAndShapeInfo();
         auto input_dims = input_tensor_info.GetShape();
+
+        input_metadata_.push_back(
+            {input_node_names_.back(),
+             input_dims,
+             input_tensor_info.GetElementType()
+                     == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+                 ? TensorElementType::Float32
+                 : TensorElementType::Unknown});
 
         std::vector<int64_t> shape;
         for (auto dim : input_dims)
@@ -278,6 +312,14 @@ void ONNXModel::setup_input_output_info()
         Ort::TypeInfo output_type_info = session_->GetOutputTypeInfo(i);
         auto output_tensor_info = output_type_info.GetTensorTypeAndShapeInfo();
         auto output_dims = output_tensor_info.GetShape();
+
+        output_metadata_.push_back(
+            {output_node_names_.back(),
+             output_dims,
+             output_tensor_info.GetElementType()
+                     == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+                 ? TensorElementType::Float32
+                 : TensorElementType::Unknown});
 
         std::vector<int64_t> shape;
         for (auto dim : output_dims)

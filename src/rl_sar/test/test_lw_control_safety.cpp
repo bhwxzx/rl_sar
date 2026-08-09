@@ -184,6 +184,33 @@ void testStateSpecificAttitudeProtection()
         require(!result.safe, state + " accepted an excessive pitch");
     }
 }
+
+void testPassiveDampingFallbackCommand()
+{
+    RobotState<float> state = makeValidState();
+    for (size_t index = 0; index < kNumDofs; ++index)
+    {
+        state.motor_state.q[index] = static_cast<float>(index) * 0.1f;
+    }
+    RobotCommand<float> command;
+    LWBuildPassiveDampingCommand(state, command, kNumDofs);
+    require(
+        LWValidateRobotCommand(command, kNumDofs).valid(),
+        "passive damping builder produced an invalid command");
+    for (size_t index = 0; index < kNumDofs; ++index)
+    {
+        require(command.motor_command.q[index] == state.motor_state.q[index],
+                "passive fallback did not retain current joint position");
+        require(command.motor_command.dq[index] == 0.0f,
+                "passive fallback retained wheel or joint velocity");
+        require(command.motor_command.tau[index] == 0.0f,
+                "passive fallback retained feed-forward torque");
+        require(command.motor_command.kp[index] == 0.0f,
+                "passive fallback retained position stiffness");
+        require(command.motor_command.kd[index] == 5.0f,
+                "passive fallback did not apply the approved damping gain");
+    }
+}
 } // namespace
 
 int main()
@@ -194,6 +221,7 @@ int main()
         testPolicyFiniteValidationWithoutRangeChecks();
         testCommandFiniteAndNegativeGainValidation();
         testStateSpecificAttitudeProtection();
+        testPassiveDampingFallbackCommand();
         std::cout << "LW control safety tests passed" << std::endl;
         return EXIT_SUCCESS;
     }

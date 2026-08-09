@@ -246,6 +246,22 @@ void testFrameFreshnessClassification()
             max_age)
             == LWPolicyOutputStatus::Stale,
         "future-dated frame was accepted");
+
+    require(
+        LWPolicyOutputRequiresFallback(LWPolicyOutputStatus::Stale, false),
+        "stale policy output did not require fallback");
+    require(
+        LWPolicyOutputRequiresFallback(LWPolicyOutputStatus::Incomplete, false),
+        "incomplete policy output did not require fallback");
+    require(
+        !LWPolicyOutputRequiresFallback(LWPolicyOutputStatus::Missing, false),
+        "initial policy-output wait triggered fallback too early");
+    require(
+        LWPolicyOutputRequiresFallback(LWPolicyOutputStatus::Missing, true),
+        "expired initial policy-output wait retained the old command");
+    require(
+        !LWPolicyOutputRequiresFallback(LWPolicyOutputStatus::Ready, true),
+        "ready policy output incorrectly triggered fallback");
 }
 
 void testConcurrentReadersNeverObservePartialFrames()

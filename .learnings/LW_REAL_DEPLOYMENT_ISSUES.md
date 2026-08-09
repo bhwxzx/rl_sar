@@ -67,8 +67,8 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 8 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
 | 9 | LW-009 | P1 / high | resolved | Use the configured 60 Hz wheel-to-leg reference rate |
 | 10 | LW-010 | P1 / high | resolved | Make deployed binary, configuration, and models reproducible |
-| 11 | LW-016 | P1 / high | pending | Audit every safety trigger for proportional and recoverable behavior |
-| 12 | LW-013 | P1 / high | pending | Validate YAML, mappings, observation sizes, and model outputs |
+| 11 | LW-016 | P1 / high | resolved | Audit every safety trigger for proportional and recoverable behavior |
+| 12 | LW-013 | P1 / high | resolved | Validate YAML, mappings, observation sizes, and model outputs |
 | 13 | LW-011 | P1 / high | resolved | Make the control loop suitable for deterministic real-time execution |
 | 14 | LW-012 | P2 / medium | pending | Harden motion loading and correct its time convention |
 | 15 | LW-015 | P2 / medium | pending | Remove non-LW robot implementations while preserving future extension points |
@@ -761,7 +761,7 @@ The installed launcher currently resolves to an executable older than the source
 ## [LW-016] Safety-action proportionality and recovery audit
 
 **Priority**: P1 / high
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-001, LW-002, LW-003, LW-005, LW-006, LW-011
 
 ### Problem
@@ -839,12 +839,74 @@ evidence-based proportionality audit rather than a blanket relaxation.
   emergency-stop assumptions and records any behavior that still requires
   suspended-robot validation.
 
+### Resolution Evidence
+
+- Resolved: 2026-08-09T11:32:37+08:00
+- Commit: this commit
+- Added `lw_safety_policy.hpp` as the single production decision matrix for 27
+  runtime and lifecycle events. It assigns explicit S0 diagnostic, S1 input
+  degradation, S2 controlled damping, S3 hard-disable, S4 hard-disable plus
+  ROS shutdown, startup-abort, and orderly-shutdown actions. The supervisor
+  latches severity monotonically and de-duplicates repeated diagnostic events.
+- Joystick loss and joystick-loop exceptions now retain motor/FSM operation
+  with input inhibition. Control timing degradation retains the approved
+  zero-velocity latch and operator-requested `GetDown` path.
+- Inference-loop exceptions, invalid policy action/output/configuration, and
+  missing, incomplete, generation-mismatched, regressed, or stale policy
+  output now permanently stop policy acceptance and use a `Kp=0`, `Kd=5`,
+  zero-velocity/torque Passive damping command. A stale output discovered in
+  the control thread overwrites the old command in that control cycle; all
+  other S2 events are applied no later than the next executable control cycle.
+  The FSM transition is requested and completed only by the control thread.
+- Motor-board hardware faults now produce a one-shot S3 hard-disable latch and
+  keep ROS alive for diagnostics. Control-loop/unknown-loop exceptions,
+  explicitly enabled fatal timing thresholds, stale or invalid feedback,
+  missing FSM state, protected-state attitude violation, invalid/null final
+  commands, read failures, and incomplete sends remain S4. Hard-disable and
+  ROS-shutdown latches are separate, so a later S4 event can still escalate an
+  existing S3 latch.
+- Startup serial, initial-disable, and loop-start failures retain best-effort
+  disable followed by startup abort. Normal shutdown ordering is unchanged.
+  Parser errors with continuing fresh frames and torque-limit reports remain
+  diagnostic-only; feedback freshness is the escalation boundary.
+- Added `test_lw_safety_policy`; expanded `test_lw_control_safety` and
+  `test_lw_policy_output_transport` for complete matrix ordering/actions,
+  source-specific loop handling, monotonic escalation, repeated-event
+  de-duplication, failed-send escalation, normal shutdown, Passive damping
+  contents, and bounded initial-wait/stale-output behavior.
+- Debug verification built both `rl_real_LW` and `rl_sim_LW` and passed all 13
+  registered CTest tests. A fresh Release configuration built both executables
+  and passed the three directly affected tests. The three affected tests also
+  passed under UndefinedBehaviorSanitizer.
+- The pure safety-policy test passed under combined AddressSanitizer and
+  UndefinedBehaviorSanitizer. Full `rl_sdk` ASan execution was not claimed:
+  on this host the linked tests intermittently consumed a CPU indefinitely,
+  and terminating them caused the ASan runtime to recursively print
+  `DEADLYSIGNAL` without a usable application stack. Normal, Release, UBSan,
+  and 50,000-frame concurrency runs all passed.
+- A strict `-Wall -Wextra -Wpedantic -Werror` build passed for the new test,
+  affected tests, core SDK, and `rl_real_LW` after only the repository's
+  pre-existing `reorder`, aggregate-initializer, and unused-parameter warning
+  classes were left as warnings. Targeted `cppcheck` found only the existing
+  `CSVInit(std::string)` performance advisory and constructor/worker-binding
+  heuristic; no new correctness finding was reported. `git diff --check`
+  passed.
+- `docs/LW_BUILD_DEPLOYMENT_CN.md` now explains the S0-S4 behavior in operator
+  language and explicitly separates host packet-send guarantees from motor
+  acknowledgement, board watchdog, physical emergency stop, mechanical
+  support, Passive damping, and 75-degree attitude assumptions.
+- Hardware execution was intentionally not performed. Before first ground
+  experiment, S1-S4 fault injection, `motors_disable` acknowledgement/latency,
+  serial-loss watchdog behavior, `Kd=5` Passive damping, and the 75-degree S4
+  response still require suspended-robot validation with physical emergency
+  stop, support, and exclusion distance in place.
+
 ---
 
 ## [LW-013] Configuration and dimension validation
 
 **Priority**: P1 / high
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-005, LW-010
 
 ### Problem
@@ -871,6 +933,42 @@ The control path assumes every YAML vector has the correct length and every mapp
 - Invalid configuration fails before serial command loops start.
 - Every current LW configuration passes a standalone validation test.
 - Model dimension mismatches produce a clear startup error.
+
+### Resolution Evidence
+
+- Resolved: 2026-08-09
+- Added a shared LW configuration validator used by both `rl_real_LW` and
+  `rl_sim_LW` before policy preload, serial initialization, or worker-loop
+  startup. Missing keys, wrong types, invalid timing values, non-finite or
+  incorrectly sized vectors, duplicate/out-of-range mappings, unsupported
+  observation terms, invalid history settings, and inconsistent action limits
+  now fail with the configuration path and field-specific reason.
+- Policy observation dimensions are computed from the actual observation list
+  and checked against `num_observations`; history selection determines the
+  actual model input size. The four formal LW policies validate as
+  `410 -> 10`, `195 -> 10`, `59 -> 10`, and `59 -> 10`.
+- ONNX Runtime now exposes immutable input/output tensor metadata. LW preload
+  requires one float32 rank-2 input and output, accepts batch size 1 or a
+  dynamic batch, checks feature dimensions, and verifies the output length and
+  finiteness during two warm-up inferences. Configuration/model failures now
+  throw instead of being logged and ignored.
+- Corrected the shared `w,x,y,z` observation quaternion identity from
+  `{0,0,0,1}` to `{1,0,0,0}`.
+- `test_lw_configuration_validation` covers all current YAML files and formal
+  ONNX models, required fields, vector sizes, finite values, mapping uniqueness
+  and bounds, observation names/dimensions, history settings, model dimension
+  mismatches, and quaternion initialization.
+- Verified with:
+  - existing Debug build of `test_lw_configuration_validation`, `rl_real_LW`,
+    and `rl_sim_LW`;
+  - full Debug CTest suite: 14/14 passed;
+  - clean Debug and clean Release builds of
+    `test_lw_configuration_validation`, `rl_real_LW`, and `rl_sim_LW`;
+  - clean Debug and Release `lw_configuration_validation` CTest: 1/1 passed in
+    each build;
+  - targeted `cppcheck` of the validator and its test: no warning reported;
+  - `git diff --check`.
+- No serial device, simulator UI, or real robot was started.
 
 ---
 

@@ -194,6 +194,26 @@ inline LWValidationResult LWValidateRobotCommand(
     return {};
 }
 
+inline void LWBuildPassiveDampingCommand(
+    const RobotState<float>& state,
+    RobotCommand<float>& command,
+    size_t num_dofs,
+    float damping_gain = 5.0f)
+{
+    command.motor_command.resize(num_dofs);
+    for (size_t index = 0; index < num_dofs; ++index)
+    {
+        command.motor_command.q[index] =
+            index < state.motor_state.q.size()
+            ? state.motor_state.q[index]
+            : 0.0f;
+        command.motor_command.dq[index] = 0.0f;
+        command.motor_command.tau[index] = 0.0f;
+        command.motor_command.kp[index] = 0.0f;
+        command.motor_command.kd[index] = damping_gain;
+    }
+}
+
 inline bool LWStateUsesAttitudeProtection(const std::string& state_name)
 {
     return state_name == "RLFSMStateGetDown"

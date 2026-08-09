@@ -321,3 +321,40 @@ LW 发布流程必须把 Sim2Sim 行为验证明确放在开发机，部署机�
 - **Notes**: 问题记录已明确 `Order` 是唯一权威优先级顺序，状态仅用于筛选；LW-016 在 P1 内因安全风险排在 LW-013 前。
 
 ---
+
+## [LRN-20260809-001] correction
+
+**Logged**: 2026-08-09T11:47:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: config
+
+### Summary
+运行参数注释必须逐项说明单位、特殊值、组合触发逻辑和触发后的行为。
+
+### Details
+用户指出控制循环配置虽然已有中文概述，但仍无法从配置文件直接判断每个参数
+的具体含义。对部署和安全相关参数，只说明总体目的并不够；注释还需区分逻辑
+CPU 编号与实时优先级，解释 `-1`、`0`、`false` 等特殊值，说明计数单位和时间
+单位、多个阈值之间的“或”关系、锁存是否需要重启清除，以及启用致命阈值后
+会采取的具体动作。
+
+### Suggested Action
+在 `policy/LW/base.yaml` 中紧邻各控制循环参数补充可独立阅读的中文注释，并以
+实际实现为准说明连续跳过周期数、截止时间晚到秒数、实时调度回退和安全动作。
+
+### Metadata
+- Source: user_feedback
+- Related Files: policy/LW/base.yaml, src/rl_sar/library/core/loop/loop.hpp
+- Tags: configuration, comments, realtime, timing, safety
+- Pattern-Key: docs.config_operational_semantics
+- Recurrence-Count: 1
+- First-Seen: 2026-08-09
+- Last-Seen: 2026-08-09
+
+### Resolution
+- **Resolved**: 2026-08-09T11:52:00+08:00
+- **Commit/PR**: 本次配置注释修改
+- **Notes**: `base.yaml` 已逐项说明 CPU 绑定、实时调度回退、计数与时间单位、阈值“或”关系、锁存清除方式以及致命时序动作，未改变任何参数值或控制逻辑。
+
+---

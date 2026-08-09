@@ -95,6 +95,9 @@ RL_Real::RL_Real(int argc, char **argv)
     this->ang_vel_axis = "body";
     
     this->ReadYaml(this->robot_name, "base.yaml");
+    ValidateLWBaseConfiguration(
+        this->params.config_node,
+        this->ResolvePolicyPath(this->robot_name + "/base.yaml"));
 
     // 提前加载所有的模型到内存
     this->PreloadModel(this->robot_name + "/robot_lab/leg_loco");

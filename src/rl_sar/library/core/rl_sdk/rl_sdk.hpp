@@ -27,6 +27,7 @@
 #include "observation_buffer.hpp"
 #include "vector_math.hpp"
 #include "inference_runtime.hpp"
+#include "lw_configuration_validation.hpp"
 #include "logger.hpp"
 #include "motion_loader.hpp"
 #include "motion_loader_lw.hpp"
@@ -245,6 +246,16 @@ enum class LWPolicyOutputStatus
     Stale
 };
 
+inline bool LWPolicyOutputRequiresFallback(
+    LWPolicyOutputStatus status,
+    bool initial_wait_expired) noexcept
+{
+    return status == LWPolicyOutputStatus::Stale
+        || status == LWPolicyOutputStatus::Incomplete
+        || (status != LWPolicyOutputStatus::Ready
+            && initial_wait_expired);
+}
+
 bool LWPolicyOutputPayloadComplete(
     const LWPolicyOutputFrame& output,
     size_t expected_dofs) noexcept;
@@ -318,6 +329,7 @@ public:
     void PreloadModel(const std::string& robot_config_path);
     // 存放已经加载好的 ONNX 模型的字典
     std::unordered_map<std::string, std::shared_ptr<InferenceRuntime::Model>> preloaded_models_;
+    std::unordered_map<std::string, YAML::Node> preloaded_lw_policy_configs_;
     void PreloadLWPolicyContext(const std::string& robot_config_path);
     std::shared_ptr<const LWPolicyDefinition> GetLWPolicyDefinition(
         const std::string& robot_config_path) const;
@@ -339,6 +351,11 @@ public:
     std::shared_ptr<const LWPolicyOutputFrame> LoadLWPolicyOutput() const noexcept;
     std::chrono::steady_clock::duration GetLWPolicyOutputMaxAge(
         const LWPolicyActivation& activation) const;
+    virtual void HandleLWPolicyOutputFault(
+        LWPolicyOutputStatus status) noexcept
+    {
+        (void)status;
+    }
 
 #ifdef RL_REQUIRE_EXPLICIT_POLICY_ROOT
     std::filesystem::path policy_root_;
@@ -399,8 +416,8 @@ public:
     std::unique_ptr<MotionLoaderLW> motion_loader_lw;
 
     // protect func
-    void TorqueProtect(const std::vector<float> &origin_output_dof_tau);
-    void TorqueProtect(
+    bool TorqueProtect(const std::vector<float> &origin_output_dof_tau);
+    bool TorqueProtect(
         const std::vector<float>& origin_output_dof_tau,
         const YamlParams& policy_params) const;
     void AttitudeProtect(const std::vector<float> &quaternion, float pitch_threshold, float roll_threshold);
@@ -455,7 +472,6 @@ private:
     std::uint64_t last_lw_output_generation_ = 0;
     std::uint64_t last_lw_output_sequence_ = 0;
     bool lw_output_stale_ = false;
-    std::chrono::steady_clock::time_point last_lw_output_warning_{};
 };
 
 #endif // RL_SDK_HPP

@@ -5,28 +5,6 @@
 
 #include "rl_sdk.hpp"
 
-namespace
-{
-const char* LWPolicyOutputStatusName(
-    LWPolicyOutputStatus status) noexcept
-{
-    switch (status)
-    {
-    case LWPolicyOutputStatus::Ready:
-        return "ready";
-    case LWPolicyOutputStatus::Missing:
-        return "missing";
-    case LWPolicyOutputStatus::GenerationMismatch:
-        return "generation_mismatch";
-    case LWPolicyOutputStatus::Incomplete:
-        return "incomplete";
-    case LWPolicyOutputStatus::Stale:
-        return "stale";
-    }
-    return "unknown";
-}
-} // namespace
-
 bool LWPolicyOutputPayloadComplete(
     const LWPolicyOutputFrame& output,
     size_t expected_dofs) noexcept
@@ -459,7 +437,7 @@ void RL::InitObservations()
     this->obs.ang_vel = {0.0f, 0.0f, 0.0f};
     this->obs.gravity_vec = {0.0f, 0.0f, -1.0f};
     this->obs.commands = {0.0f, 0.0f, 0.0f};
-    this->obs.base_quat = {0.0f, 0.0f, 0.0f, 1.0f};
+    this->obs.base_quat = {1.0f, 0.0f, 0.0f, 0.0f};
     this->obs.dof_pos = this->params.Get<std::vector<float>>("default_dof_pos");
     this->obs.dof_vel.clear();
     this->obs.dof_vel.resize(this->params.Get<int>("num_of_dofs"), 0.0f);
@@ -545,82 +523,74 @@ std::string RL::ResolvePolicyPath(
 
 void RL::PreloadModel(const std::string& robot_config_path)
 {
-    // 读取对应的 YAML 拿到模型名字
-    std::string config_path = ResolvePolicyPath(
+    const std::string config_path = ResolvePolicyPath(
         robot_config_path + "/config.yaml");
-    YAML::Node config;
-    try {
-        config = YAML::LoadFile(config_path)[robot_config_path];
-    } catch (...) {
-        std::cout << LOGGER::ERROR << "Failed to preload yaml: " << config_path << std::endl;
-        return;
+    YAML::Node policy_config;
+    try
+    {
+        policy_config = YAML::LoadFile(config_path)[robot_config_path];
     }
+    catch (const YAML::Exception& exception)
+    {
+        throw std::runtime_error(
+            "Failed to load LW policy configuration '" + config_path
+            + "': " + exception.what());
+    }
+    const LWValidatedPolicyConfiguration validated =
+        ValidateLWPolicyConfiguration(
+            this->params.config_node,
+            policy_config,
+            config_path);
 
-    std::string model_name = config["model_name"].as<std::string>();
-    std::string model_path = ResolvePolicyPath(
+    const std::string model_name =
+        validated.merged["model_name"].as<std::string>();
+    const std::string model_path = ResolvePolicyPath(
         robot_config_path + "/" + model_name);
-    
+
     std::cout << LOGGER::INFO << "Preloading ONNX model into memory: " << model_path << std::endl;
-    
-    // 加载 ONNX 到显存/内存
+
     auto model = InferenceRuntime::ModelFactory::load_model(model_path);
-    if (!model) {
-        std::cout << LOGGER::ERROR << "Failed to preload model!" << std::endl;
-        return;
+    if (!model)
+    {
+        throw std::runtime_error(
+            "Failed to preload LW policy model: " + model_path);
     }
 
-    // 模型预热 (Warm-up)：把计算图彻底唤醒
-    int num_obs = config["num_observations"].as<int>();
-    int history_len = 1;
-    if (config["observations_history"]) {
-        auto hist_vec = config["observations_history"].as<std::vector<int>>();
-        if (!hist_vec.empty()) {
-            history_len = *std::max_element(hist_vec.begin(), hist_vec.end()) + 1;
-        }
-    }
-    std::vector<float> dummy_input(num_obs * history_len, 0.0f);
-    // --- 开始计时 ---
-    auto start_time = std::chrono::steady_clock::now();
-    for(int i = 0; i < 2; i++) {
-        model->forward({dummy_input});
-    }
-    // --- 结束计时 ---
-    auto end_time = std::chrono::steady_clock::now();
-    // 计算耗时 (毫秒)
-    std::chrono::duration<double, std::milli> duration_ms = end_time - start_time;
-    
-    // 打印预热耗时
-    std::cout << LOGGER::INFO << "Model warmup took " 
-              << std::fixed << std::setprecision(3) << duration_ms.count() 
+    const auto start_time = std::chrono::steady_clock::now();
+    ValidateLWModelContract(
+        *model,
+        validated.dimensions,
+        model_path,
+        2);
+    const auto end_time = std::chrono::steady_clock::now();
+    const std::chrono::duration<double, std::milli> duration_ms =
+        end_time - start_time;
+    std::cout << LOGGER::INFO << "Validated model and warmed it up in "
+              << std::fixed << std::setprecision(3) << duration_ms.count()
               << " ms." << std::endl;
 
-    // 存入字典缓存
-    this->preloaded_models_[robot_config_path] = std::shared_ptr<InferenceRuntime::Model>(std::move(model));
+    this->preloaded_lw_policy_configs_[robot_config_path] =
+        YAML::Clone(validated.merged);
+    this->preloaded_models_[robot_config_path] =
+        std::shared_ptr<InferenceRuntime::Model>(std::move(model));
     std::cout << LOGGER::INFO << "Preload & Warmup finished for: " << robot_config_path << std::endl;
 }
 
 void RL::PreloadLWPolicyContext(
     const std::string& robot_config_path)
 {
-    const std::string config_path = ResolvePolicyPath(
-        robot_config_path + "/config.yaml");
-    const YAML::Node loaded =
-        YAML::LoadFile(config_path)[robot_config_path];
-    if (!loaded || !loaded.IsMap())
+    const auto config_it =
+        this->preloaded_lw_policy_configs_.find(robot_config_path);
+    if (config_it == this->preloaded_lw_policy_configs_.end())
     {
         throw std::runtime_error(
-            "Invalid LW policy configuration: " + config_path);
+            "LW policy configuration was not validated: "
+            + robot_config_path);
     }
 
     auto definition = std::make_shared<LWPolicyDefinition>();
     definition->path = robot_config_path;
-    definition->params.config_node = YAML::Clone(
-        this->params.config_node);
-    for (auto it = loaded.begin(); it != loaded.end(); ++it)
-    {
-        const std::string key = it->first.as<std::string>();
-        definition->params.config_node[key] = YAML::Clone(it->second);
-    }
+    definition->params.config_node = YAML::Clone(config_it->second);
 
     const auto model_it =
         this->preloaded_models_.find(robot_config_path);
@@ -912,12 +882,12 @@ int RL::InverseJointMapping(int idx) const
     return -1;
 }
 
-void RL::TorqueProtect(const std::vector<float>& origin_output_dof_tau)
+bool RL::TorqueProtect(const std::vector<float>& origin_output_dof_tau)
 {
-    TorqueProtect(origin_output_dof_tau, this->params);
+    return TorqueProtect(origin_output_dof_tau, this->params);
 }
 
-void RL::TorqueProtect(
+bool RL::TorqueProtect(
     const std::vector<float>& origin_output_dof_tau,
     const YamlParams& policy_params) const
 {
@@ -952,6 +922,7 @@ void RL::TorqueProtect(
         // this->control.SetKeyboard(Input::Keyboard::P);
         // std::cout << LOGGER::INFO << "Switching to STATE_POS_GETDOWN"<< std::endl;
     }
+    return !out_of_range_indices.empty();
 }
 
 void RL::AttitudeProtect(const std::vector<float> &quaternion, float pitch_threshold, float roll_threshold)
@@ -1296,46 +1267,13 @@ void RLFSMState::RLControlLW()
         const bool initial_wait_expired =
             now >= activation->activated_at
             && now - activation->activated_at > max_age;
-        if (status == LWPolicyOutputStatus::Stale
-            || status == LWPolicyOutputStatus::Incomplete
-            || initial_wait_expired)
+        if (LWPolicyOutputRequiresFallback(
+                status, initial_wait_expired))
         {
-            lw_output_stale_ = true;
-            constexpr auto warning_interval =
-                std::chrono::seconds(1);
-            if (last_lw_output_warning_
-                    .time_since_epoch().count() == 0
-                || now - last_lw_output_warning_
-                    >= warning_interval)
+            if (!lw_output_stale_)
             {
-                last_lw_output_warning_ = now;
-                long long output_age_ms = -1;
-                if (output
-                    && output->source_time
-                        .time_since_epoch().count() != 0
-                    && now >= output->source_time)
-                {
-                    output_age_ms =
-                        std::chrono::duration_cast<
-                            std::chrono::milliseconds>(
-                            now - output->source_time)
-                            .count();
-                }
-                std::cout << LOGGER::WARNING
-                          << "LW policy output unavailable"
-                          << ", generation="
-                          << activation->generation
-                          << ", status="
-                          << LWPolicyOutputStatusName(status)
-                          << ", max_age_ms="
-                          << std::chrono::duration_cast<
-                                 std::chrono::milliseconds>(
-                                 max_age)
-                                 .count()
-                          << ", output_age_ms="
-                          << output_age_ms
-                          << ". Holding the last applied command."
-                          << std::endl;
+                lw_output_stale_ = true;
+                rl.HandleLWPolicyOutputFault(status);
             }
         }
         return;
@@ -1343,13 +1281,6 @@ void RLFSMState::RLControlLW()
 
     if (lw_output_stale_)
     {
-        std::cout << LOGGER::INFO
-                  << "LW policy output recovered"
-                  << ", generation="
-                  << activation->generation
-                  << ", sequence="
-                  << output->sequence
-                  << std::endl;
         lw_output_stale_ = false;
     }
 

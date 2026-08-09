@@ -15,6 +15,7 @@
 #include "sensor_readiness.hpp"
 #include "lw_control_safety.hpp"
 #include "lw_joystick_safety.hpp"
+#include "lw_safety_policy.hpp"
 #include "fsm_LW.hpp"
 
 #include "LW_sdk.hpp"
@@ -22,6 +23,7 @@
 #include <csignal>
 #include <chrono>
 #include <exception>
+#include <mutex>
 #include <string>
 
 #include <rclcpp/rclcpp.hpp>
@@ -56,8 +58,16 @@ private:
         const std::string& loop_name,
         LoopTimingLevel level,
         const LoopTimingSnapshot& timing) noexcept;
-    void EnterFailSafe(const std::string& reason) noexcept;
+    void HandleLWPolicyOutputFault(
+        LWPolicyOutputStatus status) noexcept override;
+    void ApplySafetyEvent(
+        LWSafetyEvent event,
+        const std::string& reason) noexcept;
+    void EnterFailSafe(
+        const std::string& reason,
+        bool request_shutdown) noexcept;
     void SendEmergencyDisableBurst() noexcept;
+    void ApplyControlledFallbackCommand();
     bool HandleSensorReadiness();
     bool ValidateFeedbackAndAttitude();
     bool ValidateCommandForSend(const RobotCommand<float>& command);
@@ -74,7 +84,11 @@ private:
     LowCmd lw_low_command = {0};
     LowState lw_low_state = {0};
     CommandGate command_gate_;
+    LWSafetySupervisor safety_supervisor_;
     std::atomic<bool> fatal_error_latched_{false};
+    std::atomic<bool> shutdown_requested_{false};
+    std::atomic<bool> controlled_fallback_applied_{false};
+    std::mutex fail_safe_mutex_;
     LWSendResult disable_lw_robot(bool latch_commands = false);
 
     // joystick
@@ -136,6 +150,7 @@ private:
     bool operator_status_seen_ = false;
     bool timing_degraded_logged_ = false;
     bool realtime_fallback_logged_ = false;
+    std::uint64_t last_safety_event_sequence_ = 0;
 
     // others
     void disable_robot(void);
