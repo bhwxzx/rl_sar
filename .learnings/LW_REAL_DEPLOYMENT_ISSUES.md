@@ -71,7 +71,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 12 | LW-013 | P1 / high | resolved | Validate YAML, mappings, observation sizes, and model outputs |
 | 13 | LW-011 | P1 / high | resolved | Make the control loop suitable for deterministic real-time execution |
 | 14 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
-| 15 | LW-015 | P2 / medium | pending | Remove non-LW robot implementations while preserving future extension points |
+| 15 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
 | 16 | LW-014 | P2 / low | pending | Isolate and correct production debug/plot publishing |
 
 ---
@@ -1120,7 +1120,7 @@ Motion duration is calculated as `num_frames * dt` even though the interval from
 ## [LW-015] LW-only repository scope and future robot extension boundary
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-010
 
 ### Problem
@@ -1202,6 +1202,40 @@ remove generic simulation/core facilities needed for future robot additions.
 - The unrelated user-owned `.agents/skills/inspect-context-compactions/`
   directory remains unchanged and absent from the cleanup commit; all approved
   LW zoo files are intentionally tracked or pinned rather than silently omitted.
+
+### Resolution Evidence
+
+- **Resolved**: 2026-08-09
+- The user approved the LW-only inventory and vendoring plan before any cleanup.
+  Non-LW policies, FSMs, real adapters, SDKs/submodules, examples, inactive build
+  wiring, and the legacy multi-robot zoo downloader were removed. Generic FSM,
+  inference, loop, control, MuJoCo, joystick, message, and controller extension
+  infrastructure remains documented in `docs/LW_REPOSITORY_SCOPE.md`.
+- `src/rl_sar_zoo/LW_description` is now ordinary parent-repository content,
+  based on zoo commit `349d14a700ecf248b3cdbec5e7bac30882b66e62` with upstream and license
+  provenance recorded. Its 22-file SHA-256 manifest passes, no nested Git
+  metadata or non-LW description remains, and the five pre-existing LW
+  MJCF/terrain changes are byte-identical to the pre-cleanup backup. The terrain
+  PNG SHA-256 is
+  `6ffaba9cff2aa28640a72c578e9fbf1cea8a878b8cc26eafcccf985d78d75a2a`.
+- A complete pre-cleanup zoo Git bundle and LW worktree archive were verified at
+  `/tmp/lw015-zoo-backup-aTLmdg/`; their SHA-256 values are respectively
+  `90dd2a285b47179378a30e68b1785d44edcd6e8d01fd63dbbf868ea0dbbb10d1`
+  and `dd8d5a4ffbbdc9f7aa28ab5d6ffe7cc5328d319845b0e8d749498fda18058231`.
+- The description validator passes in the working tree and in a detached clean
+  checkout. Negative tests reject a changed manifest file, a non-LW description,
+  and nested Git metadata. The standalone `lw_description` package configures,
+  builds, and installs its MJCF, terrain, mesh, and URDF assets.
+- The existing build and fresh Debug/Release builds each passed all 17 CTests.
+  A separate detached clean-checkout Debug ROS 2 build produced
+  `lw_description`, `rl_sim_LW`, and `rl_real_LW`, then passed 17/17 CTests.
+- A detached clean-checkout Release production build created the deployment
+  manifest and passed `rl_real_LW --verify-deployment-only`. It initialized only
+  the pinned joystick submodule and used no robot-description download or non-LW
+  SDK.
+- `git diff --check`, Bash/Python syntax checks, and targeted `cppcheck` passed;
+  `shellcheck` and `cmakelint` were unavailable. No serial device, simulator UI,
+  or real robot was started.
 
 ---
 

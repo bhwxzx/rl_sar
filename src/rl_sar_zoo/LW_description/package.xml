@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>lw_description</name>
+  <version>2.0.0</version>
+  <description>LW robot description assets for rl_sar.</description>
+  <maintainer email="fanziqi614@gmail.com">Ziqi Fan</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

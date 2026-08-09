@@ -29,7 +29,6 @@
 #include "inference_runtime.hpp"
 #include "lw_configuration_validation.hpp"
 #include "logger.hpp"
-#include "motion_loader.hpp"
 #include "motion_loader_lw.hpp"
 #include "lw_runtime_sync.hpp"
 
@@ -412,7 +411,6 @@ public:
     int InverseJointMapping(int idx) const;
 
     // Motion tracking (for mimic/dance tasks)
-    std::unique_ptr<MotionLoader> motion_loader;
     std::unique_ptr<MotionLoaderLW> motion_loader_lw;
 
     // protect func

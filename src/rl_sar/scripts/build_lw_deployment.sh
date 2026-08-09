@@ -44,6 +44,7 @@ if [[ -n $(git -C "$source_tree" status --porcelain --untracked-files=all) ]]; t
     echo "Temporary source worktree is not clean" >&2
     exit 1
 fi
+bash "$source_tree/scripts/validate_lw_description.sh"
 
 mkdir -p "$output_prefix"
 colcon --log-base "$temporary_root/log" build \

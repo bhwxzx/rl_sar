@@ -6,17 +6,10 @@
 #ifndef FSM_ALL_HPP
 #define FSM_ALL_HPP
 
-#include "fsm_a1.hpp"
-#include "fsm_b2.hpp"
-#include "fsm_b2w.hpp"
-#include "fsm_g1.hpp"
-#include "fsm_go2.hpp"
-#include "fsm_go2w.hpp"
-#include "fsm_gr1t1.hpp"
-#include "fsm_gr1t2.hpp"
-#include "fsm_l4w4.hpp"
-#include "fsm_lite3.hpp"
-#include "fsm_tita.hpp"
 #include "fsm_LW.hpp"
+
+// Future robot support belongs in a robot-specific fsm_<robot>.hpp that
+// registers its factory with REGISTER_FSM_FACTORY. Add that one include here;
+// the generic FSM manager does not require modification.
 
 #endif // FSM_ALL_HPP

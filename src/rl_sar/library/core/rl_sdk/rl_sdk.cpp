@@ -193,22 +193,7 @@ std::vector<float> RL::ComputeObservation()
         else if (observation == "whole_body_tracking/motion_command")
         {
             std::vector<float> motion_cmd;
-            if (this->robot_name=="g1" && this->motion_loader)
-            {
-                auto joint_pos_sdk = this->motion_loader->GetJointPos();
-                auto joint_vel_sdk = this->motion_loader->GetJointVel();
-                auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
-                std::vector<float> joint_pos_training(joint_mapping.size());
-                std::vector<float> joint_vel_training(joint_mapping.size());
-                for (size_t i = 0; i < joint_mapping.size(); ++i)
-                {
-                    joint_pos_training[i] = joint_pos_sdk[joint_mapping[i]];
-                    joint_vel_training[i] = joint_vel_sdk[joint_mapping[i]];
-                }
-                motion_cmd.insert(motion_cmd.end(), joint_pos_training.begin(), joint_pos_training.end());
-                motion_cmd.insert(motion_cmd.end(), joint_vel_training.begin(), joint_vel_training.end());
-            }
-            else if(this->robot_name=="LW" && this->motion_loader_lw)
+            if (this->robot_name == "LW" && this->motion_loader_lw)
             {
                 auto joint_pos_sdk = this->motion_loader_lw->GetJointPos();
                 auto joint_vel_sdk = this->motion_loader_lw->GetJointVel();
@@ -232,24 +217,7 @@ std::vector<float> RL::ComputeObservation()
         else if (observation == "whole_body_tracking/motion_anchor_ori_b")
         {
             std::vector<float> anchor_ori(6, 0.0f);
-            if (this->robot_name=="g1" && this->motion_loader)
-            {
-                auto waist_sdk_indices = this->params.Get<std::vector<int>>("waist_joint_indices");
-                std::vector<float> waist_angles = {
-                    this->obs.dof_pos[InverseJointMapping(waist_sdk_indices[0])],
-                    this->obs.dof_pos[InverseJointMapping(waist_sdk_indices[1])],
-                    this->obs.dof_pos[InverseJointMapping(waist_sdk_indices[2])]
-                };
-                std::vector<float> robot_torso_quat_w = MotionLoader::ComputeTorsoQuat(this->obs.base_quat, waist_angles);
-                std::vector<float> ref_torso_quat_w = this->motion_loader->GetAnchorQuat();
-                std::vector<float> init_quat = this->motion_loader->GetInitQuat();
-                std::vector<float> motion_anchor_quat_w = QuaternionMultiply(init_quat, ref_torso_quat_w);
-                std::vector<float> robot_quat_inv = QuaternionConjugate(robot_torso_quat_w);
-                std::vector<float> relative_quat = QuaternionMultiply(robot_quat_inv, motion_anchor_quat_w);
-                std::vector<float> rot_matrix = QuaternionToRotationMatrix(relative_quat);
-                anchor_ori = MatrixFirstTwoColumns(rot_matrix);
-            }
-            else if(this->robot_name=="LW" && this->motion_loader_lw)
+            if (this->robot_name == "LW" && this->motion_loader_lw)
             {
                 std::vector<float> robot_torso_quat_w = MotionLoaderLW::ComputeTorsoQuat(this->obs.base_quat);
                 std::vector<float> ref_torso_quat_w = this->motion_loader_lw->GetAnchorQuat();

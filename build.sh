@@ -52,21 +52,22 @@ setup_mujoco() {
     fi
 }
 
-setup_robot_descriptions() {
-    print_header "[Setting up Robot Descriptions]"
+validate_lw_description() {
+    print_header "[Checking LW Description]"
 
     SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-    DOWNLOAD_ROBOT_DESC_SCRIPT="${SCRIPT_DIR}/scripts/download_robot_descriptions.sh"
+    VALIDATE_LW_DESCRIPTION_SCRIPT="${SCRIPT_DIR}/scripts/validate_lw_description.sh"
 
-    if [ -f "$DOWNLOAD_ROBOT_DESC_SCRIPT" ]; then
-        print_info "Checking robot description files..."
-        bash "$DOWNLOAD_ROBOT_DESC_SCRIPT" || {
-            print_error "Failed to setup robot descriptions"
+    if [ -f "$VALIDATE_LW_DESCRIPTION_SCRIPT" ]; then
+        print_info "Validating tracked LW description files..."
+        bash "$VALIDATE_LW_DESCRIPTION_SCRIPT" || {
+            print_error "LW description validation failed"
             exit 1
         }
-        print_success "Robot descriptions setup completed!"
+        print_success "LW description validation completed!"
     else
-        print_warning "Robot descriptions download script not found: $DOWNLOAD_ROBOT_DESC_SCRIPT"
+        print_error "LW description validator not found: $VALIDATE_LW_DESCRIPTION_SCRIPT"
+        exit 1
     fi
 }
 
@@ -370,7 +371,7 @@ main() {
     # Handle MuJoCo build mode
     if [ "$mujoco_mode" = true ]; then
         setup_inference_runtime
-        setup_robot_descriptions
+        validate_lw_description
         setup_mujoco
         run_mujoco_build
         exit 0
@@ -397,7 +398,7 @@ main() {
     fi
 
     setup_inference_runtime
-    setup_robot_descriptions
+    validate_lw_description
     run_ros_build "${packages[@]}"
 }
 

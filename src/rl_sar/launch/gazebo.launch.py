@@ -96,7 +96,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             "rname",
-            description="Robot name (e.g., a1, go2)",
+            description="Future extension robot name (e.g., custom_robot)",
             default_value=TextSubstitution(text=""),
         ),
         robot_state_publisher_node,
