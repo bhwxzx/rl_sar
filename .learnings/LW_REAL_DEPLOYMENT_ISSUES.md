@@ -72,10 +72,11 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 13 | LW-011 | P1 / high | resolved | Make the control loop suitable for deterministic real-time execution |
 | 14 | LW-017 | P1 / high | resolved | Bundle and verify the LW IMU/serial runtime dependencies |
 | 15 | LW-019 | P1 / high | resolved | Enable a real-robot terminal keyboard recovery channel |
-| 16 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
-| 17 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
-| 18 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
-| 19 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
+| 16 | LW-020 | P1 / high | resolved | Make the Jetson production inference bootstrap architecture-safe and ONNX-only |
+| 17 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
+| 18 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
+| 19 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
+| 20 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
 
 ---
 
@@ -1530,6 +1531,85 @@ an interactive terminal.
   通过。Python/C++ 严格语法、`cppcheck`（仅定点抑制既有 `CSVInit` 按值传参
   提示）和 `git diff --check` 通过；`clang-tidy`、`cmakelint` 不可用。未打开
   真机串口、未启动 ROS 节点或电机控制，也未在真实控制终端上进行实机试键。
+- **Remaining Follow-ups**: none
+
+---
+
+## [LW-020] Architecture-safe ONNX-only Jetson production inference
+
+**Priority**: P1 / high
+**Status**: resolved
+**Dependencies**: LW-010, LW-018
+
+### Problem
+
+The Jetson build prepares LibTorch before ONNX Runtime even though every LW
+production policy is ONNX. The PyTorch bootstrap maps every L4T R36 release to
+one CUDA 12.6 wheel and omits documented PyTorch prerequisites, so an unrelated
+Torch failure can stop a fresh real-robot build. Existing inference runtimes are
+also accepted by directory shape alone; copying an x86_64 development tree to
+Jetson therefore reuses incompatible ELF libraries. Finally, production
+`rl_real_LW` links Torch whenever a local LibTorch directory happens to exist.
+
+### Evidence
+
+- `build.sh:18-31`
+- `scripts/download_inference_runtime.sh:49-85,173-184,281-349`
+- `scripts/install_pytorch_jetson.sh:30-99,102-181`
+- `src/rl_sar/CMakeLists.txt:121-277,436-449`
+- `policy/LW/robot_lab/*/config.yaml:2`
+
+### Intended Scope
+
+- Make the native Jetson build and every production deployment ONNX-only while
+  preserving optional LibTorch actuator-network support on non-Jetson Sim2Sim.
+- Validate the ELF machine type of existing and newly downloaded Linux
+  inference libraries before CMake or deployment can consume them.
+- Reject explicit Jetson LibTorch requests instead of guessing a PyTorch wheel
+  from an L4T major version.
+- Require a valid ONNX Runtime for Jetson and production configurations, and
+  verify that the installed real executable has no Torch runtime dependency.
+- Document the supported Jetson path and the prohibition on reusing x86_64
+  inference artifacts.
+
+### Acceptance Criteria
+
+- A Jetson `./build.sh` prepares only the Linux aarch64 ONNX Runtime and never
+  invokes a PyTorch installer.
+- Linux x86_64 and AArch64 runtime libraries are accepted only on their matching
+  architecture; missing, corrupt, and mismatched ELF files fail before linking.
+- Jetson and `LW_PRODUCTION_DEPLOYMENT=ON` builds have `USE_TORCH=OFF`; non-Jetson
+  development builds retain optional Torch support.
+- The production `rl_real_LW` depends on ONNX Runtime and has no `libtorch`,
+  `libtorch_cpu`, or `libc10` dynamic dependency.
+- Documentation, targeted tests, full tests, static checks, and clean Debug and
+  Release builds agree with the ONNX-only production contract.
+
+### Resolution
+
+- **Resolved**: 2026-08-11T17:09:09+08:00
+- **Commit**: 本提交
+- **Approved Scope**: Jetson 真机与正式部署仅准备并链接 ONNX Runtime，拒绝
+  Jetson LibTorch 请求和错误 ELF 架构；非 Jetson 开发构建继续在新环境中
+  自动准备 LibTorch 与 ONNX Runtime，保留 `rl_sim_LW --use_actuator_net`；
+  正式部署验证 `rl_real_LW` 不依赖 Torch。Python 训练环境的 `torch` 不属于
+  本项编译依赖范围。
+- **Changed Files**: `build.sh`、
+  `scripts/{download_inference_runtime.sh,validate_inference_runtime.sh}`（并删除
+  `scripts/install_pytorch_jetson.sh`）、`src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/scripts/build_lw_deployment.sh`、
+  `src/rl_sar/test/{test_build_workflow.py,test_inference_runtime_architecture.py}`、
+  `README_CN.md`、`docs/LW_BUILD_DEPLOYMENT_CN.md`、
+  `.learnings/{LEARNINGS.md,LW_REAL_DEPLOYMENT_ISSUES.md}`。
+- **Verification**: 架构校验单元测试 9/9、构建流程测试 12/12、Jetson 检测
+  测试 8/8 通过；模拟 Jetson 显式请求 LibTorch 会在下载前失败，x86_64
+  `all` 路径继续验证并准备 LibTorch 与 ONNX Runtime。现有构建及 clean
+  Debug、Release 构建均通过全量 24/24 CTest；最终源码在三套构建目录中的
+  LW-020 定向 CTest 均为 2/2。临时 clean clone 的 Release 正式部署构建和
+  `--verify-deployment-only` 通过，最终 `rl_real_LW` 依赖 ONNX Runtime，
+  `readelf`/`ldd` 未发现 `libtorch`、`libtorch_cpu` 或 `libc10`。Bash/Python
+  语法与 `git diff --check` 通过；未修改 C++ 源文件，`shellcheck`、
+  `cmakelint` 不可用。验收未在 Jetson、串口或真机上运行 ROS 节点或电机控制。
 - **Remaining Follow-ups**: none
 
 ---

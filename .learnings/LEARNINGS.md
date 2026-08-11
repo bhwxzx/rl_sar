@@ -28,6 +28,49 @@
 
 ---
 
+## [LRN-20260811-002] correction
+
+**Logged**: 2026-08-11T17:02:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+精简 Jetson 生产推理后端时，必须保留新开发机首次构建自动准备 PyTorch C++
+运行时的能力。
+
+### Details
+LW-020 将 Jetson 真机和正式部署收敛到实际使用的 ONNX 后端。用户补充确认，
+这不能改变新开发机执行 `build.sh` 时自动安装相关依赖的既有契约。当前项目的
+构建依赖是 LibTorch（C++ 版 PyTorch），用于非 Jetson Sim2Sim 可选的
+`--use_actuator_net`；Python `torch` 只由训练脚本使用，并不是编译依赖。
+因此后端精简必须按用途和平台生效，不能全局删除 LibTorch 引导。
+
+### Suggested Action
+Jetson 真机与正式部署保持 ONNX-only；非 Jetson 开发构建继续默认下载 LibTorch
+和 ONNX Runtime，并用测试与文档固定这条分支契约。不要让生产部署的最小依赖
+集合反向定义完整开发环境。
+
+### Metadata
+- Source: user_feedback
+- Related Files: build.sh, scripts/download_inference_runtime.sh, README_CN.md
+- Tags: build, bootstrap, LibTorch, PyTorch, Jetson, production
+- See Also: LRN-20260811-001
+- Pattern-Key: build.production_reduction_preserves_development_bootstrap
+- Recurrence-Count: 1
+- First-Seen: 2026-08-11
+- Last-Seen: 2026-08-11
+
+### Resolution
+
+- **Resolved**: 2026-08-11T17:09:09+08:00
+- **Commit/PR**: 本提交
+- **Notes**: LW-020 仅在 Jetson 真机和正式部署中移除 LibTorch；普通
+  x86_64 开发机首次运行 `build.sh` 仍自动准备 LibTorch 与 ONNX Runtime，
+  并由构建流程测试固定该平台分支契约。
+
+---
+
 ## [LRN-20260729-002] best_practice
 
 **Logged**: 2026-07-29T14:04:42+08:00

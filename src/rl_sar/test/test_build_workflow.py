@@ -13,11 +13,18 @@ REMOVED_LW_SCRIPT = Path(sys.argv.pop(1)).resolve()
 README = Path(sys.argv.pop(1)).resolve()
 DEPLOYMENT_GUIDE = Path(sys.argv.pop(1)).resolve()
 DEPENDENCY_INSTALLER = Path(sys.argv.pop(1)).resolve()
+RUNTIME_DOWNLOADER = Path(sys.argv.pop(1)).resolve()
+REMOVED_JETSON_INSTALLER = Path(sys.argv.pop(1)).resolve()
+CMAKE_FILE = Path(sys.argv.pop(1)).resolve()
+DEPLOYMENT_BUILDER = Path(sys.argv.pop(1)).resolve()
 
 
 class BuildWorkflowTests(unittest.TestCase):
     def test_lw_wrapper_was_removed(self) -> None:
         self.assertFalse(REMOVED_LW_SCRIPT.exists())
+
+    def test_jetson_pytorch_installer_was_removed(self) -> None:
+        self.assertFalse(REMOVED_JETSON_INSTALLER.exists())
 
     def test_selected_builds_include_dependency_closure(self) -> None:
         content = BUILD_SCRIPT.read_text(encoding="utf-8")
@@ -45,6 +52,62 @@ class BuildWorkflowTests(unittest.TestCase):
             main.index("setup_system_dependencies"),
             main.index("setup_inference_runtime"),
         )
+
+    def test_jetson_build_prepares_only_onnx(self) -> None:
+        build_content = BUILD_SCRIPT.read_text(encoding="utf-8")
+        setup = build_content[build_content.index("setup_inference_runtime()") :]
+        setup = setup[: setup.index("setup_system_dependencies()")]
+        self.assertIn("runtime_target=all", setup)
+        self.assertIn('if [ "${IS_JETSON}" = true ]', setup)
+        self.assertIn("runtime_target=onnx", setup)
+        self.assertIn('bash "$DOWNLOAD_SCRIPT" "$runtime_target"', setup)
+
+        downloader = RUNTIME_DOWNLOADER.read_text(encoding="utf-8")
+        self.assertIn("Jetson production path is ONNX-only", downloader)
+        self.assertIn("DOWNLOAD_TARGET=onnx", downloader)
+        self.assertNotIn("install_pytorch_jetson.sh", downloader)
+
+    def test_non_jetson_development_keeps_automatic_libtorch(self) -> None:
+        build_content = BUILD_SCRIPT.read_text(encoding="utf-8")
+        setup = build_content[build_content.index("setup_inference_runtime()") :]
+        setup = setup[: setup.index("setup_system_dependencies()")]
+        self.assertIn("runtime_target=all", setup)
+
+        downloader = RUNTIME_DOWNLOADER.read_text(encoding="utf-8")
+        all_target = downloader[downloader.index('    all)') :]
+        self.assertIn("download_libtorch", all_target)
+        self.assertIn("download_onnxruntime", all_target)
+
+    def test_explicit_jetson_libtorch_request_is_rejected(self) -> None:
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "IS_JETSON": "true",
+                "RL_SAR_PLATFORM_OS": "Linux",
+                "RL_SAR_PLATFORM_ARCH": "aarch64",
+            }
+        )
+        result = subprocess.run(
+            ["bash", str(RUNTIME_DOWNLOADER), "libtorch"],
+            check=False,
+            text=True,
+            capture_output=True,
+            env=environment,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not supported", result.stdout)
+        self.assertNotIn("Downloading", result.stdout)
+
+    def test_production_cmake_and_deployment_are_onnx_only(self) -> None:
+        cmake = CMAKE_FILE.read_text(encoding="utf-8")
+        self.assertIn("if(IS_JETSON OR LW_PRODUCTION_DEPLOYMENT)", cmake)
+        self.assertIn("set(TORCH_BACKEND_ALLOWED FALSE)", cmake)
+        self.assertIn("LibTorch disabled", cmake)
+        self.assertIn("ONNX Runtime validation failed", cmake)
+
+        deployment = DEPLOYMENT_BUILDER.read_text(encoding="utf-8")
+        self.assertIn("validate_inference_runtime.sh", deployment)
+        self.assertIn('grep -Eq "libtorch|libc10"', deployment)
 
     def test_dependency_installer_lists_base_and_ros_packages(self) -> None:
         environment = os.environ.copy()

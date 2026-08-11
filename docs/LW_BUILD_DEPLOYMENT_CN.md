@@ -130,6 +130,11 @@ CUDA 标志，并在日志中输出 `Jetson mode: true`。只有容器等环境�
 会拒绝运行。普通 x86_64 和可明确排除 Jetson 的 aarch64 环境无需设置变量，
 必要时可用 `IS_JETSON=false` 显式禁用。
 
+建议 Jetson Orin NX 使用 JetPack 6.2.2、Ubuntu 22.04 和 ROS 2 Humble。Jetson
+真机路径只下载并链接 Linux aarch64 ONNX Runtime，不安装 PyTorch/LibTorch，
+也不启用 CUDA/TensorRT 推理。已有推理库会先校验 ELF 架构，不能把 x86_64
+开发机的 `library/inference_runtime` 复制到 Jetson 使用。
+
 这个开发构建与后面的正式部署构建用途不同：
 
 - `./build.sh` 生成开发机上的 Sim2Sim 程序；
@@ -226,7 +231,8 @@ git show --stat --oneline "$SOURCE_COMMIT"
 source /opt/ros/humble/setup.bash
 
 test -d "$RL_SAR_ROOT/library/inference_runtime/onnxruntime"
-test -d "$RL_SAR_ROOT/library/inference_runtime/libtorch"
+bash "$RL_SAR_ROOT/scripts/validate_inference_runtime.sh" \
+    onnx "$RL_SAR_ROOT/library/inference_runtime/onnxruntime" "$(uname -m)"
 ```
 
 还需要保证 `git`、`cmake`、`colcon`、C++ 编译器及
@@ -234,8 +240,8 @@ test -d "$RL_SAR_ROOT/library/inference_runtime/libtorch"
 
 > [!NOTE]
 > 正式部署清单会校验 LW 可执行文件、模型、配置，以及项目自带的
-> `fdilink_ahrs` 和 `serial` 运行文件，但不会打包基础 ROS、LibTorch、
-> ONNX Runtime、Python、操作系统动态库和 USB 内核驱动。后者仍由部署机
+> `fdilink_ahrs` 和 `serial` 运行文件，但不会打包基础 ROS、ONNX Runtime、
+> Python、操作系统动态库和 USB 内核驱动。后者仍由部署机
 > 的系统环境提供。
 
 ### 第四步：准备串口设备名和访问权限
@@ -381,6 +387,8 @@ ldd "$DEPLOY_PREFIX/lib/fdilink_ahrs/ahrs_driver_node"
 
 `manifest.yaml` 中的 `source_commit` 应等于开发机交付的完整提交哈希。两次
 `ldd` 输出中如果出现 `not found`，说明部署机缺少运行库，不得启动实机程序。
+`rl_real_LW` 应包含 `libonnxruntime.so`，且不得出现 `libtorch`、
+`libtorch_cpu` 或 `libc10`；正式部署构建脚本会自动检查这一约束。
 
 还必须确认包解析没有回退到旧开发工作区：
 
@@ -560,6 +568,10 @@ source "$DEPLOY_PREFIX/setup.bash"
 
 当前可执行文件可能记录构建机上的推理库搜索路径。因此，只要不能确认两台机器的环境兼容，就应使用本文推荐方案：在部署机自己的 `rl_sar` 项目中按指定提交本地构建。
 
+不要把完整开发仓库中的 `library/inference_runtime` 从 x86_64 主机复制到
+Jetson。即使目录结构完整，其 ELF 架构仍不兼容；当前构建会在 CMake 前明确
+拒绝这种运行时。
+
 ## 10. 常见问题
 
 ### 为什么部署机已有完整项目还要生成部署版本
@@ -581,6 +593,12 @@ source "$DEPLOY_PREFIX/setup.bash"
 ### ONNX Runtime 缺失
 
 脚本会报 `ONNX Runtime dependency is missing`。检查部署机当前项目中的 `library/inference_runtime/onnxruntime` 是否完整。
+
+### ONNX Runtime 架构不匹配
+
+校验脚本会报告期望和实际 ELF `Machine`。删除或移出从其他 CPU 架构复制来的
+`library/inference_runtime/onnxruntime`，然后在 Jetson 项目中重新运行
+`./build.sh`，由下载脚本取得 Linux aarch64 版本；不要通过跳过校验继续链接。
 
 ### 临时工作树不干净或子模块初始化失败
 

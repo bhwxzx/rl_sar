@@ -130,6 +130,7 @@ set(
 set(USE_ONNX "OFF")
 set(ONNX_RUNTIME_LIB "")
 set(ONNX_RUNTIME_DIR "${INFERENCE_RUNTIME_DIR}/onnxruntime")
+set(RUNTIME_VALIDATOR "${PROJECT_ROOT_DIR}/scripts/validate_inference_runtime.sh")
 
 # Resolve the same Jetson mode used by the shell build and dependency scripts.
 execute_process(
@@ -157,12 +158,28 @@ endif()
 message(STATUS
     "Jetson mode: ${IS_JETSON} (${JETSON_DETECTION_SOURCE})")
 
-# if(EXISTS "${ONNX_RUNTIME_DIR}/include" AND EXISTS "${ONNX_RUNTIME_DIR}/lib" AND NOT IS_JETSON)
-if(EXISTS "${ONNX_RUNTIME_DIR}/include" AND EXISTS "${ONNX_RUNTIME_DIR}/lib")
-    set(USE_ONNX "ON")
-    add_compile_definitions(USE_ONNX)
+set(RUNTIME_VALIDATION_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+if(RUNTIME_VALIDATION_ARCH STREQUAL "")
+    set(RUNTIME_VALIDATION_ARCH "${CMAKE_HOST_SYSTEM_PROCESSOR}")
+endif()
 
-    message(STATUS "Found ONNX Runtime at: ${ONNX_RUNTIME_DIR}")
+if(EXISTS "${ONNX_RUNTIME_DIR}/include" AND EXISTS "${ONNX_RUNTIME_DIR}/lib")
+    execute_process(
+        COMMAND bash "${RUNTIME_VALIDATOR}" onnx
+                "${ONNX_RUNTIME_DIR}" "${RUNTIME_VALIDATION_ARCH}"
+        RESULT_VARIABLE ONNX_VALIDATION_RESULT
+        OUTPUT_VARIABLE ONNX_VALIDATION_OUTPUT
+        ERROR_VARIABLE ONNX_VALIDATION_ERROR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT ONNX_VALIDATION_RESULT EQUAL 0)
+        message(FATAL_ERROR
+            "ONNX Runtime validation failed: "
+            "${ONNX_VALIDATION_OUTPUT}${ONNX_VALIDATION_ERROR}")
+    endif()
+
+    message(STATUS "${ONNX_VALIDATION_OUTPUT}")
 
     # Read ONNX Runtime version
     if(EXISTS "${ONNX_RUNTIME_DIR}/VERSION_NUMBER")
@@ -195,6 +212,8 @@ if(EXISTS "${ONNX_RUNTIME_DIR}/include" AND EXISTS "${ONNX_RUNTIME_DIR}/lib")
     )
 
     if(ONNX_RUNTIME_LIB_PATH)
+        set(USE_ONNX "ON")
+        add_compile_definitions(USE_ONNX)
         if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
             add_library(onnxruntime_prebuilt STATIC IMPORTED GLOBAL)
         else()
@@ -209,43 +228,67 @@ if(EXISTS "${ONNX_RUNTIME_DIR}/include" AND EXISTS "${ONNX_RUNTIME_DIR}/lib")
         set(ONNX_RUNTIME_LIB onnxruntime_prebuilt)
         message(STATUS "ONNX Runtime library: ${ONNX_RUNTIME_LIB_PATH}")
     else()
-        message(WARNING "ONNX Runtime library not found")
-        set(USE_ONNX "OFF")
+        if(IS_JETSON OR LW_PRODUCTION_DEPLOYMENT)
+            message(FATAL_ERROR "ONNX Runtime library not found")
+        else()
+            message(WARNING "ONNX Runtime library not found")
+        endif()
     endif()
 else()
-    message(WARNING "ONNX Runtime not found. Please run: bash download_inference_runtime.sh onnx")
+    if(IS_JETSON OR LW_PRODUCTION_DEPLOYMENT)
+        message(FATAL_ERROR
+            "ONNX Runtime is required for Jetson and LW production builds. "
+            "Run: scripts/download_inference_runtime.sh onnx")
+    else()
+        message(WARNING
+            "ONNX Runtime not found. Please run: "
+            "scripts/download_inference_runtime.sh onnx")
+    endif()
 endif()
 
 # LibTorch Setup
 set(USE_TORCH "OFF")
 set(TORCH_LIBRARIES "")
 set(LIBTORCH_DIR "${INFERENCE_RUNTIME_DIR}/libtorch")
+set(TORCH_BACKEND_ALLOWED TRUE)
+if(IS_JETSON OR LW_PRODUCTION_DEPLOYMENT)
+    set(TORCH_BACKEND_ALLOWED FALSE)
+    message(STATUS
+        "LibTorch disabled: Jetson and LW production builds are ONNX-only")
+endif()
 
-if(EXISTS "${LIBTORCH_DIR}/include" AND EXISTS "${LIBTORCH_DIR}/lib")
-    set(USE_TORCH "ON")
-    add_compile_definitions(USE_TORCH)
-
-    message(STATUS "Found LibTorch at: ${LIBTORCH_DIR}")
-
-    # For Jetson with old CMake: set common Jetson CUDA architectures to avoid CUDA17 requirement
-    if(CMAKE_VERSION VERSION_LESS "3.18")
-        # Common Jetson architectures: 5.3(Nano), 6.2(TX2), 7.2(Xavier), 8.7(Orin)
-        set(TORCH_CUDA_ARCH_LIST "5.3;6.2;7.2;8.7" CACHE STRING "CUDA architectures")
-        set(ENV{TORCH_CUDA_ARCH_LIST} "5.3;6.2;7.2;8.7")
-        message(STATUS "CMake ${CMAKE_VERSION} detected - using common Jetson CUDA architectures")
+if(TORCH_BACKEND_ALLOWED
+   AND EXISTS "${LIBTORCH_DIR}/include"
+   AND EXISTS "${LIBTORCH_DIR}/lib")
+    execute_process(
+        COMMAND bash "${RUNTIME_VALIDATOR}" libtorch
+                "${LIBTORCH_DIR}" "${RUNTIME_VALIDATION_ARCH}"
+        RESULT_VARIABLE TORCH_VALIDATION_RESULT
+        OUTPUT_VARIABLE TORCH_VALIDATION_OUTPUT
+        ERROR_VARIABLE TORCH_VALIDATION_ERROR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT TORCH_VALIDATION_RESULT EQUAL 0)
+        message(FATAL_ERROR
+            "LibTorch validation failed: "
+            "${TORCH_VALIDATION_OUTPUT}${TORCH_VALIDATION_ERROR}")
     endif()
+
+    message(STATUS "${TORCH_VALIDATION_OUTPUT}")
 
     set(CMAKE_PREFIX_PATH "${LIBTORCH_DIR};${CMAKE_PREFIX_PATH}")
     find_package(Torch QUIET)
 
     if(Torch_FOUND)
+        set(USE_TORCH "ON")
+        add_compile_definitions(USE_TORCH)
         message(STATUS "LibTorch version: ${Torch_VERSION}")
         message(STATUS "Torch libraries: ${TORCH_LIBRARIES}")
     else()
-        set(USE_TORCH "OFF")
         message(WARNING "LibTorch found but find_package(Torch) failed")
     endif()
-else()
+elseif(TORCH_BACKEND_ALLOWED)
     message(WARNING "LibTorch not found. Please run: bash download_inference_runtime.sh libtorch")
 endif()
 
@@ -534,6 +577,16 @@ if(BUILD_TESTING)
                     ${PROJECT_ROOT_DIR}/README_CN.md
                     ${PROJECT_ROOT_DIR}/docs/LW_BUILD_DEPLOYMENT_CN.md
                     ${PROJECT_ROOT_DIR}/scripts/install_build_dependencies.sh
+                    ${PROJECT_ROOT_DIR}/scripts/download_inference_runtime.sh
+                    ${PROJECT_ROOT_DIR}/scripts/install_pytorch_jetson.sh
+                    ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
+                    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_lw_deployment.sh
+        )
+        add_test(
+            NAME lw_inference_runtime_architecture
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_inference_runtime_architecture.py
+                    ${PROJECT_ROOT_DIR}/scripts/validate_inference_runtime.sh
         )
         add_executable(
             test_lw_terminal_keyboard

@@ -41,8 +41,13 @@ CMake、yaml-cpp、Eigen、Boost、TBB、OpenSSL、GLFW、ROS 2，以及由项�
 
 首次执行 `./build.sh` 时会检查 Debian/Ubuntu 系统包、当前 ROS 发行版组件、
 推理运行时和仿真运行时。缺少系统包时会通过 `sudo apt-get` 自动安装，缺少
-LibTorch、ONNX Runtime 或 MuJoCo 时会由项目脚本下载；因此首次构建需要网络
-并可能提示输入 sudo 密码。可用下面的命令只查看系统包清单：
+推理运行时或 MuJoCo 时会由项目脚本下载；因此首次构建需要网络并可能提示输入
+sudo 密码。普通 x86_64 开发机构建会准备 LibTorch 和 ONNX Runtime；Jetson
+真机构建只准备实际使用的 ONNX Runtime。可用下面的命令只查看系统包清单：
+
+这里的 LibTorch 是 C++ 版 PyTorch，供 Sim2Sim 可选的
+`--use_actuator_net` 加载 `.pt` 执行器模型。训练脚本使用的 Python `torch`
+不是编译依赖，不由 `build.sh` 通过 pip 修改用户 Python 环境。
 
 ```bash
 ROS_DISTRO=humble scripts/install_build_dependencies.sh --print-packages
@@ -65,12 +70,15 @@ source /opt/ros/humble/setup.bash
 
 默认不需要手工声明平台。构建入口、推理运行时脚本和 CMake 会在
 Linux/aarch64 上检查 `/etc/nv_tegra_release`、`nvidia-l4t-core`、Tegra
-系统库和 Jetson CUDA target，并输出统一的 `Jetson mode` 结果。Jetson 会
-使用适配其 JetPack/Python/CUDA 的 PyTorch 安装路径，不能复用 x86_64 的
-LibTorch。
+系统库和 Jetson CUDA target，并输出统一的 `Jetson mode` 结果。建议真机使用
+JetPack 6.2.2、Ubuntu 22.04 和 ROS 2 Humble。
 
-Jetson 首次构建也会自动安装 `python3-pip`、`python3-dev` 等前置依赖，随后
-按检测到的 JetPack 版本准备 PyTorch/LibTorch。
+LW 的 Jetson 真机和正式部署路径是 ONNX-only：首次构建自动下载 Linux
+aarch64 ONNX Runtime，不安装或链接 PyTorch/LibTorch，也不启用 CUDA/TensorRT
+推理。下载脚本和 CMake 会读取核心动态库的 ELF 架构；AArch64 设备会拒绝
+x86-64 库，x86-64 主机也会拒绝 AArch64 库。因此不能把开发机的
+`library/inference_runtime` 复制到 Jetson，应由 Jetson 自己运行 `./build.sh`
+准备运行时。
 
 只有自动检测所需的系统标志不可见时才应显式覆盖：
 

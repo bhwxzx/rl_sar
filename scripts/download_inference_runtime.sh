@@ -21,9 +21,10 @@ source "${SCRIPT_DIR}/common.sh"
 resolve_jetson_platform
 print_info "Jetson mode: ${IS_JETSON} (${JETSON_DETECTION_SOURCE})"
 
-# Detect platform and architecture
-OS_TYPE="$(uname -s)"
-ARCH_TYPE="$(uname -m)"
+# Detect the same platform and architecture used by Jetson resolution. The
+# overrides are used only by isolated platform tests; native builds use uname.
+OS_TYPE="${RL_SAR_PLATFORM_OS:-$(uname -s)}"
+ARCH_TYPE="${RL_SAR_PLATFORM_ARCH:-$(uname -m)}"
 
 # Parse arguments: support both new and old usage
 if [ $# -eq 0 ]; then
@@ -42,6 +43,18 @@ else
     DOWNLOAD_TARGET="$2"
 fi
 
+if [ "${IS_JETSON}" = true ]; then
+    if [ "$DOWNLOAD_TARGET" = libtorch ]; then
+        print_error "LibTorch is not supported by the LW Jetson production path"
+        print_info "LW Jetson policies use ONNX Runtime; request the onnx target instead"
+        exit 1
+    fi
+    if [ "$DOWNLOAD_TARGET" = all ]; then
+        print_info "Jetson production path is ONNX-only; skipping LibTorch"
+        DOWNLOAD_TARGET=onnx
+    fi
+fi
+
 # Inference runtime storage path
 MODEL_INTERFACE_DIR="${PROJECT_ROOT}/${TARGET_DIR}"
 mkdir -p "${MODEL_INTERFACE_DIR}"
@@ -53,39 +66,15 @@ LIBTORCH_DIR="${MODEL_INTERFACE_DIR}/libtorch"
 # ONNX Runtime version and path
 ONNXRUNTIME_VERSION="1.22.0"
 ONNXRUNTIME_DIR="${MODEL_INTERFACE_DIR}/onnxruntime"
+RUNTIME_VALIDATOR="${SCRIPT_DIR}/validate_inference_runtime.sh"
 
 # Function: Validate LibTorch installation
 is_libtorch_valid() {
-    if [ ! -d "$LIBTORCH_DIR" ]; then
-        return 1
-    fi
-
-    if [ ! -d "$LIBTORCH_DIR/lib" ] || [ ! -d "$LIBTORCH_DIR/include" ]; then
-        return 1
-    fi
-
-    if [ -f "$LIBTORCH_DIR/include/torch/torch.h" ] || [ -f "$LIBTORCH_DIR/include/torch/csrc/api/include/torch/torch.h" ]; then
-        return 0
-    fi
-
-    return 1
+    bash "$RUNTIME_VALIDATOR" libtorch "$LIBTORCH_DIR" "$ARCH_TYPE"
 }
 
 # Function: Download LibTorch
 download_libtorch() {
-    # Check if Jetson platform
-    if [ "${IS_JETSON}" = true ]; then
-        print_info "Jetson platform detected - using install_pytorch_jetson.sh"
-        if [ -x "${SCRIPT_DIR}/install_pytorch_jetson.sh" ]; then
-            "${SCRIPT_DIR}/install_pytorch_jetson.sh" "${LIBTORCH_DIR}"
-            return $?
-        else
-            print_error "install_pytorch_jetson.sh not found or not executable"
-            print_info "Please ensure ${SCRIPT_DIR}/install_pytorch_jetson.sh exists"
-            return 1
-        fi
-    fi
-
     local url=""
     local archive_name=""
 
@@ -172,15 +161,7 @@ download_libtorch() {
 
 # Function: Validate ONNX Runtime installation
 is_onnxruntime_valid() {
-    if [ ! -d "$ONNXRUNTIME_DIR" ]; then
-        return 1
-    fi
-
-    if [ ! -d "$ONNXRUNTIME_DIR/lib" ] || [ ! -d "$ONNXRUNTIME_DIR/include" ]; then
-        return 1
-    fi
-
-    return 0
+    bash "$RUNTIME_VALIDATOR" onnx "$ONNXRUNTIME_DIR" "$ARCH_TYPE"
 }
 
 # Function: Download ONNX Runtime

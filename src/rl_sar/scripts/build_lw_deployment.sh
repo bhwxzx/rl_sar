@@ -44,6 +44,8 @@ if [[ -n $(git -C "$source_tree" status --porcelain --untracked-files=all) ]]; t
     echo "Temporary source worktree is not clean" >&2
     exit 1
 fi
+bash "$source_tree/scripts/validate_inference_runtime.sh" \
+    onnx "$inference_runtime/onnxruntime" "$(uname -m)"
 bash "$source_tree/scripts/validate_lw_description.sh"
 
 mkdir -p "$output_prefix"
@@ -85,6 +87,12 @@ LW_DEPLOYMENT_PREFIX="$output_prefix" bash -c '
         ldd_output=$(ldd "$executable")
         if grep -q "not found" <<< "$ldd_output"; then
             echo "Deployment executable has unresolved libraries: $executable" >&2
+            printf "%s\n" "$ldd_output" >&2
+            exit 1
+        fi
+        if [[ "$executable" == */lib/rl_sar/rl_real_LW ]] \
+           && grep -Eq "libtorch|libc10" <<< "$ldd_output"; then
+            echo "LW production executable unexpectedly depends on LibTorch" >&2
             printf "%s\n" "$ldd_output" >&2
             exit 1
         fi
