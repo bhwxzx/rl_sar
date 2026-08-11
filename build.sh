@@ -34,6 +34,27 @@ setup_inference_runtime() {
     fi
 }
 
+setup_system_dependencies() {
+    print_header "[Setting up System Dependencies]"
+
+    local dependency_script="${SCRIPT_DIR}/scripts/install_build_dependencies.sh"
+    if [ ! -f "$dependency_script" ]; then
+        print_error "Dependency installer not found: $dependency_script"
+        exit 1
+    fi
+    bash "$dependency_script" || {
+        print_error "Failed to setup system build dependencies"
+        exit 1
+    }
+}
+
+prepare_build_platform() {
+    if ! resolve_jetson_platform; then
+        exit 1
+    fi
+    print_info "Jetson mode: ${IS_JETSON} (${JETSON_DETECTION_SOURCE})"
+}
+
 setup_mujoco() {
     print_header "[Setting up MuJoCo]"
 
@@ -105,12 +126,8 @@ run_ros_build() {
     # Detect incompatible artifacts
     detect_incompatible_build_artifacts
 
-    # Create appropriate symlinks
-    if [ ${#packages[@]} -eq 0 ]; then
-        create_symlinks_for_all_packages
-    else
-        create_symlinks_for_specific_packages "${packages[@]}"
-    fi
+    # Colcon must see every dual-ROS package before resolving dependency closure.
+    create_symlinks_for_all_packages
 
     # Execute build
     if [ ${#packages[@]} -eq 0 ]; then
@@ -131,7 +148,8 @@ run_ros_build() {
         else
             print_header "[Using colcon build]"
             print_info "Building specific packages: $package_list"
-            colcon build --merge-install --symlink-install --packages-select $package_list
+            colcon build --merge-install --symlink-install \
+                --packages-up-to "${packages[@]}"
         fi
     fi
 
@@ -306,25 +324,6 @@ create_symlinks_for_all_packages() {
     fi
 }
 
-create_symlinks_for_specific_packages() {
-    local packages=("$@")
-
-    print_header "[Creating Symlinks for Specific Packages]"
-    print_info "Packages to process: ${packages[*]}"
-
-    created_packages=()
-    for package_name in "${packages[@]}"; do
-        package_dir=$(find src -name "$package_name" -type d | head -n 1)
-        if [ -n "$package_dir" ] && create_symlinks_for_package "$package_dir"; then
-            created_packages+=("$package_name")
-        fi
-    done
-
-    if [ ${#created_packages[@]} -gt 0 ]; then
-        print_success "Created symlinks for: ${created_packages[*]}"
-    fi
-}
-
 # ========================
 # Main Script
 # ========================
@@ -370,6 +369,8 @@ main() {
 
     # Handle MuJoCo build mode
     if [ "$mujoco_mode" = true ]; then
+        prepare_build_platform
+        setup_system_dependencies
         setup_inference_runtime
         validate_lw_description
         setup_mujoco
@@ -379,6 +380,8 @@ main() {
 
     # Handle CMake build mode
     if [ "$cmake_mode" = true ]; then
+        prepare_build_platform
+        setup_system_dependencies
         setup_inference_runtime
         run_cmake_build
         exit 0
@@ -397,7 +400,21 @@ main() {
         exit 1
     fi
 
+    prepare_build_platform
+    setup_system_dependencies
     setup_inference_runtime
+    if [ "$IS_JETSON" = false ]; then
+        if [ ${#packages[@]} -eq 0 ]; then
+            setup_mujoco
+        else
+            for package in "${packages[@]}"; do
+                if [ "$package" = rl_sar ]; then
+                    setup_mujoco
+                    break
+                fi
+            done
+        fi
+    fi
     validate_lw_description
     run_ros_build "${packages[@]}"
 }

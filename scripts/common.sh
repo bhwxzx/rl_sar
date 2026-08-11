@@ -46,6 +46,81 @@ print_header() {
     echo -e "${COLOR_INFO}$1${COLOR_RESET}"
 }
 
+# Resolve NVIDIA Jetson mode once for all build and dependency scripts.
+# IS_JETSON=true|false is an explicit operator override; when it is unset or
+# set to auto, detection requires Linux/aarch64 and a Jetson-specific marker.
+resolve_jetson_platform() {
+    local requested="${IS_JETSON:-auto}"
+    local resolved_source="${JETSON_DETECTION_SOURCE:-}"
+    local platform_os="${RL_SAR_PLATFORM_OS:-$(uname -s)}"
+    local platform_arch="${RL_SAR_PLATFORM_ARCH:-$(uname -m)}"
+    local platform_root="${RL_SAR_PLATFORM_ROOT:-/}"
+    local root_prefix="${platform_root%/}"
+    local cuda_target=""
+
+    requested="${requested,,}"
+    case "$requested" in
+        true)
+            if [[ "$platform_os" != "Linux"
+               || ( "$platform_arch" != "aarch64" && "$platform_arch" != "arm64" ) ]]; then
+                print_error "IS_JETSON=true requires a native Linux aarch64 host"
+                return 1
+            fi
+            export IS_JETSON=true
+            export JETSON_DETECTION_SOURCE="${resolved_source:-explicit-override}"
+            return 0
+            ;;
+        false)
+            export IS_JETSON=false
+            export JETSON_DETECTION_SOURCE="${resolved_source:-explicit-override}"
+            return 0
+            ;;
+        auto|"")
+            ;;
+        *)
+            print_error "IS_JETSON must be true, false, or unset for automatic detection"
+            return 1
+            ;;
+    esac
+
+    if [[ "$platform_os" != "Linux"
+       || ( "$platform_arch" != "aarch64" && "$platform_arch" != "arm64" ) ]]; then
+        export IS_JETSON=false
+        export JETSON_DETECTION_SOURCE=non-aarch64-platform
+        return 0
+    fi
+
+    if [[ -f "${root_prefix}/etc/nv_tegra_release" ]]; then
+        export IS_JETSON=true
+        export JETSON_DETECTION_SOURCE=nv-tegra-release
+        return 0
+    fi
+    if [[ -d "${root_prefix}/usr/lib/aarch64-linux-gnu/tegra" ]]; then
+        export IS_JETSON=true
+        export JETSON_DETECTION_SOURCE=tegra-library
+        return 0
+    fi
+    for cuda_target in \
+        "${root_prefix}"/usr/local/cuda-*/targets/aarch64-linux; do
+        if [[ -d "$cuda_target" ]]; then
+            export IS_JETSON=true
+            export JETSON_DETECTION_SOURCE=jetson-cuda-target
+            return 0
+        fi
+    done
+    if [[ "$platform_root" == "/"
+       && -x "$(command -v dpkg-query 2>/dev/null || true)"
+       && "$(dpkg-query -W -f='${Status}' nvidia-l4t-core 2>/dev/null || true)" == "install ok installed" ]]; then
+        export IS_JETSON=true
+        export JETSON_DETECTION_SOURCE=nvidia-l4t-core
+        return 0
+    fi
+
+    export IS_JETSON=false
+    export JETSON_DETECTION_SOURCE=unidentified-aarch64
+    return 0
+}
+
 # ========================
 # Utility Functions
 # ========================
@@ -114,4 +189,3 @@ check_network_status() {
         return 1
     fi
 }
-

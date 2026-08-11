@@ -22,6 +22,7 @@ struct LWDeploymentBundleInfo
     std::string build_type;
     std::string executable_sha256;
     std::vector<LWDeploymentFileRecord> files;
+    std::vector<LWDeploymentFileRecord> runtime_files;
 };
 
 class LWDeploymentBundle

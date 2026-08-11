@@ -398,3 +398,44 @@ LW-012 应记录生成端契约并保留 `duration=N/fps`；运行时明确首�
 - **Notes**: LW-012 现以 `motion_time_offset_frames` 明确区分自然帧编号、数组下标和相对动作时间；当前 CSV 配置为偏移 1，首个样本前保持第一行，并通过偏移 0/1、时间边界、插值、速度及错误输入测试。
 
 ---
+
+## [LRN-20260811-001] correction
+
+**Logged**: 2026-08-11T13:17:46+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+项目的统一首次构建入口应自动准备缺失依赖，而不是只报告系统包前置条件。
+
+### Details
+在 LW-018 初版实现中，删除 `build_LW.sh` 后曾计划把系统包安装改成人工步骤。
+用户明确指出，新环境第一次运行 `build.sh` 的预期就是自动下载和安装相关库。
+正确契约是：默认检查并自动安装缺失的 Debian/Ubuntu 与 ROS 构建包，继续自动
+下载项目管理的推理/仿真运行时；已满足的依赖不得重复安装，首次安装可以请求
+sudo 和网络。测试或受控离线环境可以显式跳过系统包安装，但不能改变默认行为。
+
+### Suggested Action
+由 `build.sh` 在编译前调用一个可独立检查的系统依赖安装器，再准备
+LibTorch、ONNX Runtime 和按需 MuJoCo；文档明确首次运行的联网和 sudo 行为，
+测试覆盖包清单、跳过开关和调用顺序。
+
+### Metadata
+- Source: user_feedback
+- Related Files: build.sh, scripts/install_build_dependencies.sh, README_CN.md
+- Tags: build, bootstrap, dependencies, first-run, Jetson
+- Pattern-Key: build.first_run_bootstraps_dependencies
+- Recurrence-Count: 1
+- First-Seen: 2026-08-11
+- Last-Seen: 2026-08-11
+
+### Resolution
+- **Resolved**: 2026-08-11T13:31:54+08:00
+- **Commit/PR**: 本提交
+- **Notes**: `build.sh` 现默认在编译前检查并自动安装缺失的系统与 ROS 构建包，
+  随后准备推理运行时及按需 MuJoCo；依赖齐全时不会调用包管理器。隔离测试已
+  验证缺包安装、依赖齐全跳过、包清单及执行顺序，中文文档同步说明联网、
+  sudo 和受控测试跳过方式。
+
+---

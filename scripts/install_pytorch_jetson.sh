@@ -27,20 +27,6 @@ fi
 TEMP_DIR="$(dirname "$LIBTORCH_DIR")"
 mkdir -p "${TEMP_DIR}"
 
-# Function: Detect if running on Jetson
-is_jetson_platform() {
-    if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "aarch64" ]; then
-        return 1
-    fi
-
-    # Check for Jetson-specific indicators
-    if [ -f /etc/nv_tegra_release ] || [ -d /usr/local/cuda-*/targets/aarch64-linux ]; then
-        return 0
-    fi
-
-    return 1
-}
-
 # Function: Detect JetPack version
 detect_jetpack_version() {
     local jetpack_version=""
@@ -138,12 +124,17 @@ install_pytorch_jetson() {
     print_info "PyTorch wheel: ${wheel_name}"
     print_info "Downloading from: ${wheel_url}"
 
-    # Install dependencies first
-    print_info "Installing dependencies..."
-    sudo apt-get update -qq 2>&1 | grep -v "^Ign:" | grep -v "^Get:" || true
-    sudo apt-get install -y -qq python3-pip python3-dev 2>&1 | grep -v "is already the newest version" || {
-        print_warning "Some dependencies may have failed to install, continuing..."
-    }
+    # System packages must be installed explicitly before invoking build.sh.
+    if ! command -v python3 &> /dev/null; then
+        print_error "python3 is required for Jetson PyTorch installation"
+        print_info "Install prerequisites explicitly: sudo apt install python3-pip python3-dev"
+        return 1
+    fi
+    if ! python3 -m pip --version &> /dev/null; then
+        print_error "python3-pip is required for Jetson PyTorch installation"
+        print_info "Install prerequisites explicitly: sudo apt install python3-pip python3-dev"
+        return 1
+    fi
 
     # Download PyTorch wheel
     print_info "Downloading PyTorch wheel (this may take several minutes)..."
@@ -293,14 +284,17 @@ create_libtorch_from_pytorch() {
 main() {
     print_header "Jetson PyTorch Installation and LibTorch Setup"
 
-    # Check if running on Jetson
-    if ! is_jetson_platform; then
+    if ! resolve_jetson_platform; then
+        exit 1
+    fi
+    if [ "$IS_JETSON" != true ]; then
         print_error "This script is designed for NVIDIA Jetson platforms only"
         print_info "Detected platform: $(uname -s) $(uname -m)"
+        print_info "Detection result: ${JETSON_DETECTION_SOURCE}"
         exit 1
     fi
 
-    print_success "Detected NVIDIA Jetson platform"
+    print_success "Detected NVIDIA Jetson platform (${JETSON_DETECTION_SOURCE})"
 
     # Check if PyTorch is already installed
     print_info "Checking for existing PyTorch installation..."
@@ -340,4 +334,3 @@ main() {
 
 # Run main function
 main "$@"
-

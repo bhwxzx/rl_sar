@@ -18,6 +18,9 @@ cd "$PROJECT_ROOT"
 # Load common utilities
 source "${SCRIPT_DIR}/common.sh"
 
+resolve_jetson_platform
+print_info "Jetson mode: ${IS_JETSON} (${JETSON_DETECTION_SOURCE})"
+
 # Detect platform and architecture
 OS_TYPE="$(uname -s)"
 ARCH_TYPE="$(uname -m)"

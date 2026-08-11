@@ -35,6 +35,21 @@ const std::set<std::string>& requiredPolicyFiles()
     return files;
 }
 
+const std::set<std::string>& requiredRuntimeFiles()
+{
+    static const std::set<std::string> files = {
+        "lib/libserial.a",
+        "lib/fdilink_ahrs/ahrs_driver_node",
+        "share/ament_index/resource_index/packages/fdilink_ahrs",
+        "share/ament_index/resource_index/packages/serial",
+        "share/fdilink_ahrs/launch/ahrs_driver.launch.py",
+        "share/fdilink_ahrs/package.xml",
+        "share/fdilink_ahrs/wheeltec_udev.sh",
+        "share/serial/package.xml",
+    };
+    return files;
+}
+
 [[noreturn]] void fail(const std::string& message)
 {
     throw std::runtime_error(
@@ -265,7 +280,7 @@ LWDeploymentBundleInfo LWDeploymentBundle::Verify(
         fail("manifest root must be a mapping");
     }
     const YAML::Node schema = manifest["schema_version"];
-    if (!schema || !schema.IsScalar() || schema.as<int>() != 1)
+    if (!schema || !schema.IsScalar() || schema.as<int>() != 2)
     {
         fail("unsupported manifest schema_version");
     }
@@ -362,6 +377,54 @@ LWDeploymentBundleInfo LWDeploymentBundle::Verify(
         fail("manifest does not contain the exact approved LW policy file set");
     }
 
+    const YAML::Node runtime_files = manifest["runtime_files"];
+    if (!runtime_files || !runtime_files.IsSequence())
+    {
+        fail("manifest runtime_files field must be a sequence");
+    }
+
+    std::set<std::string> seen_runtime_paths;
+    std::vector<LWDeploymentFileRecord> runtime_records;
+    runtime_records.reserve(runtime_files.size());
+    for (const YAML::Node& entry : runtime_files)
+    {
+        if (!entry || !entry.IsMap())
+        {
+            fail("manifest runtime file entry must be a mapping");
+        }
+        const std::string relative_string = requiredScalar(entry, "path");
+        const fs::path relative_path = validateRelativePath(relative_string);
+        if (!seen_runtime_paths.insert(relative_string).second)
+        {
+            fail("duplicate runtime manifest path: " + relative_string);
+        }
+        const std::string expected_sha256 = requiredScalar(entry, "sha256");
+        if (!isLowerHex(expected_sha256, 64))
+        {
+            fail("invalid runtime SHA-256 for: " + relative_string);
+        }
+
+        requireNoSymlinkComponents(prefix, relative_path);
+        const fs::path asset = prefix / relative_path;
+        requireRegularNonSymlink(asset, "runtime dependency");
+        const fs::path canonical_asset = fs::canonical(asset, error);
+        if (error || !isWithin(prefix, canonical_asset))
+        {
+            fail("runtime dependency escapes install prefix: "
+                 + relative_string);
+        }
+        if (Sha256File(asset) != expected_sha256)
+        {
+            fail("runtime SHA-256 mismatch for: " + relative_string);
+        }
+        runtime_records.push_back({relative_string, expected_sha256});
+    }
+
+    if (seen_runtime_paths != requiredRuntimeFiles())
+    {
+        fail("manifest does not contain the exact approved runtime file set");
+    }
+
     const fs::path policy_root = canonicalDirectory(
         bundle_root / "policy", "LW deployment policy root");
     return {
@@ -374,5 +437,6 @@ LWDeploymentBundleInfo LWDeploymentBundle::Verify(
         build_type,
         executable_sha256,
         records,
+        runtime_records,
     };
 }

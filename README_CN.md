@@ -39,6 +39,15 @@ LW 描述已直接跟踪在 `src/rl_sar_zoo/LW_description` 中；构建过程�
 CMake、yaml-cpp、Eigen、Boost、TBB、OpenSSL、GLFW、ROS 2，以及由项目脚本
 管理的推理与 MuJoCo 运行时。
 
+首次执行 `./build.sh` 时会检查 Debian/Ubuntu 系统包、当前 ROS 发行版组件、
+推理运行时和仿真运行时。缺少系统包时会通过 `sudo apt-get` 自动安装，缺少
+LibTorch、ONNX Runtime 或 MuJoCo 时会由项目脚本下载；因此首次构建需要网络
+并可能提示输入 sudo 密码。可用下面的命令只查看系统包清单：
+
+```bash
+ROS_DISTRO=humble scripts/install_build_dependencies.sh --print-packages
+```
+
 ## 开发构建
 
 在仓库根目录加载 ROS 2 后构建：
@@ -49,6 +58,30 @@ source /opt/ros/humble/setup.bash
 ```
 
 构建只校验本地已跟踪的 LW 描述，不会从网络克隆或更新机器人描述。
+指定包时会自动包含其工作区依赖，例如 `./build.sh fdilink_ahrs` 会先构建
+`serial`，`./build.sh rl_sar` 会包含其声明的 IMU/串口依赖。
+
+### Jetson 构建
+
+默认不需要手工声明平台。构建入口、推理运行时脚本和 CMake 会在
+Linux/aarch64 上检查 `/etc/nv_tegra_release`、`nvidia-l4t-core`、Tegra
+系统库和 Jetson CUDA target，并输出统一的 `Jetson mode` 结果。Jetson 会
+使用适配其 JetPack/Python/CUDA 的 PyTorch 安装路径，不能复用 x86_64 的
+LibTorch。
+
+Jetson 首次构建也会自动安装 `python3-pip`、`python3-dev` 等前置依赖，随后
+按检测到的 JetPack 版本准备 PyTorch/LibTorch。
+
+只有自动检测所需的系统标志不可见时才应显式覆盖：
+
+```bash
+export IS_JETSON=true   # 强制按 Jetson 构建，只允许原生 Linux/aarch64
+./build.sh
+```
+
+需要在 aarch64 非 Jetson 主机上明确禁用时可设置
+`IS_JETSON=false`。变量只能使用 `true` 或 `false`；普通构建应保持未设置并
+使用自动检测。
 
 ## Sim2Sim
 

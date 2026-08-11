@@ -77,4 +77,9 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(
+  PROGRAMS wheeltec_udev.sh
+  DESTINATION share/${PROJECT_NAME}
+)
+
 ament_package()

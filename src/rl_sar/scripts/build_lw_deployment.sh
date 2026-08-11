@@ -49,7 +49,7 @@ bash "$source_tree/scripts/validate_lw_description.sh"
 mkdir -p "$output_prefix"
 colcon --log-base "$temporary_root/log" build \
     --base-paths "$source_tree/src" \
-    --packages-up-to rl_sar \
+    --packages-up-to rl_sar fdilink_ahrs \
     --merge-install \
     --build-base "$temporary_root/build" \
     --install-base "$output_prefix" \
@@ -72,6 +72,23 @@ if find "$output_prefix/lib/rl_sar/rl_real_LW" \
 fi
 LW_DEPLOYMENT_PREFIX="$output_prefix" bash -c '
     source "$LW_DEPLOYMENT_PREFIX/setup.bash"
+    for package in serial fdilink_ahrs rl_sar; do
+        package_prefix=$(ros2 pkg prefix "$package")
+        if [[ $(realpath -m "$package_prefix") != "$LW_DEPLOYMENT_PREFIX" ]]; then
+            echo "Package $package did not resolve inside the deployment prefix: $package_prefix" >&2
+            exit 1
+        fi
+    done
+    for executable in \
+        "$LW_DEPLOYMENT_PREFIX/lib/fdilink_ahrs/ahrs_driver_node" \
+        "$LW_DEPLOYMENT_PREFIX/lib/rl_sar/rl_real_LW"; do
+        ldd_output=$(ldd "$executable")
+        if grep -q "not found" <<< "$ldd_output"; then
+            echo "Deployment executable has unresolved libraries: $executable" >&2
+            printf "%s\n" "$ldd_output" >&2
+            exit 1
+        fi
+    done
     "$LW_DEPLOYMENT_PREFIX/lib/rl_sar/rl_real_LW" \
         --verify-deployment-only
 '

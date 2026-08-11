@@ -104,7 +104,31 @@ cd "$RL_SAR_ROOT"
 ./build.sh
 ```
 
-第一次构建建议编译整个工作区。依赖已经构建完成后，也可以使用 `./build.sh rl_sar` 做增量构建。
+第一次构建建议编译整个工作区。也可以使用 `./build.sh rl_sar` 做增量构建；
+该命令会按 package manifest 自动包含 `rl_sar` 的工作区依赖，而不是只选择
+一个可能缺少依赖的包。
+
+LW 实机启动还需要工作区中的 IMU 驱动及其 ROS 串口库。首次构建后应确认三
+个包都来自当前开发安装目录：
+
+```bash
+source "$RL_SAR_ROOT/install/setup.bash"
+ros2 pkg prefix serial
+ros2 pkg prefix fdilink_ahrs
+ros2 pkg prefix rl_sar
+```
+
+仓库只保留 `./build.sh` 作为开发构建入口。不带包名时构建整个工作区；指定
+`fdilink_ahrs` 或 `rl_sar` 时，colcon 会先构建其声明的 `serial` 和 IMU
+依赖。首次运行会自动检查并安装缺失的 Debian/Ubuntu、ROS、推理和仿真依赖，
+可能请求 sudo 权限和网络访问；具体清单见
+[README_CN.md](../README_CN.md#获取代码与依赖)。
+
+在 Jetson 上，`./build.sh` 会自动检查 Linux/aarch64、L4T/Tegra 和 Jetson
+CUDA 标志，并在日志中输出 `Jetson mode: true`。只有容器等环境隐藏了这些
+标志时才使用 `export IS_JETSON=true`；该强制模式在非 Linux/aarch64 主机上
+会拒绝运行。普通 x86_64 和可明确排除 Jetson 的 aarch64 环境无需设置变量，
+必要时可用 `IS_JETSON=false` 显式禁用。
 
 这个开发构建与后面的正式部署构建用途不同：
 
@@ -205,10 +229,65 @@ test -d "$RL_SAR_ROOT/library/inference_runtime/onnxruntime"
 test -d "$RL_SAR_ROOT/library/inference_runtime/libtorch"
 ```
 
-还需要保证 `git`、`cmake`、`colcon`、C++ 编译器及 [README_CN.md](../README_CN.md#依赖) 中的依赖可用。
+还需要保证 `git`、`cmake`、`colcon`、C++ 编译器及
+[README_CN.md](../README_CN.md#获取代码与依赖) 中的依赖可用。
 
 > [!NOTE]
-> 正式部署清单会校验 LW 可执行文件、模型和配置，但不会打包或校验 ROS、LibTorch、ONNX Runtime、Python、操作系统动态库和硬件驱动。它们由部署机的项目和系统环境提供。
+> 正式部署清单会校验 LW 可执行文件、模型、配置，以及项目自带的
+> `fdilink_ahrs` 和 `serial` 运行文件，但不会打包基础 ROS、LibTorch、
+> ONNX Runtime、Python、操作系统动态库和 USB 内核驱动。后者仍由部署机
+> 的系统环境提供。
+
+### 第四步：准备串口设备名和访问权限
+
+LW 使用两条彼此独立的串口路径：
+
+| 用途 | 固定设备名 | 访问程序 | 是否使用 ROS `serial` 包 |
+| --- | --- | --- | --- |
+| 右侧电机板 | `/dev/ttyLegRight` | `rl_real_LW` 内的 LWSDK | 否 |
+| 左侧电机板 | `/dev/ttyLegLeft` | `rl_real_LW` 内的 LWSDK | 否 |
+| IMU | `/dev/fdilink_ahrs` | `fdilink_ahrs/ahrs_driver_node` | 是 |
+
+当前项目按现场使用要求将匹配到的 IMU 串口设置为 `0777`。规则安装完成后，
+普通登录用户访问 `/dev/fdilink_ahrs` 不需要 root 权限，也不要求属于
+`dialout` 组。该设置同时允许本机其他用户读写设备，部署机应限制非授权账户
+登录和运行程序。
+
+先用实际枚举出的设备节点确认 IMU 的 USB 属性；下面的 `/dev/ttyUSB0` 只是
+示例，必须替换为本机设备：
+
+```bash
+udevadm info --query=property --name=/dev/ttyUSB0 \
+    | grep -E 'ID_VENDOR_ID|ID_MODEL_ID|ID_SERIAL_SHORT'
+```
+
+确认设备确实匹配仓库脚本记录的 CP2102、CH9102 或 CH340 型号后，才可安装
+IMU 规则：
+
+```bash
+sudo "$RL_SAR_ROOT/src/fdilink_ahrs_ROS2/wheeltec_udev.sh"
+```
+
+该脚本只建立 `/dev/fdilink_ahrs` 并将设备权限设置为 `0777`，不会在编译或
+离线验收时自动运行。写入 `/etc/udev/rules.d` 和刷新 udev 仍属于系统管理
+操作，因此安装规则时必须使用 `sudo`；安装后的普通串口访问不需要 root 或
+`dialout`。CH340 通常没有可用于区分同型号设备的唯一序列号；
+如果主机连接了多个 CH340，不应直接使用该通用规则，而应先制定能唯一识别
+目标 IMU 的现场规则。
+
+仓库目前没有足够的 USB VID、PID 和序列号信息来安全生成
+`/dev/ttyLegRight`、`/dev/ttyLegLeft`。部署人员必须先分别读取两块电机板的
+实际属性，再用不同的唯一序列号建立稳定别名；不要依赖可能随插拔顺序变化的
+`/dev/ttyUSB0`、`/dev/ttyUSB1`，也不要把占位 VID/PID 直接写入系统规则。
+
+重新插拔设备后，只做节点、权限和链接目标检查，不打开串口：
+
+```bash
+for device in /dev/ttyLegRight /dev/ttyLegLeft /dev/fdilink_ahrs; do
+    test -e "$device" && test -r "$device" && test -w "$device"
+    readlink -f "$device"
+done
+```
 
 ## 5. 在部署机生成正式运行版本
 
@@ -228,8 +307,10 @@ src/rl_sar/scripts/build_lw_deployment.sh \
 1. 从 `SOURCE_COMMIT` 创建临时、干净的源码工作树；
 2. 初始化该提交锁定的 Git 子模块；
 3. 使用 `Release` 和 `LW_PRODUCTION_DEPLOYMENT=ON` 编译；
-4. 安装 `rl_real_LW`、五个 YAML、四个 ONNX 和两个状态转换 CSV；
-5. 生成记录源码提交和各文件 SHA-256 的 `manifest.yaml`；
+4. 安装 `serial`、`fdilink_ahrs`、`rl_real_LW`、五个 YAML、四个 ONNX 和
+   两个状态转换 CSV；
+5. 生成记录源码提交、策略资源及项目内 IMU/串口运行文件 SHA-256 的
+   `manifest.yaml`；
 6. 拒绝关键部署文件中的符号链接；
 7. 自动执行一次 `--verify-deployment-only` 离线验收。
 
@@ -240,7 +321,12 @@ src/rl_sar/scripts/build_lw_deployment.sh \
 ```text
 <DEPLOY_PREFIX>/
 ├── setup.bash
+├── lib/libserial.a
+├── lib/fdilink_ahrs/ahrs_driver_node
 ├── lib/rl_sar/rl_real_LW
+├── share/fdilink_ahrs/
+│   ├── launch/ahrs_driver.launch.py
+│   └── wheeltec_udev.sh
 └── share/rl_sar/deployment/LW/
     ├── manifest.yaml
     └── policy/LW/
@@ -276,6 +362,8 @@ source "$DEPLOY_PREFIX/setup.bash"
 
 - 当前可执行文件是否属于清单记录的源码提交；
 - 可执行文件、五个 YAML、四个 ONNX 和两个 CSV 的哈希是否正确；
+- `libserial`、AHRS 节点、launch、udev 辅助脚本和两个 ROS 包索引的哈希
+  是否正确；
 - 资源路径是否仍在部署目录内；
 - 关键部署文件是否经过符号链接。
 
@@ -288,9 +376,19 @@ sed -n '1,220p' \
     "$DEPLOY_PREFIX/share/rl_sar/deployment/LW/manifest.yaml"
 
 ldd "$DEPLOY_PREFIX/lib/rl_sar/rl_real_LW"
+ldd "$DEPLOY_PREFIX/lib/fdilink_ahrs/ahrs_driver_node"
 ```
 
-`manifest.yaml` 中的 `source_commit` 应等于开发机交付的完整提交哈希。`ldd` 输出中如果出现 `not found`，说明部署机缺少运行库，不得启动实机程序。
+`manifest.yaml` 中的 `source_commit` 应等于开发机交付的完整提交哈希。两次
+`ldd` 输出中如果出现 `not found`，说明部署机缺少运行库，不得启动实机程序。
+
+还必须确认包解析没有回退到旧开发工作区：
+
+```bash
+for package in serial fdilink_ahrs rl_sar; do
+    test "$(realpath -m "$(ros2 pkg prefix "$package")")" = "$DEPLOY_PREFIX"
+done
+```
 
 ## 7. 在部署机进行实机实验
 
@@ -312,6 +410,27 @@ ros2 launch rl_sar rl_real_LW.launch.py
 ```
 
 正常启动会加载 AHRS 驱动并运行 `rl_real_LW`，随后可能访问真实硬件。不要跳过离线验收，也不要用正常启动命令测试部署包是否完整。
+
+### 受控验证 IMU 话题
+
+这一步不是自动化验收的一部分，因为它会真实打开 `/dev/fdilink_ahrs`。只能在
+确认 IMU 型号、波特率 `921600`、设备别名和权限正确，并且尚未启动完整
+`rl_real_LW` 时单独执行：
+
+```bash
+ros2 launch fdilink_ahrs ahrs_driver.launch.py
+```
+
+在另一个同样加载当前部署前缀的终端检查：
+
+```bash
+ros2 topic echo --once /imu
+ros2 topic hz /imu
+```
+
+确认时间戳持续更新、姿态/角速度/加速度为有限值且发布频率稳定后，用
+`Ctrl-C` 停止独立 AHRS 驱动。不要让独立 AHRS 驱动与完整 LW launch 同时
+争用同一串口。
 
 ### 可选调试话题
 
@@ -453,6 +572,8 @@ source "$DEPLOY_PREFIX/setup.bash"
 关闭已经加载其他工作区的终端。在新终端中先加载基础 ROS，再加载目标部署目录的 `setup.bash`，然后确认：
 
 ```bash
+ros2 pkg prefix serial
+ros2 pkg prefix fdilink_ahrs
 ros2 pkg prefix rl_sar
 ```
 
@@ -467,4 +588,5 @@ ros2 pkg prefix rl_sar
 - 构建脚本：`src/rl_sar/scripts/build_lw_deployment.sh`
 - 清单生成器：`src/rl_sar/scripts/generate_lw_deployment_manifest.py`
 - LW 实机启动文件：`src/rl_sar/launch/rl_real_LW.launch.py`
-- LW 实机部署问题记录：`.learnings/LW_REAL_DEPLOYMENT_ISSUES.md` 中的 `LW-010` 和 `LW-011`
+- LW 实机部署问题记录：`.learnings/LW_REAL_DEPLOYMENT_ISSUES.md` 中的
+  `LW-010`、`LW-011` 和 `LW-017`

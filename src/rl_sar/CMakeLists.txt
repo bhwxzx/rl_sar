@@ -131,12 +131,31 @@ set(USE_ONNX "OFF")
 set(ONNX_RUNTIME_LIB "")
 set(ONNX_RUNTIME_DIR "${INFERENCE_RUNTIME_DIR}/onnxruntime")
 
-# Detect Jetson platform
-set(IS_JETSON FALSE)
-if(EXISTS "/etc/nv_tegra_release")
-    set(IS_JETSON TRUE)
-    message(STATUS "Jetson platform detected - ONNX Runtime will be disabled")
+# Resolve the same Jetson mode used by the shell build and dependency scripts.
+execute_process(
+    COMMAND bash "${PROJECT_ROOT_DIR}/scripts/detect_jetson.sh"
+    RESULT_VARIABLE JETSON_DETECTION_RESULT
+    OUTPUT_VARIABLE JETSON_DETECTION_OUTPUT
+    ERROR_VARIABLE JETSON_DETECTION_ERROR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if(NOT JETSON_DETECTION_RESULT EQUAL 0)
+    message(FATAL_ERROR
+        "Jetson platform detection failed: "
+        "${JETSON_DETECTION_OUTPUT}${JETSON_DETECTION_ERROR}")
 endif()
+if(JETSON_DETECTION_OUTPUT MATCHES "^true;(.+)$")
+    set(IS_JETSON TRUE)
+    set(JETSON_DETECTION_SOURCE "${CMAKE_MATCH_1}")
+elseif(JETSON_DETECTION_OUTPUT MATCHES "^false;(.+)$")
+    set(IS_JETSON FALSE)
+    set(JETSON_DETECTION_SOURCE "${CMAKE_MATCH_1}")
+else()
+    message(FATAL_ERROR
+        "Unexpected Jetson detection output: ${JETSON_DETECTION_OUTPUT}")
+endif()
+message(STATUS
+    "Jetson mode: ${IS_JETSON} (${JETSON_DETECTION_SOURCE})")
 
 # if(EXISTS "${ONNX_RUNTIME_DIR}/include" AND EXISTS "${ONNX_RUNTIME_DIR}/lib" AND NOT IS_JETSON)
 if(EXISTS "${ONNX_RUNTIME_DIR}/include" AND EXISTS "${ONNX_RUNTIME_DIR}/lib")
@@ -492,6 +511,29 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/test/test_generate_lw_deployment_manifest.py
                     ${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_lw_deployment_manifest.py
+        )
+        add_test(
+            NAME lw_runtime_dependencies
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_lw_runtime_dependencies.py
+                    ${CMAKE_CURRENT_SOURCE_DIR}/package.ros2.xml
+                    ${PROJECT_ROOT_DIR}/src/fdilink_ahrs_ROS2/package.xml
+        )
+        add_test(
+            NAME lw_jetson_detection
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_jetson_detection.py
+                    ${PROJECT_ROOT_DIR}/scripts/detect_jetson.sh
+        )
+        add_test(
+            NAME lw_build_workflow
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_build_workflow.py
+                    ${PROJECT_ROOT_DIR}/build.sh
+                    ${PROJECT_ROOT_DIR}/build_LW.sh
+                    ${PROJECT_ROOT_DIR}/README_CN.md
+                    ${PROJECT_ROOT_DIR}/docs/LW_BUILD_DEPLOYMENT_CN.md
+                    ${PROJECT_ROOT_DIR}/scripts/install_build_dependencies.sh
         )
     endif()
 

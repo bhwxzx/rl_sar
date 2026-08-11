@@ -70,9 +70,11 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 11 | LW-016 | P1 / high | resolved | Audit every safety trigger for proportional and recoverable behavior |
 | 12 | LW-013 | P1 / high | resolved | Validate YAML, mappings, observation sizes, and model outputs |
 | 13 | LW-011 | P1 / high | resolved | Make the control loop suitable for deterministic real-time execution |
-| 14 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
-| 15 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
-| 16 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
+| 14 | LW-017 | P1 / high | resolved | Bundle and verify the LW IMU/serial runtime dependencies |
+| 15 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
+| 16 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
+| 17 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
+| 18 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
 
 ---
 
@@ -1292,6 +1294,162 @@ for each sample.
   `cppcheck`、Python/Bash 语法、launch 默认参数检查及 `git diff --check`
   通过；detached clean-worktree Release 部署构建、manifest 生成和
   `--verify-deployment-only` 通过。未启动串口、仿真界面或实机。
+- **Remaining Follow-ups**: none
+
+---
+
+## [LW-017] Reproducible IMU and serial runtime deployment
+
+**Priority**: P1 / high
+**Status**: resolved
+**Dependencies**: LW-010, LW-015
+
+### Problem
+
+The development helper builds the ROS `serial` library and `fdilink_ahrs`, but
+the formal production builder selects only `rl_sar`. The installed LW launch
+unconditionally resolves `fdilink_ahrs`, so a fresh or relocated production
+prefix can pass `--verify-deployment-only` and still fail before the real node
+starts because its IMU packages are absent. The package manifests also omit
+dependencies that the AHRS CMake configuration requires, and the deployment
+guide does not provide a complete device-alias and package-presence procedure.
+
+### Evidence
+
+- `build_LW.sh:7-8`
+- `src/rl_sar/scripts/build_lw_deployment.sh:50-52`
+- `src/rl_sar/launch/rl_real_LW.launch.py:14-17`
+- `src/rl_sar/package.ros2.xml:11-19`
+- `src/fdilink_ahrs_ROS2/package.xml:10-25`
+- `src/fdilink_ahrs_ROS2/CMakeLists.txt:22-34`
+- `src/fdilink_ahrs_ROS2/wheeltec_udev.sh:1-13`
+- `src/rl_sar/src/rl_real_LW.cpp:171-172`
+
+### Intended Scope
+
+- Declare the project-owned IMU and serial dependency graph completely.
+- Build and install `serial`, `fdilink_ahrs`, and `rl_sar` into the same clean
+  production prefix.
+- Bind the installed IMU/serial runtime files into deployment integrity checks.
+- Provide a non-automatic IMU udev helper with the operator-approved `0777`
+  device mode and document the
+  distinct motor-board and IMU serial paths without inventing motor USB IDs.
+- Keep ROS, operating-system libraries, USB drivers, and actual hardware
+  activation outside the deployment manifest and automated acceptance.
+
+### Acceptance Criteria
+
+- A clean production prefix resolves `serial`, `fdilink_ahrs`, and `rl_sar`
+  without sourcing a development workspace.
+- `--verify-deployment-only` rejects missing, changed, escaping, or symlinked
+  project-owned IMU/serial runtime files.
+- Both production executables have no unresolved dynamic libraries.
+- The Chinese deployment guide contains build, package, permission, stable
+  device-name, offline-validation, and controlled `/imu` validation steps.
+- Automated verification does not open serial devices or start ROS nodes.
+
+### Resolution
+
+- **Resolved**: 2026-08-11T12:34:05+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 补全 LW 正式部署中的 `serial`、`fdilink_ahrs` 依赖
+  图和同前缀安装；将项目内 IMU/串口运行文件加入清单哈希与离线校验；提供
+  非自动执行、设备权限为用户指定 `0777` 的 IMU udev 辅助脚本；用中文记录
+  电机板与 IMU 串口的构建、设备别名、权限和受控验证步骤。安装规则仍需
+  root，安装后访问 IMU 不要求 root 或 `dialout`。
+- **Changed Files**: `src/fdilink_ahrs_ROS2/{package.xml,CMakeLists.txt,wheeltec_udev.sh}`、
+  `src/rl_sar/package.ros2.xml`、`src/rl_sar/scripts/{build_lw_deployment.sh,generate_lw_deployment_manifest.py}`、
+  `src/rl_sar/library/core/deployment/lw_deployment_bundle.*`、
+  `src/rl_sar/CMakeLists.txt`、`src/rl_sar/test/{test_generate_lw_deployment_manifest.py,test_lw_deployment_bundle.cpp,test_lw_runtime_dependencies.py}`、
+  `docs/LW_BUILD_DEPLOYMENT_CN.md`、`.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 现有构建及从空目录创建的 Debug、Release 构建均通过新增
+  三项定向 CTest 和完整 19/19 CTest；两个 clean build 均构建了 `serial`、
+  `fdilink_ahrs`、`rl_real_LW` 和 `rl_sim_LW`。临时克隆中的 detached clean-
+  worktree Release 正式构建安装了三个 ROS 包，生成 schema 2 清单并通过
+  `--verify-deployment-only`；完整前缀重定位后，三个包均解析到新前缀，清单
+  校验再次通过，两个运行程序的 `ldd` 均无 `not found`。Python/Bash 语法、
+  XML 依赖测试、`cppcheck` 和 `git diff --check` 通过；`shellcheck`、
+  `cmakelint` 不可用。未打开串口、未安装 udev 规则、未启动 ROS 节点、仿真
+  界面或实机。用户随后明确要求将 IMU 设备模式恢复为 `0777` 且普通访问不
+  依赖 `dialout`；四条规则、中文文档和批准范围已同步，Bash 语法、规则内容
+  断言、三项部署定向 CTest 及 `git diff --check` 再次通过。
+- **Remaining Follow-ups**: none
+
+---
+
+## [LW-018] Unified build entry point and Jetson detection
+
+**Priority**: P2 / medium
+**Status**: resolved
+**Dependencies**: LW-015, LW-017
+
+### Problem
+
+`build_LW.sh` duplicates the normal build entry point with several separate
+`--packages-select` invocations. A fresh workspace can therefore select a
+package before its workspace dependency is installed or sourced. The helper
+also installs system packages interactively and relies on a comment telling
+Jetson users to export `IS_JETSON=true`. Jetson detection is inconsistent:
+the inference downloader consumes the variable without resolving it, the
+Jetson installer has broader local checks, and CMake checks only
+`/etc/nv_tegra_release`.
+
+### Evidence
+
+- `build_LW.sh:3-9`
+- `build.sh:96-135`
+- `scripts/download_inference_runtime.sh:16-19,73-104`
+- `scripts/install_pytorch_jetson.sh:30-42`
+- `src/rl_sar/CMakeLists.txt:134-139`
+- `docs/LW_BUILD_DEPLOYMENT_CN.md:119-122`
+
+### Intended Scope
+
+- Remove `build_LW.sh` and retain `build.sh` as the only development build
+  entry point.
+- Make selected-package builds include their complete workspace dependency
+  closure and expose all ROS-version package manifests before selection.
+- Resolve Jetson mode consistently through automatic Linux/aarch64 hardware
+  indicators with a validated `IS_JETSON=true|false` override.
+- Automatically install missing Debian/Ubuntu and ROS build dependencies on a
+  first build, while avoiding package-manager work when everything is present.
+
+### Acceptance Criteria
+
+- A clean no-argument build succeeds for all workspace packages in dependency
+  order.
+- Clean selected builds of `fdilink_ahrs` and `rl_sar` include `serial` and the
+  remaining declared workspace dependency closure.
+- Native Jetson, non-Jetson aarch64, x86_64, valid overrides, and invalid or
+  incompatible overrides are covered without requiring Jetson hardware.
+- Shell, CMake, inference setup, and documentation report the same Jetson mode.
+- A first build installs missing declared system/ROS dependencies and existing
+  environments skip package-manager work.
+
+### Resolution
+
+- **Resolved**: 2026-08-11T13:31:54+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 删除重复的 `build_LW.sh`，将 `build.sh` 作为唯一开发
+  构建入口；使选包构建包含完整工作区依赖闭包；统一 Shell、CMake 与推理运行时
+  的 Jetson 自动检测及显式覆盖；首次构建默认自动安装缺失的 Debian/Ubuntu、
+  ROS 构建依赖并继续准备项目运行库，依赖齐全时不调用包管理器。
+- **Changed Files**: `build.sh`（并删除 `build_LW.sh`）、
+  `scripts/{common.sh,detect_jetson.sh,download_inference_runtime.sh,install_build_dependencies.sh,install_pytorch_jetson.sh}`、
+  `src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/test/{test_build_workflow.py,test_jetson_detection.py}`、
+  `README_CN.md`、`docs/LW_BUILD_DEPLOYMENT_CN.md`、
+  `.learnings/{LEARNINGS.md,LW_REAL_DEPLOYMENT_ISSUES.md}`。
+- **Verification**: 隔离测试覆盖 x86_64、无 Jetson 标志的 aarch64、三类 Jetson
+  标志、有效 `IS_JETSON` 覆盖、无效及不兼容覆盖；假 `dpkg-query`/`apt-get`/
+  `sudo` 验证缺包时执行更新和安装，依赖齐全时完全跳过包管理器。最终源码的
+  clean `./build.sh fdilink_ahrs` 按 `serial -> fdilink_ahrs` 构建 2 包，clean
+  `./build.sh rl_sar` 按 `serial -> fdilink_ahrs -> rl_sar` 构建 3 包，无参数
+  Debug 构建全部 6 包；独立 Debug、Release 的定向 CTest 和全量 21/21 CTest
+  均通过。detached clean-worktree Release 正式部署构建安装三个 ROS 包、生成
+  schema 2 清单并通过 `--verify-deployment-only`。Bash/Python 语法、
+  `cppcheck` 和 `git diff --check` 通过；`shellcheck`、`cmakelint` 不可用。
+  验收未在宿主机实际执行 apt 安装，也未使用 Jetson 或实机硬件。
 - **Remaining Follow-ups**: none
 
 ---

@@ -22,6 +22,17 @@ POLICY_FILES = (
     "policy/LW/robot_lab/wheel_to_leg/wheel_to_leg_transform_60hz.csv",
 )
 
+RUNTIME_FILES = (
+    "lib/libserial.a",
+    "lib/fdilink_ahrs/ahrs_driver_node",
+    "share/ament_index/resource_index/packages/fdilink_ahrs",
+    "share/ament_index/resource_index/packages/serial",
+    "share/fdilink_ahrs/launch/ahrs_driver.launch.py",
+    "share/fdilink_ahrs/package.xml",
+    "share/fdilink_ahrs/wheeltec_udev.sh",
+    "share/serial/package.xml",
+)
+
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -50,10 +61,11 @@ def render_manifest(
     source_commit: str,
     build_type: str,
     executable_sha256: str,
-    file_hashes: list[tuple[str, str]],
+    policy_hashes: list[tuple[str, str]],
+    runtime_hashes: list[tuple[str, str]],
 ) -> str:
     lines = [
-        "schema_version: 1",
+        "schema_version: 2",
         f'source_commit: "{source_commit}"',
         f'build_type: "{build_type}"',
         "executable:",
@@ -61,7 +73,15 @@ def render_manifest(
         f'  sha256: "{executable_sha256}"',
         "files:",
     ]
-    for relative_path, digest in file_hashes:
+    for relative_path, digest in policy_hashes:
+        lines.extend(
+            (
+                f'  - path: "{relative_path}"',
+                f'    sha256: "{digest}"',
+            )
+        )
+    lines.append("runtime_files:")
+    for relative_path, digest in runtime_hashes:
         lines.extend(
             (
                 f'  - path: "{relative_path}"',
@@ -91,7 +111,7 @@ def generate_manifest(
             f"LW deployment bundle is not a real directory: {bundle_root}"
         )
 
-    file_hashes = []
+    policy_hashes = []
     for relative_string in POLICY_FILES:
         relative_path = Path(relative_string)
         require_no_symlink_components(bundle_root, relative_path)
@@ -104,14 +124,30 @@ def generate_manifest(
             raise RuntimeError(
                 f"deployment asset escapes bundle: {relative_string}"
             ) from error
-        file_hashes.append((relative_string, sha256_file(asset)))
+        policy_hashes.append((relative_string, sha256_file(asset)))
+
+    runtime_hashes = []
+    for relative_string in RUNTIME_FILES:
+        relative_path = Path(relative_string)
+        require_no_symlink_components(prefix, relative_path)
+        asset = prefix / relative_path
+        require_regular_file(asset, "runtime dependency")
+        resolved_asset = asset.resolve(strict=True)
+        try:
+            resolved_asset.relative_to(prefix)
+        except ValueError as error:
+            raise RuntimeError(
+                f"runtime dependency escapes install prefix: {relative_string}"
+            ) from error
+        runtime_hashes.append((relative_string, sha256_file(asset)))
 
     manifest_path = bundle_root / "manifest.yaml"
     manifest_text = render_manifest(
         source_commit,
         build_type,
         sha256_file(executable),
-        file_hashes,
+        policy_hashes,
+        runtime_hashes,
     )
     with tempfile.NamedTemporaryFile(
         mode="w",

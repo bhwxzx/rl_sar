@@ -29,6 +29,16 @@ const std::vector<std::string> kPolicyFiles = {
     "policy/LW/robot_lab/wheel_to_leg/policy.onnx",
     "policy/LW/robot_lab/wheel_to_leg/wheel_to_leg_transform_60hz.csv",
 };
+const std::vector<std::string> kRuntimeFiles = {
+    "lib/libserial.a",
+    "lib/fdilink_ahrs/ahrs_driver_node",
+    "share/ament_index/resource_index/packages/fdilink_ahrs",
+    "share/ament_index/resource_index/packages/serial",
+    "share/fdilink_ahrs/launch/ahrs_driver.launch.py",
+    "share/fdilink_ahrs/package.xml",
+    "share/fdilink_ahrs/wheeltec_udev.sh",
+    "share/serial/package.xml",
+};
 
 void require(bool condition, const std::string& message)
 {
@@ -73,6 +83,10 @@ public:
         {
             writeFile(bundle / relative, "asset:" + relative + "\n");
         }
+        for (const std::string& relative : kRuntimeFiles)
+        {
+            writeFile(prefix / relative, "runtime:" + relative + "\n");
+        }
         writeManifest();
     }
 
@@ -87,7 +101,7 @@ public:
         const std::string& first_manifest_path = "")
     {
         std::ostringstream manifest;
-        manifest << "schema_version: 1\n"
+        manifest << "schema_version: 2\n"
                  << "source_commit: \"" << source_commit << "\"\n"
                  << "build_type: \"Release\"\n"
                  << "executable:\n"
@@ -106,6 +120,14 @@ public:
             manifest << "  - path: \"" << manifest_path << "\"\n"
                      << "    sha256: \""
                      << LWDeploymentBundle::Sha256File(bundle / actual_path)
+                     << "\"\n";
+        }
+        manifest << "runtime_files:\n";
+        for (const std::string& relative : kRuntimeFiles)
+        {
+            manifest << "  - path: \"" << relative << "\"\n"
+                     << "    sha256: \""
+                     << LWDeploymentBundle::Sha256File(prefix / relative)
                      << "\"\n";
         }
         writeFile(bundle / "manifest.yaml", manifest.str());
@@ -144,6 +166,8 @@ void testValidAndRelocatableBundle()
     const LWDeploymentBundleInfo initial = LWDeploymentBundle::Verify(
         fixture.share, fixture.executable, kCommit);
     require(initial.files.size() == kPolicyFiles.size(), "wrong file count");
+    require(initial.runtime_files.size() == kRuntimeFiles.size(),
+            "wrong runtime file count");
     require(initial.source_commit == kCommit, "wrong source commit");
 
     const fs::path moved_prefix = fixture.root / "moved-install";
@@ -200,6 +224,50 @@ void testTamperedExecutableFails()
                 fixture.share, fixture.executable, kCommit);
         },
         "executable SHA-256 mismatch");
+}
+
+void testMissingRuntimeDependencyFails()
+{
+    Fixture fixture;
+    fs::remove(fixture.prefix / kRuntimeFiles.front());
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "runtime dependency must be a regular non-symlink file");
+}
+
+void testTamperedRuntimeDependencyFails()
+{
+    Fixture fixture;
+    std::ofstream output(
+        fixture.prefix / kRuntimeFiles.back(),
+        std::ios::binary | std::ios::app);
+    output << "tampered";
+    output.close();
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "runtime SHA-256 mismatch");
+}
+
+void testSymlinkRuntimeDependencyFails()
+{
+    Fixture fixture;
+    const fs::path runtime = fixture.prefix / kRuntimeFiles.front();
+    const fs::path external = fixture.root / "external-runtime";
+    writeFile(external, "external\n");
+    fs::remove(runtime);
+    fs::create_symlink(external, runtime);
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "symbolic link");
 }
 
 void testSourceCommitMismatchFails()
@@ -268,6 +336,9 @@ int main()
         testMissingAssetFails();
         testTamperedAssetFails();
         testTamperedExecutableFails();
+        testMissingRuntimeDependencyFails();
+        testTamperedRuntimeDependencyFails();
+        testSymlinkRuntimeDependencyFails();
         testSourceCommitMismatchFails();
         testSymlinkAssetFails();
         testSymlinkInstalledExecutableFails();
