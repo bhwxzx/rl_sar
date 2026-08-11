@@ -45,6 +45,26 @@ bool LWOperatorModeHasProgress(LWOperatorMode mode)
 
 RL_Real::RL_Real(int argc, char **argv)
 {
+    runtime_core_.bind(
+        *this,
+        [this](const LWSafetyDecision& decision, const std::string& reason)
+        {
+            ExecuteSafetyDecision(decision, reason);
+        });
+    std::filesystem::path policy_root = POLICY_DIR;
+    for (int index = 1; index < argc; ++index)
+    {
+        if (std::string(argv[index]) == "--policy-root")
+        {
+            if (index + 1 >= argc)
+            {
+                throw std::runtime_error(
+                    "--policy-root requires a directory argument");
+            }
+            policy_root = argv[++index];
+        }
+    }
+    SetPolicyRoot(policy_root);
     ros2_node = std::make_shared<rclcpp::Node>("rl_real_LW_node");
     // this->imu_subscriber_ = ros2_node->create_subscription<sensor_msgs::msg::Imu>(
     //     "/imu", rclcpp::SystemDefaultsQoS(),
@@ -78,16 +98,18 @@ RL_Real::RL_Real(int argc, char **argv)
 
     while (1)
     {
-        if (d)
         {
-            std::cout << LOGGER::INFO << "[MuJoCo] Data prepared" << std::endl;
-            break;
+            const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
+            if (d)
+            {
+                this->mj_model = m;
+                this->mj_data = d;
+                std::cout << LOGGER::INFO << "[MuJoCo] Data prepared" << std::endl;
+                break;
+            }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
-
-    this->mj_model = m;
-    this->mj_data = d;
 
     this->SetupSysJoystick("/dev/input/js1", 16);
 
@@ -162,20 +184,56 @@ RL_Real::RL_Real(int argc, char **argv)
     this->InitControl();
     this->control.gait_frequency = this->params.Get<std::vector<float>>("gait_command")[0];
     this->gait_phase_time = 0.0f;
-    policy_input_snapshot_.publish(
-        {this->robot_state,
-         {this->control.x,
-          this->control.y,
-          this->control.yaw,
-          this->control.gait_frequency}});
+    runtime_core_.publishInitialPolicyInput();
 
     // loop
-    this->loop_joystick = std::make_shared<LoopFunc>("loop_joystick", 0.01, std::bind(&RL_Real::GetSysJoystick, this));
-    this->loop_control = std::make_shared<LoopFunc>("loop_control", this->params.Get<float>("dt"), std::bind(&RL_Real::RobotControl, this));
-    this->loop_rl = std::make_shared<LoopFunc>("loop_rl", this->params.Get<float>("dt") * this->params.Get<int>("decimation"), std::bind(&RL_Real::RunModel, this));
-    this->loop_joystick->start();
-    this->loop_control->start();
-    this->loop_rl->start();
+    const auto loop_error_handler = [this](
+        const std::string& loop_name,
+        std::exception_ptr error)
+    {
+        HandleLoopError(loop_name, error);
+    };
+    const auto loop_timing_handler = [this](
+        const std::string& loop_name,
+        LoopTimingLevel level,
+        const LoopTimingSnapshot& timing)
+    {
+        HandleLoopTiming(loop_name, level, timing);
+    };
+    this->loop_joystick = std::make_shared<LoopFunc>(
+        "loop_joystick",
+        0.01,
+        std::bind(&RL_Real::GetSysJoystick, this),
+        -1,
+        loop_error_handler);
+    this->loop_control = std::make_shared<LoopFunc>(
+        "loop_control",
+        BuildLWControlLoopConfig(this->params),
+        std::bind(&RL_Real::RobotControl, this),
+        loop_error_handler,
+        loop_timing_handler);
+    this->loop_rl = std::make_shared<LoopFunc>(
+        "loop_rl",
+        this->params.Get<float>("dt") * this->params.Get<int>("decimation"),
+        std::bind(&RL_Real::RunModel, this),
+        -1,
+        loop_error_handler);
+    try
+    {
+        this->loop_joystick->start();
+        this->loop_rl->start();
+        this->loop_control->start();
+    }
+    catch (...)
+    {
+        runtime_core_.reportSafetyEvent(
+            LWSafetyEvent::StartupLoopStartFailed,
+            "[Safety] Failed to start Sim2Sim worker loops");
+        this->loop_control->shutdown();
+        this->loop_rl->shutdown();
+        this->loop_joystick->shutdown();
+        throw;
+    }
     this->operator_status_timer_ = ros2_node->create_wall_timer(
         100ms,
         std::bind(&RL_Real::OperatorStatusCallback, this));
@@ -195,6 +253,7 @@ RL_Real::RL_Real(int argc, char **argv)
 
 RL_Real::~RL_Real()
 {
+    runtime_core_.reportSafetyEvent(LWSafetyEvent::NormalShutdown);
     instance = nullptr;
     this->loop_joystick->shutdown();
     this->loop_rl->shutdown();
@@ -207,6 +266,17 @@ void RL_Real::jointstate_plot_callback(void)
 {
     SimDebugSnapshot snapshot;
     if (!debug_snapshot_.read(snapshot))
+    {
+        return;
+    }
+    if (!sim)
+    {
+        return;
+    }
+    const std::unique_lock<std::recursive_mutex> simulation_lock(sim->mtx);
+    mj_model = m;
+    mj_data = d;
+    if (!mj_model || !mj_data)
     {
         return;
     }
@@ -279,10 +349,10 @@ void RL_Real::jointstate_plot_callback(void)
     }
 
     // ================= 4. 填充步态数据 (脚端信息) =================
-    static int id_l_site = mj_name2id(mj_model, mjOBJ_SITE, "left_foot_site");
-    static int id_r_site = mj_name2id(mj_model, mjOBJ_SITE, "right_foot_site");
-    static int id_l_sensor = mj_name2id(mj_model, mjOBJ_SENSOR, "left_foot_force_sensor");
-    static int id_r_sensor = mj_name2id(mj_model, mjOBJ_SENSOR, "right_foot_force_sensor");
+    const int id_l_site = mj_name2id(mj_model, mjOBJ_SITE, "left_foot_site");
+    const int id_r_site = mj_name2id(mj_model, mjOBJ_SITE, "right_foot_site");
+    const int id_l_sensor = mj_name2id(mj_model, mjOBJ_SENSOR, "left_foot_force_sensor");
+    const int id_r_sensor = mj_name2id(mj_model, mjOBJ_SENSOR, "right_foot_force_sensor");
 
     int offset_gait = joint_now_names.size() + joint_target_names.size();
 
@@ -305,10 +375,10 @@ void RL_Real::jointstate_plot_callback(void)
     }
 
     // ================= 5. 填充全局追踪与位姿信息 =================
-    static int id_frame_pos = mj_name2id(mj_model, mjOBJ_SENSOR, "frame_pos");
-    static int id_frame_vel = mj_name2id(mj_model, mjOBJ_SENSOR, "frame_vel");
-    static int id_imu_gyro  = mj_name2id(mj_model, mjOBJ_SENSOR, "imu_gyro");
-    static int id_imu_quat  = mj_name2id(mj_model, mjOBJ_SENSOR, "imu_quat"); // 新增四元数ID获取
+    const int id_frame_pos = mj_name2id(mj_model, mjOBJ_SENSOR, "frame_pos");
+    const int id_frame_vel = mj_name2id(mj_model, mjOBJ_SENSOR, "frame_vel");
+    const int id_imu_gyro  = mj_name2id(mj_model, mjOBJ_SENSOR, "imu_gyro");
+    const int id_imu_quat  = mj_name2id(mj_model, mjOBJ_SENSOR, "imu_quat");
 
     int offset_track = offset_gait + gait_data_names.size();
 
@@ -379,6 +449,111 @@ void RL_Real::OperatorStatusCallback()
     std::cout << message.str() << std::endl;
 }
 
+void RL_Real::HandleLoopError(
+    const std::string& loop_name,
+    std::exception_ptr error) noexcept
+{
+    runtime_core_.handleLoopError(
+        loop_name,
+        error,
+        [this]()
+        {
+            LatchJoystickFault(
+                {LWJoystickSampleStatus::Error, EFAULT, -1});
+        });
+}
+
+void RL_Real::HandleLoopTiming(
+    const std::string& loop_name,
+    LoopTimingLevel level,
+    const LoopTimingSnapshot& timing) noexcept
+{
+    if (loop_name == "loop_control"
+        && (level == LoopTimingLevel::Degraded
+            || level == LoopTimingLevel::Fatal))
+    {
+        runtime_core_.handleControlTiming(
+            level == LoopTimingLevel::Fatal,
+            timing.missed_deadlines);
+    }
+}
+
+void RL_Real::HandleLWPolicyOutputFault(
+    LWPolicyOutputStatus status) noexcept
+{
+    runtime_core_.handlePolicyOutputFault(status);
+}
+
+void RL_Real::ApplySafetyEvent(
+    LWSafetyEvent event,
+    const std::string& reason) noexcept
+{
+    runtime_core_.reportSafetyEvent(event, reason);
+}
+
+void RL_Real::ExecuteSafetyDecision(
+    const LWSafetyDecision& decision,
+    const std::string& reason) noexcept
+{
+    if (!reason.empty())
+    {
+        std::ostream& output =
+            decision.severity >= LWSafetySeverity::InputDegraded
+            ? std::cerr
+            : std::cout;
+        output << (decision.severity >= LWSafetySeverity::InputDegraded
+                       ? LOGGER::WARNING
+                       : LOGGER::INFO)
+               << "[LW Sim2Sim Safety] " << reason
+               << ", action=" << LWSafetyActionName(decision.action)
+               << std::endl;
+    }
+
+    if (decision.action == LWSafetyAction::HardDisable
+        || decision.action == LWSafetyAction::HardDisableAndShutdown
+        || decision.action == LWSafetyAction::AbortStartup
+        || decision.action == LWSafetyAction::OrderlyShutdown)
+    {
+        ZeroActiveMuJoCoActuators();
+    }
+    if (decision.action == LWSafetyAction::HardDisableAndShutdown
+        || decision.action == LWSafetyAction::AbortStartup)
+    {
+        simulation_running = false;
+        if (sim)
+        {
+            const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
+            sim->run = 0;
+            sim->exitrequest.store(1);
+        }
+    }
+}
+
+void RL_Real::ZeroActiveMuJoCoActuators() noexcept
+{
+    if (!sim)
+    {
+        return;
+    }
+    try
+    {
+        const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
+        mj_model = m;
+        mj_data = d;
+        if (!mj_model || !mj_data)
+        {
+            return;
+        }
+        for (int actuator = 0; actuator < mj_model->nu; ++actuator)
+        {
+            mj_data->ctrl[actuator] = 0.0;
+        }
+    }
+    catch (...)
+    {
+    }
+}
+
 void RL_Real::disable_lw_robot(void)
 {
     LowCmd cmd;
@@ -394,20 +569,40 @@ void RL_Real::disable_lw_robot(void)
 
 void RL_Real::RobotControl()
 {
+    runtime_core_.runControlCycle(
+        LWControlCycleHooks{
+            [this]()
+            {
+                ApplyPendingInput();
+                ApplyJoystickFaultGate();
+            },
+            [this]() { KeyboardInterface(); },
+            []() { return true; },
+            []() { return true; },
+            [this]() { ApplySimulationControls(); },
+            [this]() { UpdateActuatorNetwork(); },
+            [this]()
+            {
+                debug_snapshot_.publish(
+                    SimDebugSnapshot{
+                        robot_state,
+                        robot_command,
+                        {control.x,
+                         control.y,
+                         control.yaw,
+                         control.gait_frequency}});
+            }});
+}
 
-    ApplyPendingInput();
-    this->KeyboardInterface();
-    ApplyJoystickFaultGate();
-    this->GetState(&this->robot_state);
-
-    this->StateController(&this->robot_state, &this->robot_command);
-    policy_input_snapshot_.publish(
-        {this->robot_state,
-         {this->control.x,
-          this->control.y,
-          this->control.yaw,
-          this->control.gait_frequency}});
-
+void RL_Real::ApplySimulationControls()
+{
+    if (!sim)
+    {
+        return;
+    }
+    const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
+    mj_model = m;
+    mj_data = d;
     if (this->control.current_keyboard == Input::Keyboard::R || this->control.current_gamepad == Input::Gamepad::RB_Y)
     {
         if (this->mj_model && this->mj_data)
@@ -456,9 +651,10 @@ void RL_Real::RobotControl()
         }
         simulation_running = !simulation_running;
     }
+}
 
-    this->control.ClearInput();
-
+void RL_Real::UpdateActuatorNetwork()
+{
     const auto activation = LoadLWPolicyActivation();
     const auto inference_output = LoadLWPolicyOutput();
     const auto now = std::chrono::steady_clock::now();
@@ -540,309 +736,69 @@ void RL_Real::RobotControl()
         }
         actuator_net_generation_ = activation->generation;
     }
-
-    // // ===================== [执行机身外部冲击力] =====================
-    // if (this->mj_model && this->mj_data)
-    // {
-    //     // 获取机身(浮动基座)的 ID
-    //     int body_id = mj_name2id(this->mj_model, mjOBJ_BODY, "base_link");
-
-    //     if (g_impact_start_time > 0)
-    //     {
-    //         double t_elapsed = this->mj_data->time - g_impact_start_time;
-    //         if (t_elapsed < g_impact_duration)
-    //         {
-    //             // 施加六轴力/力矩:[Fx, Fy, Fz, Tx, Ty, Tz]
-    //             this->mj_data->xfrc_applied[6 * body_id + 0] = g_impact_force_x;
-    //             this->mj_data->xfrc_applied[6 * body_id + 1] = g_impact_force_y;
-    //             this->mj_data->xfrc_applied[6 * body_id + 2] = 0.0; // Z 轴不受力
-    //         }
-    //         else
-    //         {
-    //             // 冲击结束，力清零
-    //             this->mj_data->xfrc_applied[6 * body_id + 0] = 0.0;
-    //             this->mj_data->xfrc_applied[6 * body_id + 1] = 0.0;
-    //             this->mj_data->xfrc_applied[6 * body_id + 2] = 0.0;
-    //             g_impact_start_time = -1.0;
-    //             std::cout << "[INFO] 🛑 冲击结束，力已释放" << std::endl;
-    //         }
-    //     }
-    // }
-    // // ============================================================================
-
-    this->SetCommand(&this->robot_command);
-    debug_snapshot_.publish(
-        SimDebugSnapshot{
-            this->robot_state,
-            this->robot_command,
-            {this->control.x,
-             this->control.y,
-             this->control.yaw,
-             this->control.gait_frequency}});
-
 }
 
 void RL_Real::RunModel()
 {
-    const auto activation = LoadLWPolicyActivation();
-    if (!activation || !activation->definition)
+    LWInferenceCycleHooks hooks;
+#if defined(ADD_ANGVEL_NOISE) || defined(ADD_JOINTVEL_NOISE)
+    hooks.mutate_observation = [](
+        Observations<float>& observations,
+        const RobotState<float>& state)
     {
-        return;
-    }
-    if (!inference_activation_
-        || inference_activation_->generation
-            != activation->generation)
-    {
-        inference_activation_ = activation;
-        ResetInferenceWorkspace(*activation);
-    }
-
-    LWPolicyInputSnapshot policy_input;
-    if (!policy_input_snapshot_.read(policy_input))
-    {
-        return;
-    }
-    const RobotState<float>& local_state =
-        policy_input.robot_state;
-    const LWControlSnapshot& local_control =
-        policy_input.control;
-
-    inference_motion_reference_ = LoadLWMotionReference();
-    const auto observations =
-        activation->definition->params.Get<std::vector<std::string>>(
-            "observations");
-    const bool needs_motion_reference =
-        std::find(
-            observations.begin(),
-            observations.end(),
-            "whole_body_tracking/motion_command")
-        != observations.end();
-    if (needs_motion_reference
-        && (!inference_motion_reference_
-            || inference_motion_reference_->generation
-                != activation->generation))
-    {
-        return;
-    }
-    const auto output_source_time =
-        std::chrono::steady_clock::now();
-
-    ++inference_frame_;
-
 #ifdef ADD_ANGVEL_NOISE
-    static std::default_random_engine generator;
-    std::normal_distribution<float> distribution(0.0, 0.4f);
-    inference_obs_.ang_vel.resize(
-        local_state.imu.gyroscope.size());
-    for (size_t i = 0;
-         i < local_state.imu.gyroscope.size();
-         ++i)
-    {
-        inference_obs_.ang_vel[i] =
-            local_state.imu.gyroscope[i]
-            + distribution(generator);
-    }
-#else
-    inference_obs_.ang_vel = local_state.imu.gyroscope;
+        static std::default_random_engine generator;
+        std::normal_distribution<float> distribution(0.0f, 0.4f);
+        observations.ang_vel.resize(state.imu.gyroscope.size());
+        for (size_t index = 0; index < state.imu.gyroscope.size(); ++index)
+        {
+            observations.ang_vel[index] =
+                state.imu.gyroscope[index] + distribution(generator);
+        }
 #endif
-    inference_obs_.commands =
-        joystick_fault_latch_.faulted()
-        ? std::vector<float>{0.0f, 0.0f, 0.0f}
-        : std::vector<float>{
-            local_control.x,
-            local_control.y,
-            local_control.yaw};
-    inference_obs_.base_quat = local_state.imu.quaternion;
-    inference_obs_.dof_pos = local_state.motor_state.q;
-
 #ifdef ADD_JOINTVEL_NOISE
-    static std::default_random_engine velocity_generator;
-    std::normal_distribution<float> velocity_distribution(
-        0.0,
-        1.5f);
-    inference_obs_.dof_vel.resize(
-        local_state.motor_state.dq.size());
-    for (size_t i = 0;
-         i < local_state.motor_state.dq.size();
-         ++i)
-    {
-        inference_obs_.dof_vel[i] =
-            local_state.motor_state.dq[i]
-            + velocity_distribution(velocity_generator);
-    }
-#else
-    inference_obs_.dof_vel = local_state.motor_state.dq;
+        static std::default_random_engine velocity_generator;
+        std::normal_distribution<float> velocity_distribution(0.0f, 1.5f);
+        observations.dof_vel.resize(state.motor_state.dq.size());
+        for (size_t index = 0; index < state.motor_state.dq.size(); ++index)
+        {
+            observations.dof_vel[index] =
+                state.motor_state.dq[index]
+                + velocity_distribution(velocity_generator);
+        }
 #endif
-
-    const YamlParams& policy_params =
-        activation->definition->params;
-    inference_gait_phase_time_ +=
-        policy_params.Get<float>("dt")
-        * policy_params.Get<int>("decimation")
-        * local_control.gait_frequency;
-    if (inference_gait_phase_time_ >= 1.0f)
-    {
-        inference_gait_phase_time_ -= 1.0f;
-    }
-    const float command_norm = std::sqrt(
-        local_control.x * local_control.x
-        + local_control.y * local_control.y
-        + local_control.yaw * local_control.yaw);
-    const float is_moving =
-        command_norm > 0.1f ? 1.0f : 0.0f;
-    inference_obs_.gait_phase = {
-        is_moving * std::sin(
-            2 * static_cast<float>(M_PI)
-            * inference_gait_phase_time_),
-        is_moving * std::cos(
-            2 * static_cast<float>(M_PI)
-            * inference_gait_phase_time_)};
-
-    inference_obs_.actions = Forward();
-
+    };
+#endif
 #ifdef ENABLE_FORWARD_LATENCY
-    std::this_thread::sleep_for(std::chrono::milliseconds(35));
+    hooks.after_forward = []()
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(35));
+    };
 #endif
-
-    ComputeLWOutput(
-        policy_params,
-        inference_obs_,
-        inference_obs_.actions,
-        inference_output_dof_pos_,
-        inference_output_dof_vel_,
-        inference_output_dof_tau_);
-
-    TorqueProtect(inference_output_dof_tau_, policy_params);
-    PublishLWPolicyOutput(
-        {activation->generation,
-         0,
-         inference_frame_,
-         output_source_time,
-         inference_output_dof_pos_,
-         inference_output_dof_vel_,
-         inference_output_dof_tau_});
-    PublishLWPolicyProgress(
-        activation->generation,
-        inference_frame_);
-
 #ifdef CSV_LOGGER
-    this->CSVLogger(
-        inference_output_dof_tau_,
-        local_state.motor_state.tau_est,
-        inference_obs_.dof_pos,
-        inference_output_dof_pos_,
-        inference_obs_.dof_vel);
+    hooks.after_publish = [this](
+        const std::vector<float>& torque,
+        const RobotState<float>& state,
+        const Observations<float>& observations,
+        const std::vector<float>& positions,
+        const std::vector<float>&)
+    {
+        CSVLogger(
+            torque,
+            state.motor_state.tau_est,
+            observations.dof_pos,
+            positions,
+            observations.dof_vel);
+    };
 #endif
+    runtime_core_.runInferenceCycle(
+        joystick_fault_latch_.faulted(),
+        hooks);
 }
 
 std::vector<float> RL_Real::Forward()
 {
-    if (!inference_activation_
-        || !inference_activation_->definition
-        || !inference_activation_->definition->model)
-    {
-        return {};
-    }
-    const auto& definition =
-        *inference_activation_->definition;
-    const auto& policy_params = definition.params;
-    const auto clamped_obs = ComputeLWObservation(
-        policy_params,
-        inference_obs_,
-        inference_obs_dims_,
-        inference_motion_reference_.get(),
-        inference_frame_,
-        inference_activation_->motion_length);
-
-    std::vector<float> actions;
-    const auto history_indices =
-        policy_params.Get<std::vector<int>>(
-            "observations_history");
-    if (!history_indices.empty())
-    {
-        if (inference_frame_ == 1)
-        {
-            inference_history_obs_buf_.reset(
-                {0},
-                clamped_obs);
-        }
-        inference_history_obs_buf_.insert(clamped_obs);
-        inference_history_obs_ =
-            inference_history_obs_buf_.get_obs_vec(
-                history_indices);
-        actions = definition.model->forward(
-            {inference_history_obs_});
-    }
-    else
-    {
-        actions = definition.model->forward({clamped_obs});
-    }
-
-    const auto upper =
-        policy_params.Get<std::vector<float>>(
-            "clip_actions_upper");
-    const auto lower =
-        policy_params.Get<std::vector<float>>(
-            "clip_actions_lower");
-    if (!upper.empty() && !lower.empty())
-    {
-        return clamp(actions, lower, upper);
-    }
-    return actions;
-}
-
-void RL_Real::ResetInferenceWorkspace(
-    const LWPolicyActivation& activation)
-{
-    const YamlParams& policy_params =
-        activation.definition->params;
-    const size_t num_dofs = static_cast<size_t>(
-        policy_params.Get<int>("num_of_dofs"));
-
-    inference_frame_ = 0;
-    inference_gait_phase_time_ = 0.0f;
-    inference_motion_reference_.reset();
-    inference_obs_ = {};
-    inference_obs_.lin_vel = {0.0f, 0.0f, 0.0f};
-    inference_obs_.ang_vel = {0.0f, 0.0f, 0.0f};
-    inference_obs_.gravity_vec = {0.0f, 0.0f, -1.0f};
-    inference_obs_.commands = {0.0f, 0.0f, 0.0f};
-    inference_obs_.base_quat = {1.0f, 0.0f, 0.0f, 0.0f};
-    inference_obs_.dof_pos =
-        policy_params.Get<std::vector<float>>(
-            "default_dof_pos");
-    inference_obs_.dof_vel.assign(num_dofs, 0.0f);
-    inference_obs_.actions.assign(num_dofs, 0.0f);
-    inference_obs_.gait_phase = {0.0f, 1.0f};
-    inference_output_dof_pos_ = inference_obs_.dof_pos;
-    inference_output_dof_vel_.assign(num_dofs, 0.0f);
-    inference_output_dof_tau_.assign(num_dofs, 0.0f);
-    inference_history_obs_.clear();
-
-    ComputeLWObservation(
-        policy_params,
-        inference_obs_,
-        inference_obs_dims_,
-        nullptr,
-        0,
-        activation.motion_length);
-    const auto history_indices =
-        policy_params.Get<std::vector<int>>(
-            "observations_history");
-    if (!history_indices.empty())
-    {
-        const int history_length =
-            *std::max_element(
-                history_indices.begin(),
-                history_indices.end())
-            + 1;
-        inference_history_obs_buf_ = ObservationBuffer(
-            1,
-            inference_obs_dims_,
-            history_length,
-            policy_params.Get<std::string>(
-                "observations_history_priority"));
-    }
+    return runtime_core_.forward();
 }
 
 // void RL_Real::ImuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
@@ -852,6 +808,16 @@ void RL_Real::ResetInferenceWorkspace(
 
 void RL_Real::GetState(RobotState<float> *state)
 {
+    if (state == nullptr || !sim)
+    {
+        ApplySafetyEvent(
+            LWSafetyEvent::FeedbackReadFailed,
+            "[Safety] MuJoCo state source is unavailable");
+        return;
+    }
+    const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
+    mj_model = m;
+    mj_data = d;
     if (mj_data)
     {
         // xml的sensor顺序为： jointpos jointvel jointtorque quat gyro accmeter
@@ -876,6 +842,13 @@ void RL_Real::GetState(RobotState<float> *state)
 
 void RL_Real::SetCommand(const RobotCommand<float> *command)
 {
+    if (command == nullptr)
+    {
+        ApplySafetyEvent(
+            LWSafetyEvent::NullRobotCommand,
+            "[Safety] Null LW command");
+        return;
+    }
     auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
     auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
     int num_dofs = this->params.Get<int>("num_of_dofs");
@@ -907,8 +880,18 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
     this->lw_low_command.motors_disable = false;
     // this->lw_sdk.SendCmdData(this->lw_low_command);
 
-    if (mj_data)
+    if (sim)
     {
+        const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
+        mj_model = m;
+        mj_data = d;
+        if (!mj_data)
+        {
+            ApplySafetyEvent(
+                LWSafetyEvent::ControlCommandIncomplete,
+                "[Safety] MuJoCo command sink is unavailable");
+            return;
+        }
         const auto activation =
             this->LoadLWPolicyActivation();
         for (int i = 0; i < this->params.Get<int>("num_of_dofs"); ++i)
@@ -962,6 +945,7 @@ void RL_Real::SetupSysJoystick(const std::string& device, int bits)
 void RL_Real::LatchJoystickFault(
     const LWJoystickSampleResult& result) noexcept
 {
+    runtime_core_.reportSafetyEvent(LWSafetyEvent::JoystickUnavailable);
     LWClearJoystickState(this->sys_js_button, this->sys_js_axis);
     joystick_input_mailbox_.clear(Input::Gamepad::None);
     this->sys_js_active = false;

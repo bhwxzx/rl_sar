@@ -66,6 +66,9 @@ if [[ ! -f "$manifest" || -L "$manifest" ]]; then
     echo "Deployment manifest was not produced: $manifest" >&2
     exit 1
 fi
+python3 "$source_tree/src/rl_sar/scripts/verify_lw_policy_parity.py" \
+    --policy-root "$source_tree/policy" \
+    --manifest "$manifest"
 if find "$output_prefix/lib/rl_sar/rl_real_LW" \
         "$output_prefix/share/rl_sar/deployment/LW" -type l -print -quit \
         | grep -q .; then

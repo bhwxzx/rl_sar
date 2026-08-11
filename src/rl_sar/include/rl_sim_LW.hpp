@@ -13,7 +13,11 @@
 #include "observation_buffer.hpp"
 #include "inference_runtime.hpp"
 #include "loop.hpp"
+#include "lw_control_safety.hpp"
 #include "lw_joystick_safety.hpp"
+#include "lw_loop_config.hpp"
+#include "lw_runtime_core.hpp"
+#include "lw_safety_policy.hpp"
 #include "fsm_LW.hpp"
 
 #include "LW_sdk.hpp"
@@ -48,6 +52,22 @@ private:
     void RunModel();
     void RobotControl();
     void ApplyPendingInput();
+    void HandleLoopError(const std::string& loop_name, std::exception_ptr error) noexcept;
+    void HandleLoopTiming(
+        const std::string& loop_name,
+        LoopTimingLevel level,
+        const LoopTimingSnapshot& timing) noexcept;
+    void HandleLWPolicyOutputFault(
+        LWPolicyOutputStatus status) noexcept override;
+    void ApplySafetyEvent(
+        LWSafetyEvent event,
+        const std::string& reason) noexcept;
+    void ExecuteSafetyDecision(
+        const LWSafetyDecision& decision,
+        const std::string& reason) noexcept;
+    void ZeroActiveMuJoCoActuators() noexcept;
+    void ApplySimulationControls();
+    void UpdateActuatorNetwork();
 
     // loop
     std::shared_ptr<LoopFunc> loop_joystick;
@@ -67,6 +87,7 @@ private:
     LWSDK lw_sdk;
     LowCmd lw_low_command = {0};
     LowState lw_low_state = {0};
+    LWRuntimeCore runtime_core_;
     void disable_lw_robot();
 
     // joystick
@@ -120,22 +141,7 @@ private:
         LWControlSnapshot control;
     };
 
-    LWSnapshotBuffer<LWPolicyInputSnapshot> policy_input_snapshot_;
     LWSnapshotBuffer<SimDebugSnapshot> debug_snapshot_;
-
-    std::shared_ptr<const LWPolicyActivation> inference_activation_;
-    std::shared_ptr<const LWMotionReferenceSnapshot> inference_motion_reference_;
-    Observations<float> inference_obs_;
-    std::vector<int> inference_obs_dims_;
-    ObservationBuffer inference_history_obs_buf_;
-    std::vector<float> inference_history_obs_;
-    std::vector<float> inference_output_dof_pos_;
-    std::vector<float> inference_output_dof_vel_;
-    std::vector<float> inference_output_dof_tau_;
-    std::uint64_t inference_frame_ = 0;
-    float inference_gait_phase_time_ = 0.0f;
-    void ResetInferenceWorkspace(
-        const LWPolicyActivation& activation);
 
 };
 

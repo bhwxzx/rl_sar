@@ -14,6 +14,8 @@
 #include "sensor_readiness.hpp"
 #include "lw_control_safety.hpp"
 #include "lw_joystick_safety.hpp"
+#include "lw_loop_config.hpp"
+#include "lw_runtime_core.hpp"
 #include "lw_safety_policy.hpp"
 #include "lw_terminal_keyboard.hpp"
 #include "lw_debug_publisher.hpp"
@@ -64,10 +66,7 @@ private:
         const std::string& reason,
         bool request_shutdown) noexcept;
     void SendEmergencyDisableBurst() noexcept;
-    void ApplyControlledFallbackCommand();
     bool HandleSensorReadiness();
-    bool ValidateFeedbackAndAttitude();
-    bool ValidateCommandForSend(const RobotCommand<float>& command);
 
     // loop
     std::shared_ptr<LoopFunc> loop_joystick;
@@ -84,10 +83,9 @@ private:
     LowCmd lw_low_command = {0};
     LowState lw_low_state = {0};
     CommandGate command_gate_;
-    LWSafetySupervisor safety_supervisor_;
+    LWRuntimeCore runtime_core_;
     std::atomic<bool> fatal_error_latched_{false};
     std::atomic<bool> shutdown_requested_{false};
-    std::atomic<bool> controlled_fallback_applied_{false};
     std::mutex fail_safe_mutex_;
     LWSendResult disable_lw_robot(bool latch_commands = false);
 
@@ -152,22 +150,6 @@ private:
 
     // others
     void disable_robot(void);
-    LWSnapshotBuffer<LWPolicyInputSnapshot> policy_input_snapshot_;
-
-    std::shared_ptr<const LWPolicyActivation> inference_activation_;
-    std::shared_ptr<const LWMotionReferenceSnapshot> inference_motion_reference_;
-    Observations<float> inference_obs_;
-    std::vector<int> inference_obs_dims_;
-    ObservationBuffer inference_history_obs_buf_;
-    std::vector<float> inference_history_obs_;
-    std::vector<float> inference_output_dof_pos_;
-    std::vector<float> inference_output_dof_vel_;
-    std::vector<float> inference_output_dof_tau_;
-    std::uint64_t inference_frame_ = 0;
-    float inference_gait_phase_time_ = 0.0f;
-    void ResetInferenceWorkspace(
-        const LWPolicyActivation& activation);
-
 };
 
 #endif // RL_REAL_LW_HPP

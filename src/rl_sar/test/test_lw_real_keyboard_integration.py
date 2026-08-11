@@ -9,6 +9,7 @@ REAL_SOURCE = Path(sys.argv.pop(1)).resolve()
 REAL_HEADER = Path(sys.argv.pop(1)).resolve()
 LAUNCH_FILE = Path(sys.argv.pop(1)).resolve()
 DEPLOYMENT_GUIDE = Path(sys.argv.pop(1)).resolve()
+RUNTIME_CORE = Path(sys.argv.pop(1)).resolve()
 
 
 class RealKeyboardIntegrationTests(unittest.TestCase):
@@ -32,9 +33,12 @@ class RealKeyboardIntegrationTests(unittest.TestCase):
             )
         ]
         self.assertIn("this->KeyboardInterface(", control)
+        runtime_core = RUNTIME_CORE.read_text(encoding="utf-8")
         self.assertLess(
-            control.index("this->KeyboardInterface("),
-            control.index("this->StateController("),
+            runtime_core.index("call(hooks.apply_keyboard);"),
+            runtime_core.index(
+                "rl_->StateController(&rl_->robot_state, &rl_->robot_command);"
+            ),
         )
         self.assertNotIn("loop_keyboard", source)
         self.assertNotIn("loop_keyboard", REAL_HEADER.read_text(encoding="utf-8"))

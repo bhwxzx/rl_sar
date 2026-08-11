@@ -563,6 +563,12 @@ if(BUILD_TESTING)
                     ${PROJECT_ROOT_DIR}/src/fdilink_ahrs_ROS2/package.xml
         )
         add_test(
+            NAME lw_policy_asset_parity
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_verify_lw_policy_parity.py
+                    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_lw_policy_parity.py
+        )
+        add_test(
             NAME lw_jetson_detection
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/test/test_jetson_detection.py
@@ -611,6 +617,7 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/include/rl_real_LW.hpp
                     ${CMAKE_CURRENT_SOURCE_DIR}/launch/rl_real_LW.launch.py
                     ${PROJECT_ROOT_DIR}/docs/LW_BUILD_DEPLOYMENT_CN.md
+                    ${CMAKE_CURRENT_SOURCE_DIR}/library/core/safety/lw_runtime_core.hpp
         )
     endif()
 
@@ -633,6 +640,16 @@ if(BUILD_TESTING)
         ${YAML_CPP_LIBRARIES}
     )
     add_test(NAME lw_control_safety COMMAND test_lw_control_safety)
+
+    add_executable(test_lw_runtime_parity
+        test/test_lw_runtime_parity.cpp
+    )
+    target_link_libraries(test_lw_runtime_parity PRIVATE
+        rl_sdk
+        observation_buffer
+        ${YAML_CPP_LIBRARIES}
+    )
+    add_test(NAME lw_runtime_parity COMMAND test_lw_runtime_parity)
 
     add_executable(test_lw_safety_policy
         test/test_lw_safety_policy.cpp
@@ -798,6 +815,24 @@ if(SYSTEM_TYPE STREQUAL "Linux"
                 PRIVATE mujoco_prebuilt
             )
             add_test(NAME lw_description COMMAND test_lw_description)
+
+            add_executable(
+                test_lw_mujoco_synchronization
+                test/test_lw_mujoco_synchronization.cpp
+            )
+            target_compile_definitions(
+                test_lw_mujoco_synchronization
+                PRIVATE
+                    "LW_TEST_SCENE=\"${PROJECT_ROOT_DIR}/src/rl_sar_zoo/LW_description/mjcf/scene.xml\""
+            )
+            target_link_libraries(
+                test_lw_mujoco_synchronization
+                PRIVATE mujoco_prebuilt Threads::Threads
+            )
+            add_test(
+                NAME lw_mujoco_synchronization
+                COMMAND test_lw_mujoco_synchronization
+            )
         endif()
         ament_target_dependencies(rl_sim_LW
                 rclcpp

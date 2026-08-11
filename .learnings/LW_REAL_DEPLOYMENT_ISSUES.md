@@ -73,10 +73,11 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 14 | LW-017 | P1 / high | resolved | Bundle and verify the LW IMU/serial runtime dependencies |
 | 15 | LW-019 | P1 / high | resolved | Enable a real-robot terminal keyboard recovery channel |
 | 16 | LW-020 | P1 / high | resolved | Make the Jetson production inference bootstrap architecture-safe and ONNX-only |
-| 17 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
-| 18 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
-| 19 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
-| 20 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
+| 17 | LW-021 | P1 / high | resolved | Make Sim2Sim and real deployment share one testable control and safety core |
+| 18 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
+| 19 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
+| 20 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
+| 21 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
 
 ---
 
@@ -1610,6 +1611,149 @@ Jetson therefore reuses incompatible ELF libraries. Finally, production
   `readelf`/`ldd` 未发现 `libtorch`、`libtorch_cpu` 或 `libc10`。Bash/Python
   语法与 `git diff --check` 通过；未修改 C++ 源文件，`shellcheck`、
   `cmakelint` 不可用。验收未在 Jetson、串口或真机上运行 ROS 节点或电机控制。
+- **Remaining Follow-ups**: none
+
+---
+
+## [LW-021] Sim2Sim and real-runtime behavioral parity
+
+**Priority**: P1 / high
+**Status**: resolved
+**Dependencies**: LW-007, LW-008, LW-011, LW-016, LW-020
+
+### Problem
+
+`rl_sim_LW` and `rl_real_LW` use the same LW FSM, policy definitions,
+observation/output helpers, policy-output transport, nominal control period,
+inference period, joint order, and joystick mapping. They nevertheless
+implement their runtime pipelines in two separate entry-point sources. The
+simulator proceeds directly from state acquisition through `StateController()`
+to command application, while the real executable additionally applies
+hardware-independent policy-action/output validation, stale-output fallback,
+final-command validation, loop-exception handling, and control-timing safety
+actions.
+
+The default `RL::HandleLWPolicyOutputFault()` is a no-op, so a stale or
+incomplete policy output can retain the previous command in Sim2Sim while the
+real executable requests Passive damping. The simulator also reads, resets,
+and writes `mjData` from control and debug callbacks without taking the
+`sim->mtx` used by the physics thread around `mj_step()`. Its observations and
+commands therefore are not guaranteed to form a coherent physics-step
+snapshot.
+
+The simulator additionally loads mutable source-tree policies, optionally uses
+a Torch actuator network, always enables its plot path, and has no real-runtime
+timing or safety-event callback. Existing tests validate the shared components
+individually, but no deterministic end-to-end test feeds identical state/input
+sequences through both runtime paths and compares FSM, observation, policy,
+command, and hardware-independent safety results. A passing Sim2Sim run can
+therefore serve as nominal behavior evidence but cannot currently establish
+behavioral equivalence for real deployment.
+
+### Evidence
+
+- `src/rl_sar/src/rl_sim_LW.cpp:46-195,395-852,853-948`
+- `src/rl_sar/src/rl_real_LW.cpp:100-298,456-898,899-1203`
+- `src/rl_sar/include/rl_sim_LW.hpp:4-141`
+- `src/rl_sar/include/rl_real_LW.hpp:8-172`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.hpp:353-357`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:1207-1260`
+- `src/rl_sar/library/thirdparty/mujoco_simulate/mujoco_utils.hpp:332-428`
+- `src/rl_sar/CMakeLists.txt:774-845`
+- Existing CTest registry: 24 component tests and no Sim2Sim/real parity test.
+
+### Intended Scope
+
+- Extract one platform-neutral LW runtime core used by both executables for
+  input application, FSM execution, policy-input publication, inference,
+  policy-action/output validation, stale-output handling, final-command
+  validation, and hardware-independent safety decisions.
+- Keep only sensor acquisition, actuator delivery, MuJoCo physics/UI, serial
+  communication, ROS wiring, and platform lifecycle in thin real/simulation
+  adapters. Do not weaken or reinterpret the approved LW-016 safety matrix.
+- Give the simulator a safety adapter that both records the same decision and
+  executes its MuJoCo equivalent without opening serial ports or shutting down
+  unrelated host processes. S1 inhibits operator velocity while retaining the
+  approved FSM recovery inputs; S2 applies the exact shared Passive command
+  (`q=current`, `dq=0`, `tau=0`, `Kp=0`, `Kd=5`) through the simulator actuator
+  path; S3/S4 latch command acceptance off and set every active MuJoCo actuator
+  output to zero. S4 additionally records the requested terminal shutdown state
+  while allowing the test harness to inspect the final trace.
+- Make MuJoCo state acquisition and command application coherent with the
+  physics thread by locking `sim->mtx` or publishing an immutable per-step
+  snapshot. Remove unsynchronized reset, read, debug, and command access.
+- Add a deterministic headless replay harness that supplies identical
+  `RobotState`, operator input, timestamps, policy frames, and injected faults
+  to the shared core and compares the complete observable trace.
+- Run parity tests against the exact policy/configuration assets identified by
+  the deployment bundle rather than silently accepting mutable source-tree
+  divergence.
+- Preserve simulation-only reset/pause controls and optional actuator-dynamics
+  modeling outside the shared controller core; treat them as explicit adapter
+  behavior, not parity-covered real-runtime behavior.
+- Do not change policy models, YAML values, FSM transition semantics, serial
+  protocol, motor gains, safety thresholds, CUDA/TensorRT support, or hardware
+  activation as part of this issue.
+
+### Acceptance Criteria
+
+- `rl_sim_LW` and `rl_real_LW` invoke the same implementation for every
+  platform-neutral control and inference stage; source-level duplication is
+  limited to documented adapter responsibilities.
+- For each Passive, get-up, get-down, locomotion, and morphology-transition
+  scenario, identical replay inputs produce identical FSM states, policy
+  generations, observation vectors, policy frames, and `RobotCommand` values
+  within explicitly documented floating-point tolerances.
+- NaN/Inf policy actions and outputs, incomplete or stale policy frames,
+  regressed sequences, inference exceptions, control exceptions, and timing
+  degradation produce the same hardware-independent safety decision and latch
+  state in simulation and real-runtime tests.
+- Sim2Sim visibly and numerically executes the approved action for each safety
+  tier: S1 zeroes commanded velocity without clearing recovery buttons, S2
+  enters and remains in Passive damping with `Kp=0` and `Kd=5`, and S3/S4
+  produce zero active actuator effort after the terminal latch. Tests must not
+  treat Passive damping and zero actuator output as equivalent actions.
+- Hardware-specific events such as missing IMU, serial delivery failure, and
+  motor-board faults are injected through adapter contracts; tests verify the
+  real terminal action and the simulator's matching executed and recorded
+  action without accessing hardware.
+- No simulator callback accesses mutable `mjModel`/`mjData` concurrently with
+  the physics thread. A stress test covers state snapshots, command writes,
+  resets, and optional debug publication.
+- The parity harness fails when policy/configuration hashes differ from the
+  deployment bundle and passes with the exact committed bundle.
+- Existing LW tests continue to pass in current, clean Debug, and clean Release
+  builds; both executables build successfully; the formal Release deployment
+  and `--verify-deployment-only` pass.
+- Automated acceptance remains headless and does not open serial devices,
+  start the real ROS node, send motor commands, or claim physical validation.
+
+### Resolution
+
+- **Resolved**: 2026-08-11T18:43:25+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 将 Sim2Sim 与真机入口的平台无关控制、推理、输出校验、
+  时序和安全决策收敛到同一运行时核心；仿真执行与真机同义的 S1 速度抑制、
+  S2 Passive 阻尼以及 S3/S4 零执行器输出，并保留恢复按键；同步 MuJoCo
+  读写；加入真实 ONNX 推理、故障注入、部署策略哈希和并发压力回放。传感器、
+  执行器、串口、ROS、MuJoCo 生命周期及仿真专用复位/暂停/执行器网络继续由
+  各自适配层负责；未改变策略、FSM 语义、串口协议、增益或安全阈值。
+- **Changed Files**: `src/rl_sar/library/core/safety/{lw_runtime_core.hpp,lw_loop_config.hpp}`、
+  `src/rl_sar/include/{rl_real_LW.hpp,rl_sim_LW.hpp}`、
+  `src/rl_sar/src/{rl_real_LW.cpp,rl_sim_LW.cpp}`、`src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/scripts/{build_lw_deployment.sh,verify_lw_policy_parity.py}`、
+  `src/rl_sar/test/{test_lw_runtime_parity.cpp,test_lw_mujoco_synchronization.cpp,test_verify_lw_policy_parity.py,test_lw_real_keyboard_integration.py}`、
+  `.learnings/{LEARNINGS.md,LW_REAL_DEPLOYMENT_ISSUES.md}`。
+- **Verification**: 共享核心的确定性双适配器测试覆盖 FSM/命令一致性、真实
+  `leg_loco` ONNX 推理的完整 observation/action/output 回放，以及 S1-S4、
+  NaN/Inf、过期/缺帧/代际错误、控制与推理异常和时序故障；MuJoCo 无窗口
+  四线程压力测试覆盖物理步进、状态快照、命令/复位和调试快照。当前工作树、
+  clean Debug 和 clean Release 均成功构建两个入口并通过全量 27/27 CTest。
+  隔离临时 clone 的 ONNX-only Release 正式部署构建、策略源文件/部署清单
+  SHA-256 一致性检查及 `--verify-deployment-only` 全部通过，部署二进制无
+  LibTorch 依赖。Python 编译、Bash 语法和 `git diff --check` 通过。所有验收
+  均为 headless；未打开串口、未启动真机 ROS 节点、未发送电机命令，也未在
+  Jetson 或真实机器人上执行物理验证。
 - **Remaining Follow-ups**: none
 
 ---

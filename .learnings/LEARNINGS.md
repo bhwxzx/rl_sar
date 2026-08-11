@@ -1,5 +1,41 @@
 # Learnings
 
+## [LRN-20260811-003] correction
+
+**Logged**: 2026-08-11T17:57:11+08:00
+**Priority**: high
+**Status**: pending
+**Area**: tests
+
+### Summary
+Sim2Sim 安全一致性不能只记录真机将采取的动作，还应实际执行对应的仿真阻尼或
+主动执行器归零。
+
+### Details
+LW-021 初版方案只要求仿真 shadow safety sink 记录 Passive 阻尼、硬失能和关闭
+决定。用户指出，仿真本身可以进入阻尼模式或把动作输出归零，因此只记录不足以
+验证故障后的机器人动力学响应。不同安全等级必须保持语义区分：S2 应复用批准的
+Passive 命令（当前关节位置、`dq=0`、`tau=0`、`Kp=0`、`Kd=5`），让 MuJoCo
+产生速度阻尼；S3/S4 才锁存停止接受新命令并将所有主动执行器输出置零。把阻尼
+和零主动输出视为同一动作会掩盖真实的安全行为差异。
+
+### Suggested Action
+为仿真提供可执行且可观测的安全适配层：S1 抑制速度但保留恢复输入，S2 实际
+应用共享 Passive 阻尼命令，S3/S4 锁存主动输出为零，并在 S4 记录关闭请求供
+测试检查。确定性 parity 测试同时断言安全决定、锁存状态、最终 `RobotCommand`
+和 MuJoCo 主动执行器输出。
+
+### Metadata
+- Source: user_feedback
+- Related Files: .learnings/LW_REAL_DEPLOYMENT_ISSUES.md, src/rl_sar/src/rl_sim_LW.cpp, src/rl_sar/library/core/safety/lw_control_safety.hpp
+- Tags: LW, Sim2Sim, safety, passive-damping, hard-disable, parity
+- Pattern-Key: test.sim_safety_actions_are_executed
+- Recurrence-Count: 1
+- First-Seen: 2026-08-11
+- Last-Seen: 2026-08-11
+
+---
+
 ## [LRN-20260729-001] best_practice
 
 **Logged**: 2026-07-29T13:00:09+08:00

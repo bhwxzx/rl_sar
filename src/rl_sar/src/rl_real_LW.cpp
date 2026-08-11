@@ -14,62 +14,6 @@ using namespace std::chrono_literals;
 
 namespace
 {
-std::chrono::nanoseconds ReadNonnegativeDuration(
-    const YamlParams& params,
-    const std::string& key,
-    float default_seconds)
-{
-    const float seconds = params.Get<float>(key, default_seconds);
-    if (!std::isfinite(seconds) || seconds < 0.0f)
-    {
-        throw std::runtime_error("LW " + key + " must be finite and nonnegative");
-    }
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::duration<double>(seconds));
-}
-
-std::uint64_t ReadNonnegativeCount(
-    const YamlParams& params,
-    const std::string& key,
-    int default_value)
-{
-    const int value = params.Get<int>(key, default_value);
-    if (value < 0)
-    {
-        throw std::runtime_error("LW " + key + " must be nonnegative");
-    }
-    return static_cast<std::uint64_t>(value);
-}
-
-LoopConfig BuildLWControlLoopConfig(const YamlParams& params)
-{
-    LoopConfig config = LoopConfig::FromSeconds(params.Get<float>("dt"));
-    config.cpu_affinity = params.Get<int>("control_loop_cpu", -1);
-    config.realtime_priority =
-        params.Get<int>("control_loop_realtime_priority", 0);
-    config.require_realtime =
-        params.Get<bool>("control_loop_require_realtime", false);
-    config.timing_policy.degraded_consecutive_misses =
-        ReadNonnegativeCount(
-            params,
-            "control_loop_degraded_consecutive_misses",
-            3);
-    config.timing_policy.degraded_lateness = ReadNonnegativeDuration(
-        params,
-        "control_loop_degraded_lateness",
-        0.02f);
-    config.timing_policy.fatal_consecutive_misses =
-        ReadNonnegativeCount(
-            params,
-            "control_loop_fatal_consecutive_misses",
-            0);
-    config.timing_policy.fatal_lateness = ReadNonnegativeDuration(
-        params,
-        "control_loop_fatal_lateness",
-        0.0f);
-    return config;
-}
-
 const char* LWOperatorModeName(LWOperatorMode mode)
 {
     switch (mode)
@@ -102,6 +46,20 @@ RL_Real::RL_Real(
     char **argv,
     const std::string& policy_root)
 {
+    runtime_core_.bind(
+        *this,
+        [this](const LWSafetyDecision& decision, const std::string& reason)
+        {
+            if (decision.action == LWSafetyAction::HardDisable)
+            {
+                EnterFailSafe(reason, false);
+            }
+            else if (decision.action
+                     == LWSafetyAction::HardDisableAndShutdown)
+            {
+                EnterFailSafe(reason, true);
+            }
+        });
     this->SetPolicyRoot(policy_root);
     ros2_node = std::make_shared<rclcpp::Node>("rl_real_LW_node");
     const bool enable_keyboard = ros2_node->declare_parameter<bool>(
@@ -188,7 +146,7 @@ RL_Real::RL_Real(
         this->lw_sdk.InitSerial("/dev/ttyLegRight", "/dev/ttyLegLeft");
     if (!serial_status.bothInitialized())
     {
-        safety_supervisor_.report(
+        runtime_core_.reportSafetyEvent(
             LWSafetyEvent::StartupSerialInitializationFailed);
         std::cerr << LOGGER::ERROR
                   << "[Safety] LW serial initialization failed: "
@@ -201,7 +159,7 @@ RL_Real::RL_Real(
     const LWSendResult startup_disable = disable_lw_robot();
     if (!startup_disable.complete())
     {
-        safety_supervisor_.report(
+        runtime_core_.reportSafetyEvent(
             LWSafetyEvent::StartupInitialDisableIncomplete);
         std::cerr << LOGGER::ERROR
                   << "[Safety] Initial disable command was incomplete: "
@@ -214,12 +172,7 @@ RL_Real::RL_Real(
     this->InitControl();
     this->control.gait_frequency = this->params.Get<std::vector<float>>("gait_command")[0];
     this->gait_phase_time = 0.0f;
-    policy_input_snapshot_.publish(
-        {this->robot_state,
-         {this->control.x,
-          this->control.y,
-          this->control.yaw,
-          this->control.gait_frequency}});
+    runtime_core_.publishInitialPolicyInput();
 
     // Build every resource before starting worker threads. The callbacks capture
     // this object, so they must not observe a partially initialized RL_Real.
@@ -286,7 +239,7 @@ RL_Real::RL_Real(
     }
     catch (...)
     {
-        safety_supervisor_.report(LWSafetyEvent::StartupLoopStartFailed);
+        runtime_core_.reportSafetyEvent(LWSafetyEvent::StartupLoopStartFailed);
         command_gate_.close();
         this->loop_control->shutdown();
         this->loop_rl->shutdown();
@@ -298,7 +251,7 @@ RL_Real::RL_Real(
 
 RL_Real::~RL_Real()
 {
-    safety_supervisor_.report(LWSafetyEvent::NormalShutdown);
+    runtime_core_.reportSafetyEvent(LWSafetyEvent::NormalShutdown);
     // Close the gate before joining so no new enable command can race with the
     // final disable frame. Stop the command producer first.
     command_gate_.close();
@@ -318,7 +271,7 @@ RL_Real::~RL_Real()
 
 void RL_Real::RuntimeDiagnosticsCallback()
 {
-    const LWSafetySnapshot safety = safety_supervisor_.snapshot();
+    const LWSafetySnapshot safety = runtime_core_.safetySnapshot().decision;
     if (safety.sequence != 0
         && safety.sequence != last_safety_event_sequence_)
     {
@@ -455,42 +408,14 @@ LWSendResult RL_Real::disable_lw_robot(bool latch_commands)
 
 void RL_Real::HandleLoopError(const std::string& loop_name, std::exception_ptr error) noexcept
 {
-    std::string message = "unknown exception";
-    try
-    {
-        if (error)
+    runtime_core_.handleLoopError(
+        loop_name,
+        error,
+        [this]()
         {
-            std::rethrow_exception(error);
-        }
-    }
-    catch (const std::exception& exception)
-    {
-        message = exception.what();
-    }
-    catch (...)
-    {
-    }
-
-    if (loop_name == "loop_joystick")
-    {
-        LatchJoystickFault({LWJoystickSampleStatus::Error, EFAULT, -1});
-        safety_supervisor_.report(LWSafetyEvent::JoystickLoopException);
-        return;
-    }
-    if (loop_name == "loop_rl")
-    {
-        ApplySafetyEvent(
-            LWSafetyEvent::InferenceLoopException,
-            "[Loop] Inference callback exception - error: " + message);
-        return;
-    }
-
-    ApplySafetyEvent(
-        loop_name == "loop_control"
-            ? LWSafetyEvent::ControlLoopException
-            : LWSafetyEvent::UnknownLoopException,
-        "[Loop] Fatal callback exception - name: " + loop_name
-            + ", error: " + message);
+            LatchJoystickFault(
+                {LWJoystickSampleStatus::Error, EFAULT, -1});
+        });
 }
 
 void RL_Real::HandleLoopTiming(
@@ -503,23 +428,14 @@ void RL_Real::HandleLoopTiming(
         return;
     }
 
-    if (level == LoopTimingLevel::Degraded)
-    {
-        safety_supervisor_.report(LWSafetyEvent::ControlTimingDegraded);
-        control_timing_degraded_latched_.store(
-            true, std::memory_order_release);
-        return;
-    }
-
-    if (level == LoopTimingLevel::Fatal)
+    if (level == LoopTimingLevel::Degraded
+        || level == LoopTimingLevel::Fatal)
     {
         control_timing_degraded_latched_.store(
             true, std::memory_order_release);
-        ApplySafetyEvent(
-            LWSafetyEvent::ControlTimingFatal,
-            "[Timing] Fatal control-loop timing fault after "
-            + std::to_string(timing.missed_deadlines)
-            + " missed deadlines; hard-disable threshold was explicitly enabled");
+        runtime_core_.handleControlTiming(
+            level == LoopTimingLevel::Fatal,
+            timing.missed_deadlines);
     }
 }
 
@@ -572,26 +488,14 @@ void RL_Real::SendEmergencyDisableBurst() noexcept
 void RL_Real::HandleLWPolicyOutputFault(
     LWPolicyOutputStatus status) noexcept
 {
-    (void)status;
-    ApplySafetyEvent(
-        LWSafetyEvent::PolicyOutputUnavailable,
-        "[Safety] LW policy output became stale or incomplete");
+    runtime_core_.handlePolicyOutputFault(status);
 }
 
 void RL_Real::ApplySafetyEvent(
     LWSafetyEvent event,
     const std::string& reason) noexcept
 {
-    const auto& decision = safety_supervisor_.report(event);
-    if (decision.action == LWSafetyAction::HardDisable)
-    {
-        EnterFailSafe(reason, false);
-        return;
-    }
-    if (decision.action == LWSafetyAction::HardDisableAndShutdown)
-    {
-        EnterFailSafe(reason, true);
-    }
+    runtime_core_.reportSafetyEvent(event, reason);
 }
 
 void RL_Real::EnterFailSafe(
@@ -683,212 +587,70 @@ bool RL_Real::HandleSensorReadiness()
     return false;
 }
 
-bool RL_Real::ValidateFeedbackAndAttitude()
-{
-    const size_t num_dofs =
-        static_cast<size_t>(this->params.Get<int>("num_of_dofs"));
-    const LWValidationResult feedback_result =
-        LWValidateFeedbackState(this->robot_state, num_dofs);
-    if (!feedback_result.valid())
-    {
-        ApplySafetyEvent(
-            LWSafetyEvent::FeedbackInvalid,
-            "[Safety] Invalid LW feedback: "
-            + feedback_result.failureDescription());
-        return false;
-    }
-
-    if (!this->fsm.current_state_)
-    {
-        ApplySafetyEvent(
-            LWSafetyEvent::FsmStateMissing,
-            "[Safety] LW FSM has no current state");
-        return false;
-    }
-
-    constexpr float attitude_threshold_degrees = 75.0f;
-    const std::string& state_name =
-        this->fsm.current_state_->GetStateName();
-    const LWAttitudeValidationResult attitude_result =
-        LWValidateAttitude(
-            state_name,
-            this->robot_state.imu.quaternion,
-            attitude_threshold_degrees);
-    if (!attitude_result.safe)
-    {
-        ApplySafetyEvent(
-            LWSafetyEvent::AttitudeLimitExceeded,
-            "[Safety] LW attitude limit exceeded in " + state_name + ": "
-            + attitude_result.failureDescription(attitude_threshold_degrees));
-        return false;
-    }
-    return true;
-}
-
-bool RL_Real::ValidateCommandForSend(const RobotCommand<float>& command)
-{
-    const size_t num_dofs =
-        static_cast<size_t>(this->params.Get<int>("num_of_dofs"));
-    const LWValidationResult command_result =
-        LWValidateRobotCommand(command, num_dofs);
-    if (!command_result.valid())
-    {
-        ApplySafetyEvent(
-            LWSafetyEvent::RobotCommandInvalid,
-            "[Safety] Invalid LW command: "
-            + command_result.failureDescription());
-        return false;
-    }
-    return true;
-}
-
-void RL_Real::ApplyControlledFallbackCommand()
-{
-    this->control.x = 0.0f;
-    this->control.y = 0.0f;
-    this->control.yaw = 0.0f;
-    this->control.ClearInput();
-
-    if (!controlled_fallback_applied_.exchange(
-            true, std::memory_order_acq_rel))
-    {
-        DeactivateLWPolicy();
-    }
-    if (this->fsm.current_state_
-        && this->fsm.current_state_->GetStateName()
-            != "RLFSMStatePassive")
-    {
-        this->fsm.RequestStateChange("RLFSMStatePassive");
-    }
-
-    LWBuildPassiveDampingCommand(
-        this->robot_state,
-        this->robot_command,
-        static_cast<size_t>(this->params.Get<int>("num_of_dofs")));
-}
-
 void RL_Real::RobotControl()
 {
 #ifdef CONTROL_TIME_PRINT
     auto t_start = std::chrono::high_resolution_clock::now();
 #endif
-    ApplyPendingInput();
-    if (this->terminal_keyboard_)
-    {
-        this->KeyboardInterface(
-            this->terminal_keyboard_->descriptor(),
-            false);
-    }
-    if (control_timing_degraded_latched_.load(std::memory_order_acquire))
-    {
-        this->control.x = 0.0f;
-        this->control.y = 0.0f;
-        this->control.yaw = 0.0f;
-    }
-    ApplyJoystickFaultGate();
-    this->GetState(&this->robot_state);
-    if (fatal_error_latched_.load(std::memory_order_acquire))
-    {
-        return;
-    }
-    if (!HandleSensorReadiness())
-    {
-        return;
-    }
-    if (!ValidateFeedbackAndAttitude())
-    {
-        return;
-    }
-
-    // Motor-board faults make host-side controlled fallback unverifiable.
-    // Hard-disable once and keep ROS diagnostics alive for inspection.
-    if(this->lw_sdk.MotorsProtect(this->lw_low_state)){
-        ApplySafetyEvent(
-            LWSafetyEvent::MotorHardwareFault,
-            "[Safety] LW motor-board fault reported");
-        return;
-    }
-    
-#ifdef CONTROL_TIME_PRINT
-    auto t_after_get = std::chrono::high_resolution_clock::now();
-#endif
-
-    const bool fallback_before_state_controller =
-        safety_supervisor_.controlledFallbackLatched();
-    if (fallback_before_state_controller)
-    {
-        ApplyControlledFallbackCommand();
-        if (this->fsm.current_state_
-            && this->fsm.current_state_->GetStateName()
-                != "RLFSMStatePassive")
-        {
-            // Complete the requested transition in the control thread. The
-            // command is overwritten with damping again below before send.
-            this->StateController(&this->robot_state, &this->robot_command);
-        }
-    }
-    else
-    {
-        this->StateController(&this->robot_state, &this->robot_command);
-    }
-    if (safety_supervisor_.controlledFallbackLatched())
-    {
-        // A stale output may be discovered inside StateController(). Replace
-        // that cycle's old policy command instead of holding it indefinitely.
-        ApplyControlledFallbackCommand();
-    }
-    if (control_timing_degraded_latched_.load(std::memory_order_acquire))
-    {
-        this->control.x = 0.0f;
-        this->control.y = 0.0f;
-        this->control.yaw = 0.0f;
-    }
-    policy_input_snapshot_.publish(
-        {this->robot_state,
-         {this->control.x,
-          this->control.y,
-          this->control.yaw,
-          this->control.gait_frequency}});
-    // The FSM may enter a protected state during StateController(). Validate
-    // again so its first command cannot bypass state-specific attitude checks.
-    if (!ValidateFeedbackAndAttitude())
-    {
-        return;
-    }
-    if (!ValidateCommandForSend(this->robot_command))
-    {
-        return;
-    }
-
-    this->control.ClearInput();
-
-    this->SetCommand(&this->robot_command);
-    if (this->debug_publisher_)
-    {
-        this->debug_publisher_->publishSnapshot(
-            LWDebugSnapshot{
-                this->lw_low_state,
-                this->lw_low_command,
-                {this->robot_state.imu.gyroscope[0],
-                 this->robot_state.imu.gyroscope[1],
-                 this->robot_state.imu.gyroscope[2]},
-                {this->robot_state.imu.quaternion[0],
-                 this->robot_state.imu.quaternion[1],
-                 this->robot_state.imu.quaternion[2],
-                 this->robot_state.imu.quaternion[3]},
-                this->control.x,
-                this->control.y,
-                this->control.yaw});
-    }
+    runtime_core_.runControlCycle(
+        LWControlCycleHooks{
+            [this]()
+            {
+                ApplyPendingInput();
+                ApplyJoystickFaultGate();
+            },
+            [this]()
+            {
+                if (terminal_keyboard_)
+                {
+                    this->KeyboardInterface(
+                        terminal_keyboard_->descriptor(),
+                        false);
+                }
+            },
+            [this]() { return HandleSensorReadiness(); },
+            [this]()
+            {
+                if (!lw_sdk.MotorsProtect(lw_low_state))
+                {
+                    return true;
+                }
+                ApplySafetyEvent(
+                    LWSafetyEvent::MotorHardwareFault,
+                    "[Safety] LW motor-board fault reported");
+                return false;
+            },
+            {},
+            {},
+            [this]()
+            {
+                if (!debug_publisher_)
+                {
+                    return;
+                }
+                debug_publisher_->publishSnapshot(
+                    LWDebugSnapshot{
+                        lw_low_state,
+                        lw_low_command,
+                        {robot_state.imu.gyroscope[0],
+                         robot_state.imu.gyroscope[1],
+                         robot_state.imu.gyroscope[2]},
+                        {robot_state.imu.quaternion[0],
+                         robot_state.imu.quaternion[1],
+                         robot_state.imu.quaternion[2],
+                         robot_state.imu.quaternion[3]},
+                        control.x,
+                        control.y,
+                        control.yaw});
+            }});
 #ifdef CONTROL_TIME_PRINT
     auto t_end = std::chrono::high_resolution_clock::now();
 
     double total_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
-    double read_ms = std::chrono::duration<double, std::milli>(t_after_get - t_start).count();
     static int count = 0;
     if (++count % 50 == 0) {
-        std::cout << "[Latency Test] Total Control Pipeline: " << total_ms << "ms "
-                  << "(SDK Read: " << read_ms << "ms)" << std::endl;
+        std::cout << "[Latency Test] Total Control Pipeline: " << total_ms << "ms"
+                  << std::endl;
         if (total_ms > this->params.Get<float>("dt") * 1000.0f) {
             std::cout << LOGGER::WARNING << "!!! Control Overrun !!!" << std::endl;
         }
@@ -898,307 +660,31 @@ void RL_Real::RobotControl()
 
 void RL_Real::RunModel()
 {
-    if (fatal_error_latched_.load(std::memory_order_acquire)
-        || safety_supervisor_.controlledFallbackLatched())
-    {
-        return;
-    }
-    const auto activation = LoadLWPolicyActivation();
-    if (!activation || !activation->definition)
-    {
-        return;
-    }
-    if (!inference_activation_
-        || inference_activation_->generation
-            != activation->generation)
-    {
-        inference_activation_ = activation;
-        ResetInferenceWorkspace(*activation);
-    }
-
-    LWPolicyInputSnapshot policy_input;
-    if (!policy_input_snapshot_.read(policy_input))
-    {
-        return;
-    }
-    const RobotState<float>& local_state =
-        policy_input.robot_state;
-    const LWControlSnapshot& local_control =
-        policy_input.control;
-
-    inference_motion_reference_ = LoadLWMotionReference();
-    const auto observations =
-        activation->definition->params.Get<std::vector<std::string>>(
-            "observations");
-    const bool needs_motion_reference =
-        std::find(
-            observations.begin(),
-            observations.end(),
-            "whole_body_tracking/motion_command")
-        != observations.end();
-    if (needs_motion_reference
-        && (!inference_motion_reference_
-            || inference_motion_reference_->generation
-                != activation->generation))
-    {
-        return;
-    }
-    const auto output_source_time =
-        std::chrono::steady_clock::now();
-
-#ifdef FOWARD_TIME_PRINT
-    auto t_start = std::chrono::high_resolution_clock::now();
-#endif
-    ++inference_frame_;
-    inference_obs_.ang_vel = local_state.imu.gyroscope;
-    inference_obs_.commands =
-        joystick_fault_latch_.faulted()
-        ? std::vector<float>{0.0f, 0.0f, 0.0f}
-        : std::vector<float>{
-            local_control.x,
-            local_control.y,
-            local_control.yaw};
-    inference_obs_.base_quat = local_state.imu.quaternion;
-    inference_obs_.dof_pos = local_state.motor_state.q;
-    inference_obs_.dof_vel = local_state.motor_state.dq;
-
-    const YamlParams& policy_params =
-        activation->definition->params;
-    inference_gait_phase_time_ +=
-        policy_params.Get<float>("dt")
-        * policy_params.Get<int>("decimation")
-        * local_control.gait_frequency;
-    if (inference_gait_phase_time_ >= 1.0f)
-    {
-        inference_gait_phase_time_ -= 1.0f;
-    }
-    const float command_norm = std::sqrt(
-        local_control.x * local_control.x
-        + local_control.y * local_control.y
-        + local_control.yaw * local_control.yaw);
-    const float is_moving = command_norm > 0.1f ? 1.0f : 0.0f;
-    inference_obs_.gait_phase = {
-        is_moving * std::sin(
-            2 * static_cast<float>(M_PI)
-            * inference_gait_phase_time_),
-        is_moving * std::cos(
-            2 * static_cast<float>(M_PI)
-            * inference_gait_phase_time_)};
-
-    inference_obs_.actions = Forward();
-    if (fatal_error_latched_.load(std::memory_order_acquire)
-        || safety_supervisor_.controlledFallbackLatched())
-    {
-        return;
-    }
-#ifdef FOWARD_TIME_PRINT
-    auto t_end = std::chrono::high_resolution_clock::now();
-    double elapsed_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
-
-    float rl_dt_ms =
-        policy_params.Get<float>("dt")
-        * policy_params.Get<int>("decimation")
-        * 1000.0f;
-        
-    static double max_ms = 0;
-    static int count = 0;
-    if (elapsed_ms > max_ms) max_ms = elapsed_ms;
-    if (elapsed_ms > rl_dt_ms) {
-        std::cout << "  <-- !!! TIMEOUT !!!" << std::endl;
-    }
-
-    if (++count % 100 == 0) {
-        std::cout << "[RL Inference] Curr: " << elapsed_ms << "ms, Max: " << max_ms
-                  << "ms, Limit: " << rl_dt_ms << "ms";
-        std::cout << std::endl;
-    }
-#endif
-
-    ComputeLWOutput(
-        policy_params,
-        inference_obs_,
-        inference_obs_.actions,
-        inference_output_dof_pos_,
-        inference_output_dof_vel_,
-        inference_output_dof_tau_);
-    const LWValidationResult output_result =
-        LWValidatePolicyOutputs(
-            inference_output_dof_pos_,
-            inference_output_dof_vel_,
-            inference_output_dof_tau_,
-            static_cast<size_t>(
-                policy_params.Get<int>("num_of_dofs")));
-    if (!output_result.valid())
-    {
-        ApplySafetyEvent(
-            LWSafetyEvent::PolicyOutputInvalid,
-            "[Safety] Invalid LW policy output: "
-            + output_result.failureDescription());
-        return;
-    }
-
-    if (TorqueProtect(inference_output_dof_tau_, policy_params))
-    {
-        safety_supervisor_.report(LWSafetyEvent::TorqueLimitWarning);
-    }
-    PublishLWPolicyOutput(
-        {activation->generation,
-         0,
-         inference_frame_,
-         output_source_time,
-         inference_output_dof_pos_,
-         inference_output_dof_vel_,
-         inference_output_dof_tau_});
-    PublishLWPolicyProgress(
-        activation->generation,
-        inference_frame_);
-
+    LWInferenceCycleHooks hooks;
 #ifdef CSV_LOGGER
-    this->CSVLogger(
-        inference_output_dof_tau_,
-        local_state.motor_state.tau_est,
-        inference_obs_.dof_pos,
-        inference_output_dof_pos_,
-        inference_obs_.dof_vel);
+    hooks.after_publish = [this](
+        const std::vector<float>& torque,
+        const RobotState<float>& state,
+        const Observations<float>& observations,
+        const std::vector<float>& positions,
+        const std::vector<float>&)
+    {
+        CSVLogger(
+            torque,
+            state.motor_state.tau_est,
+            observations.dof_pos,
+            positions,
+            observations.dof_vel);
+    };
 #endif
+    runtime_core_.runInferenceCycle(
+        joystick_fault_latch_.faulted(),
+        hooks);
 }
 
 std::vector<float> RL_Real::Forward()
 {
-    if (!inference_activation_
-        || !inference_activation_->definition
-        || !inference_activation_->definition->model)
-    {
-        return {};
-    }
-    const auto& definition =
-        *inference_activation_->definition;
-    const auto& policy_params = definition.params;
-    const auto clamped_obs = ComputeLWObservation(
-        policy_params,
-        inference_obs_,
-        inference_obs_dims_,
-        inference_motion_reference_.get(),
-        inference_frame_,
-        inference_activation_->motion_length);
-
-    std::vector<float> actions;
-    const auto history_indices =
-        policy_params.Get<std::vector<int>>(
-            "observations_history");
-    if (!history_indices.empty())
-    {
-        if (inference_frame_ == 1)
-        {
-            inference_history_obs_buf_.reset(
-                {0},
-                clamped_obs);
-        }
-        inference_history_obs_buf_.insert(clamped_obs);
-        inference_history_obs_ =
-            inference_history_obs_buf_.get_obs_vec(
-                history_indices);
-        actions = definition.model->forward(
-            {inference_history_obs_});
-    }
-    else
-    {
-        actions = definition.model->forward({clamped_obs});
-    }
-
-    const size_t num_dofs =
-        static_cast<size_t>(
-            policy_params.Get<int>("num_of_dofs"));
-    const LWValidationResult action_result =
-        LWValidatePolicyActions(actions, num_dofs);
-    if (!action_result.valid())
-    {
-        ApplySafetyEvent(
-            LWSafetyEvent::PolicyActionInvalid,
-            "[Safety] Invalid LW policy action: "
-            + action_result.failureDescription());
-        return {};
-    }
-
-    const auto upper =
-        policy_params.Get<std::vector<float>>(
-            "clip_actions_upper");
-    const auto lower =
-        policy_params.Get<std::vector<float>>(
-            "clip_actions_lower");
-    if (!upper.empty() && !lower.empty())
-    {
-        const LWValidationResult upper_result =
-            LWValidateFiniteVector("clip_actions_upper", upper, num_dofs);
-        const LWValidationResult lower_result =
-            LWValidateFiniteVector("clip_actions_lower", lower, num_dofs);
-        if (!upper_result.valid() || !lower_result.valid())
-        {
-            const LWValidationResult& clip_result =
-                upper_result.valid() ? lower_result : upper_result;
-            ApplySafetyEvent(
-                LWSafetyEvent::PolicyConfigurationInvalid,
-                "[Safety] Invalid LW action clipping configuration: "
-                + clip_result.failureDescription());
-            return {};
-        }
-        return clamp(actions, lower, upper);
-    }
-    return actions;
-}
-
-void RL_Real::ResetInferenceWorkspace(
-    const LWPolicyActivation& activation)
-{
-    const YamlParams& policy_params =
-        activation.definition->params;
-    const size_t num_dofs = static_cast<size_t>(
-        policy_params.Get<int>("num_of_dofs"));
-
-    inference_frame_ = 0;
-    inference_gait_phase_time_ = 0.0f;
-    inference_motion_reference_.reset();
-    inference_obs_ = {};
-    inference_obs_.lin_vel = {0.0f, 0.0f, 0.0f};
-    inference_obs_.ang_vel = {0.0f, 0.0f, 0.0f};
-    inference_obs_.gravity_vec = {0.0f, 0.0f, -1.0f};
-    inference_obs_.commands = {0.0f, 0.0f, 0.0f};
-    inference_obs_.base_quat = {1.0f, 0.0f, 0.0f, 0.0f};
-    inference_obs_.dof_pos =
-        policy_params.Get<std::vector<float>>(
-            "default_dof_pos");
-    inference_obs_.dof_vel.assign(num_dofs, 0.0f);
-    inference_obs_.actions.assign(num_dofs, 0.0f);
-    inference_obs_.gait_phase = {0.0f, 1.0f};
-    inference_output_dof_pos_ = inference_obs_.dof_pos;
-    inference_output_dof_vel_.assign(num_dofs, 0.0f);
-    inference_output_dof_tau_.assign(num_dofs, 0.0f);
-    inference_history_obs_.clear();
-
-    ComputeLWObservation(
-        policy_params,
-        inference_obs_,
-        inference_obs_dims_,
-        nullptr,
-        0,
-        activation.motion_length);
-    const auto history_indices =
-        policy_params.Get<std::vector<int>>(
-            "observations_history");
-    if (!history_indices.empty())
-    {
-        const int history_length =
-            *std::max_element(
-                history_indices.begin(),
-                history_indices.end())
-            + 1;
-        inference_history_obs_buf_ = ObservationBuffer(
-            1,
-            inference_obs_dims_,
-            history_length,
-            policy_params.Get<std::string>(
-                "observations_history_priority"));
-    }
+    return runtime_core_.forward();
 }
 
 void RL_Real::ImuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
@@ -1224,7 +710,7 @@ void RL_Real::GetState(RobotState<float> *state)
         && (last_serial_diagnostic_log_time_ == SafetyClock::time_point{}
             || now - last_serial_diagnostic_log_time_ >= 1s))
     {
-        safety_supervisor_.report(LWSafetyEvent::FeedbackParserError);
+        runtime_core_.reportSafetyEvent(LWSafetyEvent::FeedbackParserError);
         std::cout << LOGGER::WARNING << "[Serial] Feedback parser errors: "
                   << feedback_update.parserErrorSummary() << std::endl;
         last_serial_diagnostic_log_time_ = now;
@@ -1295,14 +781,11 @@ void RL_Real::GetState(RobotState<float> *state)
 
 void RL_Real::SetCommand(const RobotCommand<float> *command)
 {
-    if (command == nullptr || !ValidateCommandForSend(*command))
+    if (command == nullptr)
     {
-        if (command == nullptr)
-        {
-            ApplySafetyEvent(
-                LWSafetyEvent::NullRobotCommand,
-                "[Safety] Null LW command");
-        }
+        ApplySafetyEvent(
+            LWSafetyEvent::NullRobotCommand,
+            "[Safety] Null LW command");
         return;
     }
 
@@ -1370,7 +853,7 @@ void RL_Real::SetupSysJoystick(const std::string& device, int bits)
 void RL_Real::LatchJoystickFault(
     const LWJoystickSampleResult& result) noexcept
 {
-    safety_supervisor_.report(LWSafetyEvent::JoystickUnavailable);
+    runtime_core_.reportSafetyEvent(LWSafetyEvent::JoystickUnavailable);
     LWClearJoystickState(this->sys_js_button, this->sys_js_axis);
     joystick_input_mailbox_.clear(Input::Gamepad::None);
     this->sys_js_active = false;
