@@ -1,7 +1,6 @@
 #ifndef RL_REAL_LW_HPP
 #define RL_REAL_LW_HPP
 
-#define PLOT
 // #define ENABLE_IMU_GYRO_FILTER 
 // #define CSV_LOGGER
 // #define CONTROL_TIME_PRINT
@@ -16,6 +15,7 @@
 #include "lw_control_safety.hpp"
 #include "lw_joystick_safety.hpp"
 #include "lw_safety_policy.hpp"
+#include "lw_debug_publisher.hpp"
 #include "fsm_LW.hpp"
 
 #include "LW_sdk.hpp"
@@ -28,14 +28,10 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
-#include <sensor_msgs/msg/joint_state.hpp>
 #include <realtime_tools/realtime_box.hpp>
 #include <realtime_tools/realtime_buffer.hpp>
-#include <realtime_tools/realtime_publisher.hpp>
 
 #include "joystick.hh"
-#include "matplotlibcpp.h"
-namespace plt = matplotlibcpp;
 
 class RL_Real : public RL
 {
@@ -76,7 +72,6 @@ private:
     std::shared_ptr<LoopFunc> loop_joystick;
     std::shared_ptr<LoopFunc> loop_control;
     std::shared_ptr<LoopFunc> loop_rl;
-    std::shared_ptr<LoopFunc> loop_plot;
     std::atomic<bool> control_timing_degraded_latched_{false};
 
     // LW interface
@@ -138,12 +133,10 @@ private:
     bool is_first_imu_ = true; 
 #endif
 
-     // plot
-    std::shared_ptr<rclcpp::Publisher<sensor_msgs::msg::JointState>> jointstate_plot_publisher_ = nullptr;
-    std::shared_ptr<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>> realtime_debug_publisher_ = nullptr;
-    rclcpp::TimerBase::SharedPtr timer_;
+    // Optional debug publication. A null component means no snapshot copies,
+    // publisher, or 250 Hz timer exist in the production control path.
+    std::unique_ptr<LWDebugPublisher> debug_publisher_;
     rclcpp::TimerBase::SharedPtr runtime_diagnostics_timer_;
-    void jointstate_plot_callback(void);
     void RuntimeDiagnosticsCallback();
     std::uint64_t last_operator_status_sequence_ = 0;
     std::uint64_t runtime_diagnostics_ticks_ = 0;
@@ -154,16 +147,7 @@ private:
 
     // others
     void disable_robot(void);
-    struct RealDebugSnapshot
-    {
-        RobotState<float> robot_state;
-        LowState low_state{};
-        LowCmd low_command{};
-        LWControlSnapshot control;
-    };
-
     LWSnapshotBuffer<LWPolicyInputSnapshot> policy_input_snapshot_;
-    LWSnapshotBuffer<RealDebugSnapshot> debug_snapshot_;
 
     std::shared_ptr<const LWPolicyActivation> inference_activation_;
     std::shared_ptr<const LWMotionReferenceSnapshot> inference_motion_reference_;

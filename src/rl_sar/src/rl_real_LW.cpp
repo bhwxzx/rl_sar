@@ -237,56 +237,26 @@ RL_Real::RL_Real(
         100ms,
         std::bind(&RL_Real::RuntimeDiagnosticsCallback, this));
 
-#ifdef PLOT
-    this->jointstate_plot_publisher_ = ros2_node->create_publisher<sensor_msgs::msg::JointState>(
-        "/LW_joint_states", 1
-    );
-    this->realtime_debug_publisher_ = std::make_shared<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>>(jointstate_plot_publisher_);
-    
-    this->realtime_debug_publisher_->lock();
-    auto & debug_msg = realtime_debug_publisher_->msg_;
-    debug_msg.header.stamp = ros2_node->get_clock()->now();
-    // 关节顺序与base.yaml里一致
-    std::vector<std::string> joint_now_names = {
-        "right_hip_now", "left_hip_now",
-        "right_thigh_now", "left_thigh_now",
-        "right_shank_now", "left_shank_now",
-        "right_foot_now", "left_foot_now",
-        "right_wheel_now", "left_wheel_now"
-    };
-    std::vector<std::string> joint_target_names = {
-        "right_hip_target", "left_hip_target",
-        "right_thigh_target", "left_thigh_target",
-        "right_shank_target", "left_shank_target",
-        "right_foot_target", "left_foot_target",
-        "right_wheel_target", "left_wheel_target"
-    };
-    std::vector<std::string> imu_states = {
-        "imu_ang_vel",
-        "imu_quat_w",
-        "imu_quat_x",
-        "imu_quat_y",
-        "imu_quat_z",
-        "cmd_vel"  
-    };
-    std::vector<std::string> joint_names;
-    joint_names.reserve(joint_now_names.size() + joint_target_names.size() + imu_states.size());
-    joint_names.insert(joint_names.end(), joint_now_names.begin(), joint_now_names.end());
-    joint_names.insert(joint_names.end(), joint_target_names.begin(), joint_target_names.end());
-    joint_names.insert(joint_names.end(), imu_states.begin(), imu_states.end());
-
-    size_t total_size = joint_names.size();
-    debug_msg.name.resize(total_size); 
-    debug_msg.position.resize(total_size);
-    debug_msg.velocity.resize(total_size);
-    debug_msg.effort.resize(total_size);
-    debug_msg.name = joint_names;
-    this->realtime_debug_publisher_->unlock();
-
-    this->timer_ = ros2_node->create_wall_timer(
-        4ms, std::bind(&RL_Real::jointstate_plot_callback, this)
-    );
-#endif
+    const bool enable_debug_publisher =
+        ros2_node->declare_parameter<bool>(
+            "enable_debug_publisher",
+            false);
+    this->debug_publisher_ = LWDebugPublisher::CreateIfEnabled(
+        enable_debug_publisher,
+        ros2_node,
+        LWDebugPublisherConfig{
+            this->params.Get<int>("num_of_dofs"),
+            this->params.Get<std::vector<int>>("joint_mapping"),
+            this->params.Get<std::vector<int>>("wheel_indices"),
+            this->params.Get<std::vector<float>>("rl_kp"),
+            this->params.Get<std::vector<float>>("rl_kd"),
+            4ms});
+    if (this->debug_publisher_)
+    {
+        std::cout << LOGGER::INFO
+                  << "[Debug] Publishing /LW_joint_states at 250 Hz"
+                  << std::endl;
+    }
 #ifdef CSV_LOGGER
     this->CSVInit(this->robot_name);
 #endif
@@ -326,91 +296,6 @@ RL_Real::~RL_Real()
                   << final_disable.failureSummary() << std::endl;
     }
     std::cout << LOGGER::INFO << "RL_Real exit" << std::endl;
-}
-
-void RL_Real::jointstate_plot_callback(void)
-{
-    if (this->realtime_debug_publisher_->trylock())
-    {
-        auto & msg = realtime_debug_publisher_->msg_;
-        RealDebugSnapshot snapshot;
-        if (!debug_snapshot_.read(snapshot))
-        {
-            this->realtime_debug_publisher_->unlock();
-            return;
-        }
-
-        int num_of_dofs = this->params.Get<int>("num_of_dofs");
-        auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
-        auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
-        auto rl_kp = this->params.Get<std::vector<float>>("rl_kp");
-        auto rl_kd = this->params.Get<std::vector<float>>("rl_kd");
-
-        for (int i = 0; i < num_of_dofs; ++i)
-        {
-            msg.velocity[i] = snapshot.low_state.motorState[joint_mapping[i]].vel_now;
-            msg.effort[i] = snapshot.low_state.motorState[joint_mapping[i]].tau_now;
-            if (i == wheel_indices[0] || i == wheel_indices[1] ) // 两个轮子
-            {
-                msg.position[i] = 0.0f;
-            }
-            else
-            {
-                msg.position[i] = snapshot.low_state.motorState[joint_mapping[i]].pos_now;
-            }
-        }
-        for (int i = num_of_dofs; i < 2*num_of_dofs; ++i)
-        {
-            if ((i-num_of_dofs) == wheel_indices[0] || (i-num_of_dofs) == wheel_indices[1])
-            {
-                msg.velocity[i] = snapshot.low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set;
-                msg.effort[i] = rl_kp[i - num_of_dofs]*(0.0f - snapshot.low_state.motorState[joint_mapping[i - num_of_dofs]].pos_now) +
-                                rl_kd[i - num_of_dofs]*(snapshot.low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set - snapshot.low_state.motorState[joint_mapping[i - num_of_dofs]].vel_now);
-            }
-            else{
-                msg.position[i] = snapshot.low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set;
-                msg.effort[i] = rl_kp[i - num_of_dofs]*(snapshot.low_command.motorCmd[joint_mapping[i - num_of_dofs]].action_set - snapshot.low_state.motorState[joint_mapping[i - num_of_dofs]].pos_now) +
-                                rl_kd[i - num_of_dofs]*(0.0f - snapshot.low_state.motorState[joint_mapping[i - num_of_dofs]].vel_now);
-            }
-        }
-        
-        // 记录 IMU 及其四元数
-        int imu_offset = 2 * num_of_dofs;
-
-        // 原有的角速度记录
-        msg.position[imu_offset] = snapshot.robot_state.imu.gyroscope[0];
-        msg.velocity[imu_offset] = snapshot.robot_state.imu.gyroscope[1];
-        msg.effort[imu_offset]   = snapshot.robot_state.imu.gyroscope[2];
-
-        // 四元数 W (存在 position 里，为了保持数据整洁清空 vel 和 effort)
-        msg.position[imu_offset + 1] = snapshot.robot_state.imu.quaternion[0];
-        msg.velocity[imu_offset + 1] = 0.0f;
-        msg.effort[imu_offset + 1]   = 0.0f;
-
-        // 四元数 X
-        msg.position[imu_offset + 2] = snapshot.robot_state.imu.quaternion[1];
-        msg.velocity[imu_offset + 2] = 0.0f;
-        msg.effort[imu_offset + 2]   = 0.0f;
-
-        // 四元数 Y
-        msg.position[imu_offset + 3] = snapshot.robot_state.imu.quaternion[2];
-        msg.velocity[imu_offset + 3] = 0.0f;
-        msg.effort[imu_offset + 3]   = 0.0f;
-
-        // 四元数 Z
-        msg.position[imu_offset + 4] = snapshot.robot_state.imu.quaternion[3];
-        msg.velocity[imu_offset + 4] = 0.0f;
-        msg.effort[imu_offset + 4]   = 0.0f;
-
-        int cmd_offset = imu_offset + 5;
-
-        // 记录控制指令
-        msg.position[cmd_offset + 0] = snapshot.control.x;
-        msg.velocity[cmd_offset + 0] = snapshot.control.y;
-        msg.effort[cmd_offset + 0]   = snapshot.control.yaw;
-
-        this->realtime_debug_publisher_->unlockAndPublish();
-    }
 }
 
 void RL_Real::RuntimeDiagnosticsCallback()
@@ -954,15 +839,23 @@ void RL_Real::RobotControl()
     this->control.ClearInput();
 
     this->SetCommand(&this->robot_command);
-    debug_snapshot_.publish(
-        RealDebugSnapshot{
-            this->robot_state,
-            this->lw_low_state,
-            this->lw_low_command,
-            {this->control.x,
-             this->control.y,
-             this->control.yaw,
-             this->control.gait_frequency}});
+    if (this->debug_publisher_)
+    {
+        this->debug_publisher_->publishSnapshot(
+            LWDebugSnapshot{
+                this->lw_low_state,
+                this->lw_low_command,
+                {this->robot_state.imu.gyroscope[0],
+                 this->robot_state.imu.gyroscope[1],
+                 this->robot_state.imu.gyroscope[2]},
+                {this->robot_state.imu.quaternion[0],
+                 this->robot_state.imu.quaternion[1],
+                 this->robot_state.imu.quaternion[2],
+                 this->robot_state.imu.quaternion[3]},
+                this->control.x,
+                this->control.y,
+                this->control.yaw});
+    }
 #ifdef CONTROL_TIME_PRINT
     auto t_end = std::chrono::high_resolution_clock::now();
 

@@ -72,7 +72,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 13 | LW-011 | P1 / high | resolved | Make the control loop suitable for deterministic real-time execution |
 | 14 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
 | 15 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
-| 16 | LW-014 | P2 / low | pending | Isolate and correct production debug/plot publishing |
+| 16 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
 
 ---
 
@@ -1242,7 +1242,7 @@ remove generic simulation/core facilities needed for future robot additions.
 ## [LW-014] Debug and plot publishing isolation
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-007, LW-011
 
 ### Problem
@@ -1273,6 +1273,26 @@ for each sample.
 - Production control can run with plotting completely disabled.
 - Enabling plotting does not introduce control-path races or blocking.
 - Published messages carry current timestamps and internally consistent samples.
+
+### Resolution
+
+- **Resolved**: 2026-08-11T12:01:35+08:00
+- **Commit**: 待本次提交
+- **Approved Scope**: 将 LW 实机调试发布改为默认关闭的显式 ROS/launch
+  参数；保留 LW-007 的一致快照和非阻塞发布边界；逐条刷新消息时间戳；关闭时
+  不创建 publisher、定时器或控制线程调试快照。
+- **Changed Files**: `src/rl_sar/library/core/debug/lw_debug_publisher.*`、
+  `src/rl_sar/include/rl_real_LW.hpp`、`src/rl_sar/src/rl_real_LW.cpp`、
+  `src/rl_sar/launch/rl_real_LW.launch.py`、`src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/test/test_lw_debug_publisher.cpp`、
+  `docs/LW_BUILD_DEPLOYMENT_CN.md`。
+- **Verification**: `lw_debug_publisher` 与 `lw_runtime_sync` 定向 CTest 在现有、
+  全新 Debug 和全新 Release 三个构建中均通过；三套完整 CTest 均为 18/18；
+  `rl_real_LW` 与 `rl_sim_LW` 在 Debug/Release clean build 中构建成功；
+  `cppcheck`、Python/Bash 语法、launch 默认参数检查及 `git diff --check`
+  通过；detached clean-worktree Release 部署构建、manifest 生成和
+  `--verify-deployment-only` 通过。未启动串口、仿真界面或实机。
+- **Remaining Follow-ups**: none
 
 ---
 

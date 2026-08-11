@@ -359,6 +359,39 @@ target_include_directories(LW_sdk INTERFACE
 )
 target_link_libraries(LW_sdk INTERFACE Threads::Threads)
 
+if(NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
+    add_library(
+        lw_debug_publisher
+        library/core/debug/lw_debug_publisher.cpp
+    )
+    target_include_directories(lw_debug_publisher PUBLIC
+        library/core/debug
+        library/core/safety
+        library/thirdparty/robot_sdk/lfr/LW_sdk
+    )
+    ament_target_dependencies(lw_debug_publisher
+        rclcpp
+        sensor_msgs
+        realtime_tools
+    )
+
+    if(BUILD_TESTING)
+        add_executable(
+            test_lw_debug_publisher
+            test/test_lw_debug_publisher.cpp
+        )
+        target_link_libraries(
+            test_lw_debug_publisher
+            lw_debug_publisher
+        )
+        ament_target_dependencies(test_lw_debug_publisher
+            rclcpp
+            sensor_msgs
+        )
+        add_test(NAME lw_debug_publisher COMMAND test_lw_debug_publisher)
+    endif()
+endif()
+
 if(NOT USE_CMAKE)
     if($ENV{ROS_DISTRO} MATCHES "noetic")
         include_directories(${catkin_INCLUDE_DIRS})
@@ -372,6 +405,7 @@ include_directories(
     library/core/rl_sdk
     library/core/loop
     library/core/safety
+    library/core/debug
     library/core/fsm
     library/core/vector_math
     library/core/motion_loader
@@ -671,6 +705,7 @@ if(SYSTEM_TYPE STREQUAL "Linux")
         )
         target_link_libraries(rl_real_LW
             LW_sdk
+            lw_debug_publisher
             rl_sdk_lw_deployment
             lw_deployment_bundle
             observation_buffer
