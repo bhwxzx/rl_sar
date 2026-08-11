@@ -32,6 +32,8 @@ const std::vector<std::string> kPolicyFiles = {
 const std::vector<std::string> kRuntimeFiles = {
     "lib/libserial.a",
     "lib/fdilink_ahrs/ahrs_driver_node",
+    "lib/rl_sar/lw_config_profiler",
+    "lib/rl_sar/profile_lw_runtime_config.py",
     "share/ament_index/resource_index/packages/fdilink_ahrs",
     "share/ament_index/resource_index/packages/serial",
     "share/fdilink_ahrs/launch/ahrs_driver.launch.py",

@@ -313,8 +313,8 @@ src/rl_sar/scripts/build_lw_deployment.sh \
 1. 从 `SOURCE_COMMIT` 创建临时、干净的源码工作树；
 2. 初始化该提交锁定的 Git 子模块；
 3. 使用 `Release` 和 `LW_PRODUCTION_DEPLOYMENT=ON` 编译；
-4. 安装 `serial`、`fdilink_ahrs`、`rl_real_LW`、五个 YAML、四个 ONNX 和
-   两个状态转换 CSV；
+4. 安装 `serial`、`fdilink_ahrs`、`rl_real_LW`、LW 配置测量工具、五个
+   YAML、四个 ONNX 和两个状态转换 CSV；
 5. 生成记录源码提交、策略资源及项目内 IMU/串口运行文件 SHA-256 的
    `manifest.yaml`；
 6. 拒绝关键部署文件中的符号链接；
@@ -329,6 +329,8 @@ src/rl_sar/scripts/build_lw_deployment.sh \
 ├── setup.bash
 ├── lib/libserial.a
 ├── lib/fdilink_ahrs/ahrs_driver_node
+├── lib/rl_sar/lw_config_profiler
+├── lib/rl_sar/profile_lw_runtime_config.py
 ├── lib/rl_sar/rl_real_LW
 ├── share/fdilink_ahrs/
 │   ├── launch/ahrs_driver.launch.py
@@ -382,13 +384,14 @@ sed -n '1,220p' \
     "$DEPLOY_PREFIX/share/rl_sar/deployment/LW/manifest.yaml"
 
 ldd "$DEPLOY_PREFIX/lib/rl_sar/rl_real_LW"
+ldd "$DEPLOY_PREFIX/lib/rl_sar/lw_config_profiler"
 ldd "$DEPLOY_PREFIX/lib/fdilink_ahrs/ahrs_driver_node"
 ```
 
 `manifest.yaml` 中的 `source_commit` 应等于开发机交付的完整提交哈希。两次
 `ldd` 输出中如果出现 `not found`，说明部署机缺少运行库，不得启动实机程序。
-`rl_real_LW` 应包含 `libonnxruntime.so`，且不得出现 `libtorch`、
-`libtorch_cpu` 或 `libc10`；正式部署构建脚本会自动检查这一约束。
+`rl_real_LW` 和 `lw_config_profiler` 应包含 `libonnxruntime.so`，且不得出现
+`libtorch`、`libtorch_cpu` 或 `libc10`；正式部署构建脚本会自动检查这一约束。
 
 还必须确认包解析没有回退到旧开发工作区：
 
@@ -561,6 +564,118 @@ control_loop_fatal_lateness: 0.0
 
 不要直接修改已经生成的部署目录来调整参数。参数调整应在项目的 `policy/LW/base.yaml` 中完成，经过开发机测试和 Sim2Sim、提交，再由部署机从新提交生成新的部署版本。
 
+### 吊装且不进入 Locomotion 的配置测量
+
+可靠吊装并保持 FSM 在 Passive 时，可以完成两阶段的部署前测量：第一阶段在
+目标 Jetson 上不连接任何硬件，运行与正式部署相同的四个 ONNX、观测/输出路径、
+200 Hz 控制调度和 50 Hz 推理；第二阶段只观察真实 IMU 与两块电机板反馈，并
+持续发送电机失能包。策略仍会在后台做 shadow inference，但其输出始终被丢弃，
+不会进入腿式/轮式 Locomotion 或形态切换状态。
+
+这两阶段可给出以下候选：
+
+- `control_loop_cpu`、显式试验过的 `control_loop_realtime_priority`；
+- 控制循环降级的连续丢周期数和单次晚到阈值；
+- IMU/左右反馈的 `sensor_timeout`；
+- 两个串口组成的完整命令包写入截止时间 `serial_write_timeout`。
+
+吊装静态测量不能验证运动负载、接地冲击、电源压降、电机板看门狗和硬失能后的
+机械结果。因此工具永远保留
+`control_loop_fatal_consecutive_misses: 0`、
+`control_loop_fatal_lateness: 0.0`，并保持
+`control_loop_require_realtime: false`；这三项只能在单独的物理安全验证和部署权限
+评审后人工决定。输出的其他值也只是吊装环境候选，不是自动生效的最终配置。
+
+#### 第一阶段：无硬件 CPU 和调度测量
+
+在目标部署机的新终端中加载本次部署前缀。以下命令不会初始化 ROS、IMU、手柄、
+串口或执行器设备：
+
+```bash
+source /opt/ros/humble/setup.bash
+source "$DEPLOY_PREFIX/setup.bash"
+
+LW_PROFILER="$DEPLOY_PREFIX/lib/rl_sar/lw_config_profiler"
+LW_PROFILE_TOOL="$DEPLOY_PREFIX/lib/rl_sar/profile_lw_runtime_config.py"
+LW_POLICY_ROOT="$DEPLOY_PREFIX/share/rl_sar/deployment/LW/policy"
+LW_PROFILE_DIR="$RL_SAR_ROOT/build/lw_profiles/$SHORT_COMMIT"
+
+python3 "$LW_PROFILE_TOOL" collect-host \
+    --profiler "$LW_PROFILER" \
+    --policy-root "$LW_POLICY_ROOT" \
+    --output-dir "$LW_PROFILE_DIR/host" \
+    --duration-seconds 30 \
+    --cpus allowed \
+    --realtime-priorities 0
+```
+
+`--cpus allowed` 会逐一测量当前进程亲和掩码允许的逻辑 CPU；也可用
+`--cpus=-1,0,1` 显式加入不绑定的对照组。正数实时优先级只应由部署负责人明确
+选定后加入，例如 `--realtime-priorities 0,50`。未成功应用的亲和性或
+`SCHED_FIFO` 报告不会被分析器选为候选。每个输出目录必须不存在或为空，工具
+拒绝覆盖历史测量。
+
+#### 第二阶段：吊装硬件观察
+
+硬件阶段必须同时满足：机器人可靠吊装、运动范围隔离、现场人员掌握物理急停、
+正常 `rl_real_LW` 已停止、两个电机板串口没有其他读写者。只单独启动 AHRS，
+不要启动完整 LW launch：
+
+```bash
+ros2 launch fdilink_ahrs ahrs_driver.launch.py
+```
+
+在另一个已加载相同部署前缀的终端执行。确认字符串必须逐字匹配：
+
+```bash
+python3 "$LW_PROFILE_TOOL" collect-hardware \
+    --profiler "$LW_PROFILER" \
+    --policy-root "$LW_POLICY_ROOT" \
+    --output "$LW_PROFILE_DIR/hardware.json" \
+    --duration-seconds 60 \
+    --cpu -1 \
+    --realtime-priority 0 \
+    --confirmation I_CONFIRM_LW_IS_SUSPENDED_AND_MOTORS_MUST_REMAIN_DISABLED
+```
+
+该模式不会创建手柄或键盘输入，也不会允许 Passive/shadow policy 命令进入串口。
+它会先打开左右电机板串口并确认 20 个 `motors_disable=true` 包均完整写入，随后
+启动独立的 5 ms 失能保活线程；只有失能写入和保活启动成功后才会预加载四个模型、
+启动 ROS 观察和参数测算。初始化、测算和退出阶段不存在非失能命令发送路径；
+任一失能包写入不完整都会终止测算，退出前仍尝试最终 20 个失能包。报告记录
+初始失能写入与保活证明、IMU、左右电机板首帧等待、相邻有效帧间隔、结束时帧龄、
+串口写耗时与失败次数。任何失能证明缺失、来源未出现、采样不足、串口写失败或
+四个策略未完整运行，都会使候选分析失败。命令结束后停止独立 AHRS 驱动。
+
+当前电机板反馈协议没有单独的“失能已执行”回执位，因此上述证明只表示上层失能
+包已完整写入两个串口且程序没有发送非失能命令，不能替代 STM32 侧状态确认或
+物理急停。底层是否实际进入失能状态仍应由固件行为和现场安全措施保证。
+
+#### 生成仅供评审的候选
+
+下面两个 `max-safe` 值不是脚本测出来的性能值，而是风险评估预先确定的硬上限；
+必须由负责机械与控制安全的人员给出。示例中的占位符不能原样执行：
+
+```bash
+python3 "$LW_PROFILE_TOOL" analyze \
+    --base-yaml "$LW_POLICY_ROOT/LW/base.yaml" \
+    --reports "$LW_PROFILE_DIR"/host/*.json "$LW_PROFILE_DIR/hardware.json" \
+    --output "$LW_PROFILE_DIR/candidate-review.json" \
+    --max-safe-sensor-timeout-ms <评审确定的最大传感器时效毫秒> \
+    --max-safe-control-gap-ms <评审确定的最大控制间断毫秒> \
+    --minimum-hardware-samples 1000
+```
+
+分析器按截止时间丢失、最大晚到、最大执行时间和推理尾延迟排序 host 报告；传感器
+候选同时覆盖首帧等待、P50/P99.9/最大帧间隔和结束帧龄；串口候选覆盖
+P99.9/最大写耗时，并且必须小于一个 5 ms 控制周期。若不提供某个安全上限，
+对应的现有值会保持不变并标记为需要人工测量或评审。
+
+`candidate-review.json` 是 JSON（也是 YAML 1.2 可读的映射），包含
+`review_only: true`，不会修改输入 `base.yaml` 或部署目录。必须人工查看报告、在
+源码树的 `policy/LW/base.yaml` 中单独修改、重新执行 Sim2Sim 和测试、提交，再
+从新提交生成新部署版本。不得把候选文件直接覆盖到当前部署包。
+
 ### 可选的 CPU 固定和实时优先级
 
 只有在目标部署机上完成负载测量后，才应设置 `control_loop_cpu` 或正数的 `control_loop_realtime_priority`。先用 `lscpu` 确认可用 CPU，再确认运行账户具备设置 `SCHED_FIFO` 的权限；具体授权方式应遵守部署机的 systemd 或安全配置，不要仅为绕过权限错误而以 root 身份运行整个控制程序。
@@ -688,6 +803,8 @@ ros2 pkg prefix rl_sar
 ## 11. 相关文件
 
 - 构建脚本：`src/rl_sar/scripts/build_lw_deployment.sh`
+- 配置采集器：`src/rl_sar/src/lw_config_profiler.cpp`
+- 配置候选分析器：`src/rl_sar/scripts/profile_lw_runtime_config.py`
 - 清单生成器：`src/rl_sar/scripts/generate_lw_deployment_manifest.py`
 - LW 实机启动文件：`src/rl_sar/launch/rl_real_LW.launch.py`
 - LW 实机部署问题记录：`.learnings/LW_REAL_DEPLOYMENT_ISSUES.md` 中的

@@ -723,6 +723,22 @@ if(BUILD_TESTING)
         COMMAND test_lw_configuration_validation
     )
 
+    add_executable(
+        test_lw_config_profile
+        test/test_lw_config_profile.cpp
+    )
+    target_link_libraries(
+        test_lw_config_profile
+        PRIVATE Threads::Threads
+    )
+    add_test(NAME lw_config_profile COMMAND test_lw_config_profile)
+
+    add_test(
+        NAME lw_runtime_config_analyzer
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/test/test_profile_lw_runtime_config.py
+    )
+
     add_test(
         NAME lw_repository_scope
         COMMAND ${Python3_EXECUTABLE}
@@ -854,6 +870,10 @@ if(SYSTEM_TYPE STREQUAL "Linux")
             src/rl_real_LW.cpp
             ${JOYSTICK_SRC}
         )
+        add_executable(
+            lw_config_profiler
+            src/lw_config_profiler.cpp
+        )
         target_include_directories(rl_real_LW PRIVATE
             library/thirdparty/joystick
         )
@@ -866,6 +886,13 @@ if(SYSTEM_TYPE STREQUAL "Linux")
             ${YAML_CPP_LIBRARIES}
             Threads::Threads
         )
+        target_link_libraries(lw_config_profiler
+            LW_sdk
+            rl_sdk_lw_deployment
+            observation_buffer
+            ${YAML_CPP_LIBRARIES}
+            Threads::Threads
+        )
         ament_target_dependencies(rl_real_LW
             ament_index_cpp
             rclcpp
@@ -873,11 +900,32 @@ if(SYSTEM_TYPE STREQUAL "Linux")
             sensor_msgs
             realtime_tools
         )
+        ament_target_dependencies(lw_config_profiler
+            rclcpp
+            sensor_msgs
+        )
         target_compile_definitions(
             rl_real_LW
             PRIVATE RL_SAR_SOURCE_COMMIT="${RL_SAR_SOURCE_COMMIT}"
         )
-        install(TARGETS rl_real_LW DESTINATION lib/${PROJECT_NAME})
+        target_compile_definitions(
+            lw_config_profiler
+            PRIVATE RL_SAR_SOURCE_COMMIT="${RL_SAR_SOURCE_COMMIT}"
+        )
+        install(
+            TARGETS rl_real_LW lw_config_profiler
+            DESTINATION lib/${PROJECT_NAME}
+        )
+        if(BUILD_TESTING)
+            add_test(NAME lw_config_profiler_help COMMAND lw_config_profiler --help)
+            add_test(
+                NAME lw_config_profiler_integration
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_lw_config_profiler_integration.py
+                        --profiler $<TARGET_FILE:lw_config_profiler>
+                        --policy-root ${PROJECT_ROOT_DIR}/policy
+            )
+        endif()
     endif()
 endif()
 
@@ -891,6 +939,7 @@ if(NOT USE_CMAKE)
     elseif($ENV{ROS_DISTRO} MATCHES "foxy|humble")
         install(PROGRAMS
             scripts/actuator_net.py
+            scripts/profile_lw_runtime_config.py
             DESTINATION lib/${PROJECT_NAME}
         )
     endif()

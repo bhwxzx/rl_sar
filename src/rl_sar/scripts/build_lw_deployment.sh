@@ -70,6 +70,8 @@ python3 "$source_tree/src/rl_sar/scripts/verify_lw_policy_parity.py" \
     --policy-root "$source_tree/policy" \
     --manifest "$manifest"
 if find "$output_prefix/lib/rl_sar/rl_real_LW" \
+        "$output_prefix/lib/rl_sar/lw_config_profiler" \
+        "$output_prefix/lib/rl_sar/profile_lw_runtime_config.py" \
         "$output_prefix/share/rl_sar/deployment/LW" -type l -print -quit \
         | grep -q .; then
     echo "Production bundle contains symbolic links" >&2
@@ -86,16 +88,18 @@ LW_DEPLOYMENT_PREFIX="$output_prefix" bash -c '
     done
     for executable in \
         "$LW_DEPLOYMENT_PREFIX/lib/fdilink_ahrs/ahrs_driver_node" \
-        "$LW_DEPLOYMENT_PREFIX/lib/rl_sar/rl_real_LW"; do
+        "$LW_DEPLOYMENT_PREFIX/lib/rl_sar/rl_real_LW" \
+        "$LW_DEPLOYMENT_PREFIX/lib/rl_sar/lw_config_profiler"; do
         ldd_output=$(ldd "$executable")
         if grep -q "not found" <<< "$ldd_output"; then
             echo "Deployment executable has unresolved libraries: $executable" >&2
             printf "%s\n" "$ldd_output" >&2
             exit 1
         fi
-        if [[ "$executable" == */lib/rl_sar/rl_real_LW ]] \
+        if [[ "$executable" == */lib/rl_sar/rl_real_LW \
+              || "$executable" == */lib/rl_sar/lw_config_profiler ]] \
            && grep -Eq "libtorch|libc10" <<< "$ldd_output"; then
-            echo "LW production executable unexpectedly depends on LibTorch" >&2
+            echo "LW production executable unexpectedly depends on LibTorch: $executable" >&2
             printf "%s\n" "$ldd_output" >&2
             exit 1
         fi

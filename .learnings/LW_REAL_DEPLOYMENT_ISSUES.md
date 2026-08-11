@@ -74,10 +74,11 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 15 | LW-019 | P1 / high | resolved | Enable a real-robot terminal keyboard recovery channel |
 | 16 | LW-020 | P1 / high | resolved | Make the Jetson production inference bootstrap architecture-safe and ONNX-only |
 | 17 | LW-021 | P1 / high | resolved | Make Sim2Sim and real deployment share one testable control and safety core |
-| 18 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
-| 19 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
-| 20 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
-| 21 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
+| 18 | LW-022 | P1 / high | resolved | Measure suspended real-runtime behavior and generate review-only configuration candidates |
+| 19 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
+| 20 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
+| 21 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
+| 22 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
 
 ---
 
@@ -1754,6 +1755,104 @@ behavioral equivalence for real deployment.
   LibTorch 依赖。Python 编译、Bash 语法和 `git diff --check` 通过。所有验收
   均为 headless；未打开串口、未启动真机 ROS 节点、未发送电机命令，也未在
   Jetson 或真实机器人上执行物理验证。
+- **Remaining Follow-ups**: none
+
+---
+
+## [LW-022] Suspended real-runtime profiling and configuration candidates
+
+**Priority**: P1 / high
+**Status**: resolved
+**Dependencies**: LW-011, LW-016, LW-020, LW-021
+
+### Problem
+
+The current LW defaults for sensor freshness, paired serial-write deadline,
+control-loop CPU affinity, real-time scheduling, and timing degradation were
+chosen as portable conservative defaults rather than measured on the target
+Jetson. Existing diagnostics expose only aggregate control-loop maxima and do
+not retain sensor inter-arrival or serial enqueue latency distributions. A
+Passive suspended run also leaves every locomotion policy inactive, so its CPU
+load cannot represent production inference.
+
+Blindly deriving production safety thresholds from an unloaded run is unsafe.
+In particular, `control_loop_require_realtime` is an operational policy and
+the fatal timing thresholds depend on verified board watchdog and physical
+hard-disable behavior; neither can be selected from latency samples alone.
+
+### Intended Scope
+
+- Add a host-only profiler that runs the exact four bundled LW ONNX policies,
+  observation/output path, motion references, 200 Hz control scheduling, and
+  50 Hz inference without opening ROS, joystick, IMU, serial, or actuator
+  devices.
+- Add a separate suspended hardware-observation mode that refuses to start
+  without an explicit confirmation flag, never enters an LW locomotion FSM
+  state, and transmits only `motors_disable=true` packets while measuring IMU,
+  right/left valid-feedback gaps and paired serial enqueue latency.
+- Record bounded distribution statistics, control-loop startup/timing state,
+  tested CPU/priority, policy identity, target environment and failure counts
+  in machine-readable reports.
+- Add an orchestrator/analyzer that can rank allowed CPUs and explicitly
+  requested real-time priorities, then generate a review-only JSON report with
+  a YAML-compatible candidate overlay. It must never modify
+  `policy/LW/base.yaml` or a deployment bundle.
+- Require an operator-supplied maximum safe sensor age and maximum safe control
+  gap before suggesting the corresponding thresholds. Keep fatal timing
+  thresholds disabled and mark `control_loop_require_realtime` as a manual
+  deployment decision.
+- Document that suspended shadow profiling produces provisional software and
+  communication candidates, not final dynamic or physical safety validation.
+
+### Acceptance Criteria
+
+- Default profiling is host-only and performs no hardware I/O; hardware mode
+  requires an exact, auditable confirmation, confirms an initial disable burst
+  before policy preload, and continuously sends only motor disable packets.
+- All four deployment policies execute actual ONNX inference without changing
+  the FSM out of Passive or allowing policy output to reach actuators.
+- Reports contain sample counts and percentile/max statistics for inference,
+  sensor gaps and serial writes as applicable, plus loop misses, affinity and
+  scheduling application results.
+- Candidate generation rejects insufficient/failed measurements, never
+  enables fatal timing, never silently requires SCHED_FIFO, and writes only to
+  a new user-selected output path.
+- Unit tests cover statistics, safety gating, candidate bounds, immutable input
+  configuration and malformed reports. Existing tests and both LW executables
+  continue to build and pass without hardware access.
+
+### Resolution
+
+- **Resolved**: 2026-08-11T19:54:33+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 增加两阶段 LW 部署参数测量。host-only 阶段在目标主机
+  运行四个正式 ONNX、共享控制/观测/输出路径及 200 Hz/50 Hz 线程而不访问
+  硬件；吊装 hardware-observe 阶段保持 Passive、丢弃策略输出并只发送电机
+  失能包，采集 IMU、左右反馈及成对串口写时序。分析器只生成需人工评审的
+  候选报告，不修改 `base.yaml`，不自动启用实时强制或致命时序阈值。
+  根据底层控制器上电即使能的现场约束，硬件模式在任何模型预加载前确认左右板
+  初始失能包完整写入，并以独立 5 ms 保活持续只发送失能包；失败时不得开始或
+  继续测算。反馈协议没有失能回执位，因此不把完整串口写入误称为物理执行确认。
+- **Changed Files**: `src/rl_sar/src/lw_config_profiler.cpp`、
+  `src/rl_sar/library/core/safety/lw_config_profile.hpp`、
+  `src/rl_sar/scripts/{profile_lw_runtime_config.py,build_lw_deployment.sh,generate_lw_deployment_manifest.py}`、
+  `src/rl_sar/library/core/deployment/lw_deployment_bundle.cpp`、
+  `src/rl_sar/test/{test_lw_config_profile.cpp,test_lw_config_profiler_integration.py,test_profile_lw_runtime_config.py,test_lw_deployment_bundle.cpp}`、
+  `src/rl_sar/CMakeLists.txt`、`docs/LW_BUILD_DEPLOYMENT_CN.md`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 当前工作树 Debug 全目标构建成功，`rl_sim_LW`、
+  `rl_real_LW` 和 `lw_config_profiler` 均完成链接；完整 31/31 CTest 通过。
+  集成测试实际加载四个正式 ONNX 并分别执行推理，确认 host-only 报告没有串口
+  写或硬件命令，错误确认字符串在任何设备初始化前被拒绝；使用正确确认字符串
+  但不可用串口时，采集器在任何 ONNX 预加载前失败。统计和分析器测试
+  覆盖滚动上限、分位数、首帧/结束帧龄、配置输入不变、安全上限、采样不足、
+  畸形字段、策略缺失及输出不可覆盖。隔离临时 Git 验证快照成功生成
+  ONNX-only Release 正式部署，策略哈希、部署清单、动态库和
+  `--verify-deployment-only` 均通过；部署包内采集器再次完成四策略 host-only
+  推理，且采集器/分析器均纳入清单。Python 编译、Bash 语法和
+  `git diff --check` 通过。未访问串口、未启动真机 ROS 节点、未发送电机命令；
+  目标 Jetson 的 CPU/实时数据及吊装硬件数据必须按中文文档现场采集，不能由
+  当前无硬件验收替代。
 - **Remaining Follow-ups**: none
 
 ---

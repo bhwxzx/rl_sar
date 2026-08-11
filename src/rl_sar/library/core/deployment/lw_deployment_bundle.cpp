@@ -40,6 +40,8 @@ const std::set<std::string>& requiredRuntimeFiles()
     static const std::set<std::string> files = {
         "lib/libserial.a",
         "lib/fdilink_ahrs/ahrs_driver_node",
+        "lib/rl_sar/lw_config_profiler",
+        "lib/rl_sar/profile_lw_runtime_config.py",
         "share/ament_index/resource_index/packages/fdilink_ahrs",
         "share/ament_index/resource_index/packages/serial",
         "share/fdilink_ahrs/launch/ahrs_driver.launch.py",
