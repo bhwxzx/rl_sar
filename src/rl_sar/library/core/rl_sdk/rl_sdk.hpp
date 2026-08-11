@@ -394,7 +394,9 @@ public:
 
     // control
     Control control;
-    void KeyboardInterface();
+    void KeyboardInterface(
+        int input_descriptor = 0,
+        bool configure_terminal = true);
 
     // history buffer
     ObservationBuffer history_obs_buf;

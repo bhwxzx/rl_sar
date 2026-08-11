@@ -60,7 +60,7 @@ LW 实机部署问题必须按优先级逐项审批、逐项修改和逐项验�
 
 **Logged**: 2026-07-29T21:20:56+08:00
 **Priority**: high
-**Status**: pending
+**Status**: resolved
 **Area**: backend
 
 ### Summary
@@ -85,6 +85,13 @@ LW FSM 接受 `current_keyboard`，核心库也实现了 `KeyboardInterface()`�
 - Recurrence-Count: 1
 - First-Seen: 2026-07-29
 - Last-Seen: 2026-07-29
+
+### Resolution
+- **Resolved**: 2026-08-11T15:31:22+08:00
+- **Commit/PR**: 本提交
+- **Notes**: LW-019 为真机默认启用由控制线程轮询的 `/dev/tty` 键盘通道；
+  手柄断联锁存继续清零速度和 Gamepad，但保留数字键 `9` 的 `GetDown` 请求。
+  终端以 RAII 恢复，headless 部署必须显式关闭并承担文档列明的替代恢复措施。
 
 ---
 

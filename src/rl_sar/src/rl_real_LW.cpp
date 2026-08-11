@@ -104,6 +104,23 @@ RL_Real::RL_Real(
 {
     this->SetPolicyRoot(policy_root);
     ros2_node = std::make_shared<rclcpp::Node>("rl_real_LW_node");
+    const bool enable_keyboard = ros2_node->declare_parameter<bool>(
+        "enable_keyboard",
+        true);
+    if (enable_keyboard)
+    {
+        this->terminal_keyboard_ = std::make_unique<LWTerminalKeyboard>();
+        std::cout << LOGGER::INFO
+                  << "[Input] Terminal keyboard enabled on /dev/tty"
+                  << std::endl;
+    }
+    else
+    {
+        std::cerr << LOGGER::WARNING
+                  << "[Input] Terminal keyboard disabled; no keyboard GetDown "
+                     "recovery channel is available"
+                  << std::endl;
+    }
     // subscribe qos config
     auto subscribers_qos = rclcpp::SystemDefaultsQoS();
     subscribers_qos.keep_last(1);
@@ -288,6 +305,7 @@ RL_Real::~RL_Real()
     this->loop_control->shutdown();
     this->loop_rl->shutdown();
     this->loop_joystick->shutdown();
+    this->terminal_keyboard_.reset();
     const LWSendResult final_disable = disable_lw_robot(true);
     if (!final_disable.complete())
     {
@@ -755,6 +773,12 @@ void RL_Real::RobotControl()
     auto t_start = std::chrono::high_resolution_clock::now();
 #endif
     ApplyPendingInput();
+    if (this->terminal_keyboard_)
+    {
+        this->KeyboardInterface(
+            this->terminal_keyboard_->descriptor(),
+            false);
+    }
     if (control_timing_degraded_latched_.load(std::memory_order_acquire))
     {
         this->control.x = 0.0f;

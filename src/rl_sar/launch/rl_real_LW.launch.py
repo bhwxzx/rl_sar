@@ -10,6 +10,7 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
 
     enable_debug_publisher = LaunchConfiguration('enable_debug_publisher')
+    enable_keyboard = LaunchConfiguration('enable_keyboard')
 
     fdilink_ahrs_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -24,10 +25,16 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'enable_debug_publisher': enable_debug_publisher,
+            'enable_keyboard': enable_keyboard,
         }],
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'enable_keyboard',
+            default_value='true',
+            description='Enable real-robot keyboard input from the controlling terminal',
+        ),
         DeclareLaunchArgument(
             'enable_debug_publisher',
             default_value='false',

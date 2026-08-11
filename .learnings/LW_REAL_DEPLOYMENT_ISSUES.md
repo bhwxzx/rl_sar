@@ -71,10 +71,11 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 12 | LW-013 | P1 / high | resolved | Validate YAML, mappings, observation sizes, and model outputs |
 | 13 | LW-011 | P1 / high | resolved | Make the control loop suitable for deterministic real-time execution |
 | 14 | LW-017 | P1 / high | resolved | Bundle and verify the LW IMU/serial runtime dependencies |
-| 15 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
-| 16 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
-| 17 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
-| 18 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
+| 15 | LW-019 | P1 / high | resolved | Enable a real-robot terminal keyboard recovery channel |
+| 16 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
+| 17 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
+| 18 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
+| 19 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
 
 ---
 
@@ -1450,6 +1451,85 @@ Jetson installer has broader local checks, and CMake checks only
   schema 2 清单并通过 `--verify-deployment-only`。Bash/Python 语法、
   `cppcheck` 和 `git diff --check` 通过；`shellcheck`、`cmakelint` 不可用。
   验收未在宿主机实际执行 apt 安装，也未使用 Jetson 或实机硬件。
+- **Remaining Follow-ups**: none
+
+---
+
+## [LW-019] Real-robot terminal keyboard recovery channel
+
+**Priority**: P1 / high
+**Status**: resolved
+**Dependencies**: LW-006, LW-007, LW-016
+
+### Problem
+
+The LW FSM accepts keyboard transitions and the shared SDK implements terminal
+key decoding, but `rl_real_LW` never polls a keyboard. After a joystick fault
+latches the Gamepad unavailable, the documented retained `GetDown` path is
+therefore not reachable from a terminal. Starting the simulator's separate
+keyboard loop in the real executable would also race with the 200 Hz control
+thread, while a ROS 2 launch child cannot rely on its piped standard input as
+an interactive terminal.
+
+### Evidence
+
+- `src/rl_sar/src/rl_real_LW.cpp:220-290,752-841`
+- `src/rl_sar/src/rl_sim.cpp:152-180`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:915-1037`
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:119-121`
+- `.learnings/LEARNINGS.md:59-87`
+
+### Intended Scope
+
+- Enable terminal keyboard input by default for `rl_real_LW`, with an explicit
+  launch parameter for headless deployments.
+- Read non-blockingly from the process controlling terminal and restore its
+  termios state on every normal or exceptional exit path.
+- Poll and apply keyboard input only in the real control thread; do not add a
+  second writer to `Control`.
+- Preserve the joystick fault latch and velocity-zero behavior while retaining
+  keyboard FSM events, including the existing `9` to `GetDown` mapping.
+- Document the interactive-terminal requirement and fail startup when keyboard
+  input is requested but no controlling terminal is available.
+
+### Acceptance Criteria
+
+- `ros2 launch rl_sar rl_real_LW.launch.py` enables keyboard input by default
+  when invoked from a controlling terminal.
+- Terminal input is non-blocking, disables canonical input and echo without
+  disabling signals, and restores the original termios state on destruction.
+- The control thread consumes keyboard events before evaluating FSM
+  transitions; no keyboard worker thread writes `Control` concurrently.
+- A latched joystick fault does not clear a terminal `GetDown` event.
+- `enable_keyboard:=false` supports an explicitly headless deployment, while
+  enabled operation without a controlling terminal fails before control loops
+  start.
+
+### Resolution
+
+- **Resolved**: 2026-08-11T15:31:22+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 真机默认启用 `/dev/tty` 终端键盘，以非阻塞 RAII 方式
+  配置和恢复 termios；只由 200 Hz 控制线程读取并更新 FSM 输入，不创建并发
+  键盘线程；保留手柄断联后的键盘 `GetDown` 通道；为无交互终端提供显式
+  `enable_keyboard:=false`，启用但无控制终端时在控制循环启动前失败。
+- **Changed Files**: `src/rl_sar/library/core/safety/lw_terminal_keyboard.hpp`、
+  `src/rl_sar/library/core/rl_sdk/rl_sdk.{hpp,cpp}`、
+  `src/rl_sar/include/rl_real_LW.hpp`、`src/rl_sar/src/rl_real_LW.cpp`、
+  `src/rl_sar/launch/rl_real_LW.launch.py`、`src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/test/{test_lw_terminal_keyboard.cpp,test_lw_real_keyboard_integration.py}`、
+  `README_CN.md`、`docs/LW_BUILD_DEPLOYMENT_CN.md`、
+  `.learnings/{LEARNINGS.md,LW_REAL_DEPLOYMENT_ISSUES.md}`。
+- **Verification**: 伪终端测试验证描述符非阻塞、关闭 `ICANON/ECHO`、保留
+  `ISIG`、析构恢复原始 termios、数字键 `9` 与方向键解析以及无终端拒绝；
+  集成测试验证键盘在 FSM 前由控制线程轮询、未新增 `loop_keyboard`、手柄故障
+  门不清除键盘、launch 默认启用和文档契约。现有工作区及 clean Debug、
+  Release 的定向测试与全量 23/23 CTest 均通过，两个 clean build 均构建全部
+  6 包；`ros2 launch ... --show-args` 确认 `enable_keyboard` 默认 `true`。
+  detached clean-worktree Release 正式部署构建和 `--verify-deployment-only`
+  通过。Python/C++ 严格语法、`cppcheck`（仅定点抑制既有 `CSVInit` 按值传参
+  提示）和 `git diff --check` 通过；`clang-tidy`、`cmakelint` 不可用。未打开
+  真机串口、未启动 ROS 节点或电机控制，也未在真实控制终端上进行实机试键。
 - **Remaining Follow-ups**: none
 
 ---

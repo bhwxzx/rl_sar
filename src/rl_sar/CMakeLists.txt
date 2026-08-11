@@ -535,6 +535,30 @@ if(BUILD_TESTING)
                     ${PROJECT_ROOT_DIR}/docs/LW_BUILD_DEPLOYMENT_CN.md
                     ${PROJECT_ROOT_DIR}/scripts/install_build_dependencies.sh
         )
+        add_executable(
+            test_lw_terminal_keyboard
+            test/test_lw_terminal_keyboard.cpp
+        )
+        target_link_libraries(
+            test_lw_terminal_keyboard
+            PRIVATE
+                rl_sdk
+                observation_buffer
+                ${YAML_CPP_LIBRARIES}
+        )
+        add_test(
+            NAME lw_terminal_keyboard
+            COMMAND test_lw_terminal_keyboard
+        )
+        add_test(
+            NAME lw_real_keyboard_integration
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_lw_real_keyboard_integration.py
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src/rl_real_LW.cpp
+                    ${CMAKE_CURRENT_SOURCE_DIR}/include/rl_real_LW.hpp
+                    ${CMAKE_CURRENT_SOURCE_DIR}/launch/rl_real_LW.launch.py
+                    ${PROJECT_ROOT_DIR}/docs/LW_BUILD_DEPLOYMENT_CN.md
+        )
     endif()
 
     add_executable(test_lw_fsm_transitions

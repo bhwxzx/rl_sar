@@ -15,6 +15,7 @@
 #include "lw_control_safety.hpp"
 #include "lw_joystick_safety.hpp"
 #include "lw_safety_policy.hpp"
+#include "lw_terminal_keyboard.hpp"
 #include "lw_debug_publisher.hpp"
 #include "fsm_LW.hpp"
 
@@ -73,6 +74,10 @@ private:
     std::shared_ptr<LoopFunc> loop_control;
     std::shared_ptr<LoopFunc> loop_rl;
     std::atomic<bool> control_timing_degraded_latched_{false};
+
+    // Terminal keyboard input is polled by loop_control so Control has one
+    // writer even when the joystick reader runs concurrently.
+    std::unique_ptr<LWTerminalKeyboard> terminal_keyboard_;
 
     // LW interface
     LWSDK lw_sdk;

@@ -917,46 +917,49 @@ void RL::AttitudeProtect(const std::vector<float> &quaternion, float pitch_thres
 #include <fcntl.h>
 #include <unistd.h>
 
-static int kbhit()
+static int kbhit(int input_descriptor, bool configure_terminal)
 {
     static bool initialized = false;
     static termios original_term;
+    static int configured_descriptor = -1;
 
     // Initialize terminal to non-canonical mode on first call
-    if (!initialized)
+    if (configure_terminal && !initialized)
     {
-        tcgetattr(STDIN_FILENO, &original_term);
-
-        termios new_term = original_term;
-        new_term.c_lflag &= ~(ICANON | ECHO);  // Disable canonical mode and echo
-        new_term.c_cc[VMIN] = 0;   // Non-blocking read
-        new_term.c_cc[VTIME] = 0;  // No timeout
-
-        tcsetattr(STDIN_FILENO, TCSANOW, &new_term);
-
-        // Register cleanup function to restore terminal on exit
-        static bool cleanup_registered = false;
-        if (!cleanup_registered)
+        if (tcgetattr(input_descriptor, &original_term) == 0)
         {
-            std::atexit([]() {
-                tcsetattr(STDIN_FILENO, TCSANOW, &original_term);
-            });
-            cleanup_registered = true;
-        }
+            termios new_term = original_term;
+            new_term.c_lflag &= ~(ICANON | ECHO);
+            new_term.c_cc[VMIN] = 0;
+            new_term.c_cc[VTIME] = 0;
 
+            if (tcsetattr(input_descriptor, TCSANOW, &new_term) == 0)
+            {
+                configured_descriptor = input_descriptor;
+                std::atexit([]() {
+                    if (configured_descriptor >= 0)
+                    {
+                        tcsetattr(
+                            configured_descriptor,
+                            TCSANOW,
+                            &original_term);
+                    }
+                });
+            }
+        }
         initialized = true;
     }
 
     // Non-blocking read of a single character
     char c;
-    int result = read(STDIN_FILENO, &c, 1);
+    int result = read(input_descriptor, &c, 1);
 
     return (result == 1) ? (unsigned char)c : -1;
 }
 
-void RL::KeyboardInterface()
+void RL::KeyboardInterface(int input_descriptor, bool configure_terminal)
 {
-    int c = kbhit();
+    int c = kbhit(input_descriptor, configure_terminal);
     if (c > 0)
     {
         switch (c)
@@ -1003,11 +1006,11 @@ void RL::KeyboardInterface()
         {
             char seq[2];
             // Try to read escape sequence non-blockingly
-            if (read(STDIN_FILENO, &seq[0], 1) == 1)
+            if (read(input_descriptor, &seq[0], 1) == 1)
             {
                 if (seq[0] == '[')
                 {
-                    if (read(STDIN_FILENO, &seq[1], 1) == 1)
+                    if (read(input_descriptor, &seq[1], 1) == 1)
                     {
                         switch (seq[1])
                         {

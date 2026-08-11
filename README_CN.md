@@ -107,6 +107,10 @@ source install/setup.bash
 ros2 launch rl_sar rl_real_LW.launch.py
 ```
 
+该入口默认从控制终端 `/dev/tty` 启用真机键盘；数字键 `9` 可按 FSM 当前状态
+请求 `GetDown`，且手柄断联锁存不会清除该键盘通道。无交互终端的受控部署必须
+显式使用 `enable_keyboard:=false`，并按部署文档准备替代恢复和机械支撑措施。
+
 未完成部署文档中的硬件侧检查时，不得启动实机节点。
 
 ## 仓库边界
