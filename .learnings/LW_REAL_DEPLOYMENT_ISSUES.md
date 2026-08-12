@@ -96,7 +96,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 23 | LW-022 | P1 / high | resolved | Measure suspended real-runtime behavior and generate review-only configuration candidates |
 | 24 | LW-028 | P2 / medium | resolved | Replace unsafe Sim2Sim signal-handler work with a signal-safe shutdown request |
 | 25 | LW-029 | P2 / medium | resolved | Resolve optional actuator models through the selected Sim2Sim policy root |
-| 26 | LW-030 | P2 / medium | pending | Keep inhibited commands and gait-phase observations coherent |
+| 26 | LW-030 | P2 / medium | resolved | Keep inhibited commands and gait-phase observations coherent |
 | 27 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
 | 28 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
 | 29 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
@@ -2379,7 +2379,7 @@ policy root is complete.
 ## [LW-030] Coherent inhibited-command gait observation
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-021, LW-025
 
 ### Problem
@@ -2408,6 +2408,33 @@ a nonzero moving gait phase.
 - Tests cover normal movement, joystick fault, timing degradation, and external
   input fault without relying on scheduling luck.
 - Nominal policy input/output parity remains unchanged for valid commands.
+
+### Resolution
+
+- **Resolved**: 2026-08-12T19:50:43+08:00
+- **Commit**: 本提交
+- **Approved Scope**: `LWRuntimeCore::runInferenceCycle()` 从每帧已发布的控制
+  快照构造一次有效命令；外部输入故障或安全监督器输入抑制会统一清零有效
+  `x/y/yaw`。策略 `commands`、命令范数、运动判定和最终 `gait_phase` 全部读取
+  该有效命令，保证同一帧的零速度对应 `{0, 0}` 静止相位。按用户决定，内部
+  相位时钟在短暂抑制期间保持连续而不重置；有效非零命令的阈值、推进速度和
+  正弦/余弦计算顺序不变。real、Sim2Sim 和 host profiler 继续共用同一路径。
+- **Changed Files**: `src/rl_sar/library/core/safety/lw_runtime_core.hpp`、
+  `src/rl_sar/test/test_lw_runtime_parity.cpp`、
+  `docs/LW_BUILD_DEPLOYMENT_CN.md`、`.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 当前 Debug 工作树完整构建并通过 38/38 CTest。共享运行时
+  测试先发布非零策略输入，再于推理前分别注入 `JoystickUnavailable`、
+  `ControlTimingDegraded` 和 `external_input_fault=true`，确定性确认每种情况的
+  当帧 `commands={0,0,0}`、`gait_phase={0,0}`；正常路径保持原命令和精确相位
+  数值，临时外部抑制后的恢复帧证明内部时钟没有重置。现有真实 ONNX
+  real/Sim2Sim 推理奇偶性继续通过。独立 Release 构建成功链接
+  `rl_real_LW`、`rl_sim_LW` 和 `lw_config_profiler`，运行时奇偶性与 profiler
+  集成测试 2/2 通过。完整严格 `-Werror` 构建被 LW-031 已登记的既有
+  `ObservationBuffer -Wreorder` 阻断；仅将该类别降为非致命后，本次目标在
+  `-Wall -Wextra -Wpedantic -Werror` 其余规则下构建并通过。ASan/UBSan、定向
+  `cppcheck` 和 `git diff --check` 通过。未启动 MuJoCo GUI、真机节点，未访问
+  串口或电机。
+- **Remaining Follow-ups**: none
 
 ---
 

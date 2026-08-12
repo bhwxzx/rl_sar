@@ -360,6 +360,13 @@ public:
         }
         const RobotState<float>& local_state = policy_input.robot_state;
         const LWControlSnapshot& local_control = policy_input.control;
+        LWControlSnapshot effective_control = local_control;
+        if (external_input_fault || inputInhibited())
+        {
+            effective_control.x = 0.0f;
+            effective_control.y = 0.0f;
+            effective_control.yaw = 0.0f;
+        }
 
         inference_motion_reference_ = rl_->LoadLWMotionReference();
         const auto observations =
@@ -382,13 +389,10 @@ public:
 
         ++inference_frame_;
         inference_obs_.ang_vel = local_state.imu.gyroscope;
-        inference_obs_.commands =
-            (external_input_fault || inputInhibited())
-            ? std::vector<float>{0.0f, 0.0f, 0.0f}
-            : std::vector<float>{
-                local_control.x,
-                local_control.y,
-                local_control.yaw};
+        inference_obs_.commands = {
+            effective_control.x,
+            effective_control.y,
+            effective_control.yaw};
         inference_obs_.base_quat = local_state.imu.quaternion;
         inference_obs_.dof_pos = local_state.motor_state.q;
         inference_obs_.dof_vel = local_state.motor_state.dq;
@@ -401,15 +405,15 @@ public:
         inference_gait_phase_time_ +=
             policy_params.Get<float>("dt")
             * policy_params.Get<int>("decimation")
-            * local_control.gait_frequency;
+            * effective_control.gait_frequency;
         while (inference_gait_phase_time_ >= 1.0f)
         {
             inference_gait_phase_time_ -= 1.0f;
         }
         const float command_norm = std::sqrt(
-            local_control.x * local_control.x
-            + local_control.y * local_control.y
-            + local_control.yaw * local_control.yaw);
+            effective_control.x * effective_control.x
+            + effective_control.y * effective_control.y
+            + effective_control.yaw * effective_control.yaw);
         const float is_moving = command_norm > 0.1f ? 1.0f : 0.0f;
         constexpr float pi = 3.14159265358979323846f;
         inference_obs_.gait_phase = {

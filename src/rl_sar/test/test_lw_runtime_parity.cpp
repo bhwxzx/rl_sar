@@ -238,6 +238,110 @@ void requireSafetyEqual(const Harness& real, const Harness& sim)
         "adapter effort");
 }
 
+void prepareInferenceHarness(Harness& harness)
+{
+    constexpr const char* policy = "LW/robot_lab/leg_loco";
+    harness.rl.SetPolicyRoot(POLICY_DIR);
+    harness.rl.ReadYaml("LW", "base.yaml");
+    harness.rl.PreloadModel(policy);
+    harness.rl.PreloadLWPolicyContext(policy);
+    harness.rl.ActivateLWPolicy(policy);
+    harness.rl.control.gait_frequency = 1.5f;
+
+    // Publish a nonzero command first so a subsequently latched fault exercises
+    // the inference-frame boundary rather than relying on control-loop timing.
+    harness.cycle(0.4f);
+}
+
+LWInferenceTraceSnapshot runInferenceObservationScenario(
+    bool external_input_fault,
+    LWSafetyEvent event = LWSafetyEvent::Count)
+{
+    Harness harness;
+    prepareInferenceHarness(harness);
+    if (event != LWSafetyEvent::Count)
+    {
+        harness.core.reportSafetyEvent(event);
+    }
+    harness.core.runInferenceCycle(external_input_fault);
+
+    LWInferenceTraceSnapshot trace;
+    require(
+        harness.core.readInferenceTrace(trace),
+        "inference observation scenario did not publish a trace");
+    return trace;
+}
+
+void requireStationaryCommandObservation(
+    const LWInferenceTraceSnapshot& trace,
+    const std::string& scenario)
+{
+    requireVectorEqual(
+        trace.observations.commands,
+        {0.0f, 0.0f, 0.0f},
+        scenario + " commands");
+    requireVectorEqual(
+        trace.observations.gait_phase,
+        {0.0f, 0.0f},
+        scenario + " gait phase");
+}
+
+void testEffectiveCommandKeepsGaitObservationCoherent()
+{
+    const LWInferenceTraceSnapshot nominal =
+        runInferenceObservationScenario(false);
+    requireVectorEqual(
+        nominal.observations.commands,
+        {0.4f, -0.2f, 0.3f},
+        "nominal commands");
+    constexpr float pi = 3.14159265358979323846f;
+    constexpr float expected_phase_time = 0.005f * 4.0f * 1.5f;
+    requireVectorEqual(
+        nominal.observations.gait_phase,
+        {std::sin(2.0f * pi * expected_phase_time),
+         std::cos(2.0f * pi * expected_phase_time)},
+        "nominal gait phase");
+
+    requireStationaryCommandObservation(
+        runInferenceObservationScenario(
+            false, LWSafetyEvent::JoystickUnavailable),
+        "joystick fault");
+    requireStationaryCommandObservation(
+        runInferenceObservationScenario(
+            false, LWSafetyEvent::ControlTimingDegraded),
+        "control timing degradation");
+    requireStationaryCommandObservation(
+        runInferenceObservationScenario(true),
+        "external input fault");
+}
+
+void testTemporaryInhibitionPreservesPhaseClock()
+{
+    Harness harness;
+    prepareInferenceHarness(harness);
+
+    harness.core.runInferenceCycle(false);
+    harness.core.runInferenceCycle(true);
+    LWInferenceTraceSnapshot inhibited;
+    require(
+        harness.core.readInferenceTrace(inhibited),
+        "temporary inhibition did not publish a trace");
+    requireStationaryCommandObservation(inhibited, "temporary inhibition");
+
+    harness.core.runInferenceCycle(false);
+    LWInferenceTraceSnapshot recovered;
+    require(
+        harness.core.readInferenceTrace(recovered),
+        "temporary inhibition recovery did not publish a trace");
+    constexpr float pi = 3.14159265358979323846f;
+    constexpr float expected_phase_time = 3.0f * 0.005f * 4.0f * 1.5f;
+    requireVectorEqual(
+        recovered.observations.gait_phase,
+        {std::sin(2.0f * pi * expected_phase_time),
+         std::cos(2.0f * pi * expected_phase_time)},
+        "temporary inhibition recovery gait phase");
+}
+
 void testNominalReplayParity()
 {
     Harness real;
@@ -533,6 +637,8 @@ int main()
     {
         testNominalReplayParity();
         testExactPolicyInferenceReplayParity();
+        testEffectiveCommandKeepsGaitObservationCoherent();
+        testTemporaryInhibitionPreservesPhaseClock();
         testS1PreservesRecoveryInputAndZerosVelocity();
         testLWKeyboardVelocityCommandsAreIgnored();
         testNonLWStateControllerRetainsLegacyKeyboardVelocity();
