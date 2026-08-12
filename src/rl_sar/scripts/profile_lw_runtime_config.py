@@ -9,6 +9,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Any, Iterable, NoReturn
@@ -17,12 +18,25 @@ from typing import Any, Iterable, NoReturn
 HARDWARE_CONFIRMATION = (
     "I_CONFIRM_LW_IS_SUSPENDED_AND_MOTORS_MUST_REMAIN_DISABLED"
 )
-POLICIES = {
+POLICIES = (
     "LW/robot_lab/leg_loco",
     "LW/robot_lab/wheel_loco",
     "LW/robot_lab/leg_to_wheel",
     "LW/robot_lab/wheel_to_leg",
-}
+)
+POLICY_ASSETS = (
+    "LW/base.yaml",
+    "LW/robot_lab/leg_loco/config.yaml",
+    "LW/robot_lab/leg_loco/policy.onnx",
+    "LW/robot_lab/leg_to_wheel/config.yaml",
+    "LW/robot_lab/leg_to_wheel/leg_to_wheel_transform_60hz.csv",
+    "LW/robot_lab/leg_to_wheel/policy.onnx",
+    "LW/robot_lab/wheel_loco/config.yaml",
+    "LW/robot_lab/wheel_loco/policy.onnx",
+    "LW/robot_lab/wheel_to_leg/config.yaml",
+    "LW/robot_lab/wheel_to_leg/policy.onnx",
+    "LW/robot_lab/wheel_to_leg/wheel_to_leg_transform_60hz.csv",
+)
 
 
 def fail(message: str) -> NoReturn:
@@ -146,6 +160,13 @@ def require_mapping(value: Any, name: str) -> dict[str, Any]:
     return value
 
 
+def require_string(mapping: dict[str, Any], key: str, context: str) -> str:
+    value = mapping.get(key)
+    if not isinstance(value, str) or not value:
+        fail(f"{context}.{key} must be a nonempty string")
+    return value
+
+
 def require_number(mapping: dict[str, Any], key: str, context: str) -> float:
     value = mapping.get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -163,27 +184,119 @@ def require_integer(mapping: dict[str, Any], key: str, context: str) -> int:
     return value
 
 
+def require_positive_number(
+    mapping: dict[str, Any], key: str, context: str
+) -> float:
+    result = require_number(mapping, key, context)
+    if result <= 0.0:
+        fail(f"{context}.{key} must be positive")
+    return result
+
+
+def load_policy_assets(report: dict[str, Any], path: Path) -> list[dict[str, str]]:
+    values = report.get("policy_assets")
+    if not isinstance(values, list):
+        fail(f"profile policy_assets must be a list: {path}")
+    records: list[dict[str, str]] = []
+    for index, expected_path in enumerate(POLICY_ASSETS):
+        if index >= len(values):
+            fail(f"profile is missing policy asset {expected_path}: {path}")
+        value = require_mapping(values[index], f"{path}.policy_assets[{index}]")
+        actual_path = require_string(value, "path", "policy_asset")
+        digest = require_string(value, "sha256", "policy_asset")
+        if actual_path != expected_path:
+            fail(f"profile policy assets are not in the approved order: {path}")
+        if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            fail(f"profile policy asset SHA-256 is invalid: {path}")
+        records.append({"path": actual_path, "sha256": digest})
+    if len(values) != len(POLICY_ASSETS):
+        fail(f"profile contains extra or duplicate policy assets: {path}")
+    return records
+
+
 def load_report(path: Path) -> dict[str, Any]:
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or path.resolve(strict=True) != path
+    ):
+        fail(f"profile report must be a regular non-symlink file: {path}")
+    before_digest = file_digest(path)
     with path.open("r", encoding="utf-8") as source:
         report = json.load(source)
+    if file_digest(path) != before_digest:
+        fail(f"profile changed while it was being read: {path}")
     report = require_mapping(report, str(path))
-    if type(report.get("schema_version")) is not int or report["schema_version"] != 1:
+    if type(report.get("schema_version")) is not int or report["schema_version"] != 2:
         fail(f"unsupported profile schema in {path}")
     if report.get("failed") is not False:
         fail(f"profile reports failure and cannot be used: {path}")
+    source_commit = require_string(report, "source_commit", str(path))
+    if re.fullmatch(r"[0-9a-f]{40}", source_commit) is None:
+        fail(f"profile source_commit must be a full lowercase Git SHA-1: {path}")
+    mode = report.get("mode")
+    if mode not in {"host-only", "hardware-observe"}:
+        fail(f"profile mode is not approved: {path}")
+    host = require_mapping(report.get("host"), f"{path}.host")
+    host_keys = ("node", "system", "release", "machine")
+    if set(host) != set(host_keys):
+        fail(f"profile host identity fields differ from schema: {path}")
+    report["host"] = {
+        key: require_string(host, key, f"{path}.host") for key in host_keys
+    }
+    policy_root_value = require_string(report, "policy_root", str(path))
+    policy_root = Path(policy_root_value)
+    if (
+        not policy_root.is_absolute()
+        or str(policy_root.resolve(strict=True)) != policy_root_value
+    ):
+        fail(f"profile policy_root is not an existing canonical path: {path}")
+    report["policy_assets"] = load_policy_assets(report, path)
+    duration = require_positive_number(
+        report, "duration_per_policy_seconds", str(path)
+    )
     policies = report.get("policies")
     if not isinstance(policies, list):
         fail(f"profile policies must be a list: {path}")
-    names: set[str] = set()
-    for policy in policies:
-        policy_mapping = require_mapping(policy, f"{path}.policies[]")
-        name = policy_mapping.get("policy")
-        if not isinstance(name, str):
-            fail(f"profile policy name must be a string: {path}")
-        names.add(name)
-    if names != POLICIES:
-        fail(f"profile does not contain the exact four LW policies: {path}")
+    if len(policies) != len(POLICIES):
+        fail(f"profile must contain exactly four LW policy records: {path}")
+    for index, expected_name in enumerate(POLICIES):
+        policy_mapping = require_mapping(
+            policies[index], f"{path}.policies[{index}]"
+        )
+        if policy_mapping.get("policy") != expected_name:
+            fail(f"profile policies are not unique and in approved order: {path}")
+        policy_duration = require_positive_number(
+            policy_mapping, "duration_seconds", f"{path}.policies[{index}]"
+        )
+        if policy_duration != duration:
+            fail(f"profile policy duration differs from report duration: {path}")
+    hardware = require_mapping(report.get("hardware"), f"{path}.hardware")
+    if mode == "host-only":
+        if report.get("hardware_confirmation") is not False:
+            fail(f"host-only profile claims hardware confirmation: {path}")
+        if hardware.get("commands_sent") != "none":
+            fail(f"host-only profile claims hardware output: {path}")
+        serial = require_mapping(
+            hardware.get("serial_write_duration"),
+            f"{path}.hardware.serial_write_duration",
+        )
+        if (
+            hardware.get("initial_disable_writes_complete") is not False
+            or hardware.get("disable_keepalive_started") is not False
+            or hardware.get("disable_only_output_enforced") is not False
+            or require_integer(hardware, "initial_disable_packets", "hardware") != 0
+            or require_integer(serial, "count", "serial_write_duration") != 0
+            or require_integer(hardware, "serial_write_failures", "hardware") != 0
+        ):
+            fail(f"host-only profile contains contradictory hardware proof: {path}")
+    else:
+        if report.get("hardware_confirmation") is not True:
+            fail(f"hardware profile is missing suspension confirmation: {path}")
+        if hardware.get("commands_sent") != "motors_disable_only":
+            fail(f"hardware profile does not claim disable-only output: {path}")
     report["_path"] = str(path)
+    report["_sha256"] = before_digest
     return report
 
 
@@ -291,12 +404,77 @@ def rounded_up(value: float, quantum: float) -> float:
     return math.ceil(value / quantum) * quantum
 
 
+def deployment_identity(report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_commit": report["source_commit"],
+        "host": report["host"],
+        "policy_root": report["policy_root"],
+        "policy_assets": report["policy_assets"],
+    }
+
+
+def validate_current_policy_assets(identity: dict[str, Any]) -> None:
+    root = Path(identity["policy_root"])
+    for record in identity["policy_assets"]:
+        asset = root / record["path"]
+        if (
+            asset.is_symlink()
+            or not asset.is_file()
+            or asset.resolve(strict=True) != asset
+        ):
+            fail(f"policy asset must be a regular non-symlink file: {asset}")
+        if file_digest(asset) != record["sha256"]:
+            fail(f"policy asset no longer matches the profile: {asset}")
+
+
+def validate_inputs_unchanged(
+    reports: list[dict[str, Any]],
+    base_path: Path,
+    base_digest: str,
+    identity: dict[str, Any],
+) -> None:
+    if base_path.is_symlink() or not base_path.is_file():
+        fail("base.yaml was replaced while generating the review report")
+    if file_digest(base_path) != base_digest:
+        fail("base.yaml changed while generating the review report")
+    for report in reports:
+        path = Path(report["_path"])
+        if path.is_symlink() or not path.is_file():
+            fail(f"profile was replaced while generating the review report: {path}")
+        if file_digest(path) != report["_sha256"]:
+            fail(
+                "profile changed while generating the review report: "
+                + report["_path"]
+            )
+    validate_current_policy_assets(identity)
+
+
 def analyze(args: argparse.Namespace) -> None:
     base_path = args.base_yaml.resolve()
+    if args.base_yaml.is_symlink() or not args.base_yaml.is_file():
+        fail(f"base.yaml must be a regular non-symlink file: {args.base_yaml}")
     before_digest = file_digest(base_path)
     base = load_base_scalars(base_path)
 
-    reports = [load_report(path.resolve()) for path in args.reports]
+    reports = [load_report(path.absolute()) for path in args.reports]
+    report_paths = [report["_path"] for report in reports]
+    if len(report_paths) != len(set(report_paths)):
+        fail("the same profile report was supplied more than once")
+    identity = deployment_identity(reports[0])
+    for report in reports[1:]:
+        if deployment_identity(report) != identity:
+            fail("profile reports do not describe one exact deployment identity")
+    expected_base = (Path(identity["policy_root"]) / "LW/base.yaml").resolve()
+    if base_path != expected_base:
+        fail("--base-yaml is not the profiled deployment base.yaml")
+    base_record = identity["policy_assets"][0]
+    if (
+        base_record["path"] != "LW/base.yaml"
+        or before_digest != base_record["sha256"]
+    ):
+        fail("base.yaml does not match the profiled deployment identity")
+    validate_current_policy_assets(identity)
+
     host_reports = [report for report in reports if report.get("mode") == "host-only"]
     hardware_reports = [
         report for report in reports if report.get("mode") == "hardware-observe"
@@ -305,6 +483,12 @@ def analyze(args: argparse.Namespace) -> None:
         fail("at least one host-only report is required")
     if len(hardware_reports) > 1:
         fail("at most one hardware-observe report may be analyzed at a time")
+    host_duration = host_reports[0]["duration_per_policy_seconds"]
+    if any(
+        report["duration_per_policy_seconds"] != host_duration
+        for report in host_reports[1:]
+    ):
+        fail("host-only reports have non-comparable per-policy durations")
 
     ranked = sorted(
         ((host_score(report), report) for report in host_reports),
@@ -493,9 +677,25 @@ def analyze(args: argparse.Namespace) -> None:
         }
 
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "review_only": True,
         "must_not_be_applied_without_human_review": True,
+        "deployment_identity": identity,
+        "base_configuration": {
+            "path": str(base_path),
+            "sha256": before_digest,
+        },
+        "input_reports": [
+            {
+                "path": report["_path"],
+                "sha256": report["_sha256"],
+                "mode": report["mode"],
+                "duration_per_policy_seconds": report[
+                    "duration_per_policy_seconds"
+                ],
+            }
+            for report in reports
+        ],
         "candidate_overlay": {"LW": overlay},
         "decisions": decisions,
         "ranked_host_reports": [
@@ -506,14 +706,16 @@ def analyze(args: argparse.Namespace) -> None:
     output_path = args.output.resolve()
     if output_path.exists():
         fail(f"refusing to overwrite existing analysis: {output_path}")
-    if file_digest(base_path) != before_digest:
-        fail("base.yaml changed while generating the review report")
+    validate_inputs_unchanged(reports, base_path, before_digest, identity)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("x", encoding="utf-8") as destination:
         json.dump(result, destination, ensure_ascii=False, indent=2)
         destination.write("\n")
-    if file_digest(base_path) != before_digest:
-        fail("base.yaml changed while generating the review report")
+    try:
+        validate_inputs_unchanged(reports, base_path, before_digest, identity)
+    except (OSError, RuntimeError):
+        output_path.unlink(missing_ok=True)
+        raise
     print(f"review-only candidate report written to {output_path}")
 
 

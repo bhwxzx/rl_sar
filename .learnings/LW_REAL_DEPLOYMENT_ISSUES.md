@@ -80,7 +80,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 7 | LW-006 | P0 / critical | resolved | Latch joystick disconnects, clear commands, and validate indices |
 | 8 | LW-024 | P1 / high | pending | Make the Sim2Sim physics-thread lifecycle bounded and joinable |
 | 9 | LW-025 | P1 / high | pending | Preserve keyboard velocity commands instead of replacing them every control cycle |
-| 10 | LW-026 | P1 / high | pending | Bind configuration candidates to one exact deployment and comparable reports |
+| 10 | LW-026 | P1 / high | resolved | Bind configuration candidates to one exact deployment and comparable reports |
 | 11 | LW-027 | P1 / high | pending | Make the ONNX Runtime dependency reproducible and integrity-verified |
 | 12 | LW-007 | P1 / high | resolved | Remove cross-thread data races with coherent snapshots |
 | 13 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
@@ -2098,7 +2098,7 @@ does not provide the documented persistent stop semantics for keyboard input.
 ## [LW-026] Configuration-profile provenance and comparability
 
 **Priority**: P1 / high
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-010, LW-022
 
 ### Problem
@@ -2137,6 +2137,35 @@ produce a plausible review file for the wrong deployment.
   can trace the candidate to its measurements and base file.
 - Tests cover mixed commits, mixed policy roots/assets, duplicate policies,
   duration mismatch, stale base input, and valid same-deployment reports.
+
+### Resolution
+
+- **Resolved**: 2026-08-12T16:59:22+08:00
+- **Commit**: 本提交
+- **Approved Scope**: profiler 报告升级为 schema v2，在模型加载前固定源码提交、
+  结构化主机身份、规范化策略根、每策略时长以及固定顺序的 11 个批准策略资产
+  SHA-256，并在写报告前复核资产未变化。分析器仅接受同一提交、主机、策略根和
+  资产摘要的报告，要求四个策略恰好各一条且顺序一致，要求全部 host 报告具有
+  相同测量时长，并将 hardware 时长独立记录；`--base-yaml` 必须是该身份中的
+  `LW/base.yaml` 且摘要一致。候选 schema v2 复制部署身份、base 和每个输入报告
+  的路径/摘要/模式/时长，继续保持仅供评审、致命时序关闭及原物理安全限制。
+- **Changed Files**: `src/rl_sar/src/lw_config_profiler.cpp`、
+  `src/rl_sar/scripts/profile_lw_runtime_config.py`、`src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/test/{test_profile_lw_runtime_config.py,test_lw_config_profiler_integration.py}`、
+  `docs/LW_BUILD_DEPLOYMENT_CN.md`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 当前 Debug 工作树完整构建并通过 36/36 CTest；分析器 17 项
+  单元测试覆盖旧 schema、混合提交/主机/策略根/资产、重复/缺失/乱序策略、
+  host 时长不一致、独立 hardware 时长、陈旧 base、模式矛盾、输入变化及合法
+  同部署组合。真实 profiler 集成测试核对结构化身份、有序资产摘要、每策略时长、
+  host 无硬件输出以及硬件确认/缺失串口拒绝。Release 和严格警告配置均构建
+  profiler 并通过定向 analyzer/profiler 测试；ASan/UBSan profiler 构建成功，
+  host 测量及错误确认、缺失串口两个拒绝路径分别在受控单进程中通过。ASan 下
+  同一 Python 测试连续启动多个 ONNX 子进程会出现环境性进程启动洪泛/10 秒超时，
+  普通 Debug、Release、严格警告及各独立 ASan 路径均未复现功能失败。Python
+  严格语法、定向 `cppcheck` 和 `git diff --check` 通过。未访问真机串口、未启动
+  硬件观察、ROS 节点或电机控制。
+- **Remaining Follow-ups**: none
 
 ---
 

@@ -1,5 +1,6 @@
 #include "fsm.hpp"
 #include "lw_config_profile.hpp"
+#include "lw_deployment_bundle.hpp"
 #include "lw_loop_config.hpp"
 #include "lw_runtime_core.hpp"
 #include "motion_loader_lw.hpp"
@@ -28,6 +29,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sys/utsname.h>
+#include <unistd.h>
 
 #ifndef RL_SAR_SOURCE_COMMIT
 #define RL_SAR_SOURCE_COMMIT "unverified"
@@ -79,6 +81,14 @@ struct HardwareProfileResult
     LWProfileTimedSourceSnapshot left_feedback;
     LWProfileDistributionSnapshot serial_writes;
     std::uint64_t serial_write_failures = 0;
+};
+
+struct ProfileHostIdentity
+{
+    std::string node;
+    std::string system;
+    std::string release;
+    std::string machine;
 };
 
 std::string requireValue(int& index, int argc, char** argv)
@@ -333,14 +343,18 @@ void emitLoopStartup(
            << ",\"realtime_error\":" << startup.realtime_error << '}';
 }
 
-std::string hostDescription()
+ProfileHostIdentity hostIdentity()
 {
     struct utsname info{};
     if (::uname(&info) != 0)
     {
-        return "unavailable";
+        throw std::runtime_error("failed to read host identity");
     }
-    return std::string(info.sysname) + " " + info.release + " " + info.machine;
+    return {
+        info.nodename,
+        info.sysname,
+        info.release,
+        info.machine};
 }
 
 class ProfilePassiveState final : public RLFSMState
@@ -375,6 +389,9 @@ public:
     LWConfigProfiler(ProfileOptions options, int argc, char** argv)
         : options_(std::move(options))
     {
+        options_.policy_root = std::filesystem::canonical(options_.policy_root);
+        policy_assets_ = snapshotPolicyAssets();
+        host_identity_ = hostIdentity();
         runtime_core_.bind(
             *this,
             [this](const LWSafetyDecision& decision, const std::string& reason)
@@ -480,6 +497,18 @@ public:
             hardware_result_.serial_write_failures =
                 serial_write_failures_.load(std::memory_order_acquire);
         }
+        try
+        {
+            if (!samePolicyAssets(policy_assets_, snapshotPolicyAssets()))
+            {
+                fail("policy assets changed during profiling");
+            }
+        }
+        catch (const std::exception& exception)
+        {
+            fail(std::string("failed to revalidate policy assets: ")
+                 + exception.what());
+        }
         writeReport();
         if (failed_.load(std::memory_order_acquire))
         {
@@ -573,6 +602,63 @@ private:
             "LW/robot_lab/leg_to_wheel",
             "LW/robot_lab/wheel_to_leg"};
         return policies;
+    }
+
+    static const std::vector<std::string>& policyAssetPaths()
+    {
+        static const std::vector<std::string> assets = {
+            "LW/base.yaml",
+            "LW/robot_lab/leg_loco/config.yaml",
+            "LW/robot_lab/leg_loco/policy.onnx",
+            "LW/robot_lab/leg_to_wheel/config.yaml",
+            "LW/robot_lab/leg_to_wheel/leg_to_wheel_transform_60hz.csv",
+            "LW/robot_lab/leg_to_wheel/policy.onnx",
+            "LW/robot_lab/wheel_loco/config.yaml",
+            "LW/robot_lab/wheel_loco/policy.onnx",
+            "LW/robot_lab/wheel_to_leg/config.yaml",
+            "LW/robot_lab/wheel_to_leg/policy.onnx",
+            "LW/robot_lab/wheel_to_leg/wheel_to_leg_transform_60hz.csv"};
+        return assets;
+    }
+
+    std::vector<LWDeploymentFileRecord> snapshotPolicyAssets() const
+    {
+        std::vector<LWDeploymentFileRecord> records;
+        records.reserve(policyAssetPaths().size());
+        for (const std::string& relative : policyAssetPaths())
+        {
+            const std::filesystem::path asset =
+                options_.policy_root / relative;
+            if (std::filesystem::canonical(asset) != asset.lexically_normal())
+            {
+                throw std::runtime_error(
+                    "policy asset contains a symbolic-link component: "
+                    + asset.string());
+            }
+            records.push_back({
+                relative,
+                LWDeploymentBundle::Sha256File(asset)});
+        }
+        return records;
+    }
+
+    static bool samePolicyAssets(
+        const std::vector<LWDeploymentFileRecord>& left,
+        const std::vector<LWDeploymentFileRecord>& right)
+    {
+        if (left.size() != right.size())
+        {
+            return false;
+        }
+        for (std::size_t index = 0; index < left.size(); ++index)
+        {
+            if (left[index].path != right[index].path
+                || left[index].sha256 != right[index].sha256)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     void initializeSyntheticState()
@@ -937,20 +1023,40 @@ private:
                 + options_.output.string());
         }
         output << std::setprecision(17)
-               << "{\n\"schema_version\":1,\n\"source_commit\":";
+               << "{\n\"schema_version\":2,\n\"source_commit\":";
         emitJsonString(output, RL_SAR_SOURCE_COMMIT);
         output << ",\n\"mode\":";
         emitJsonString(
             output,
             options_.mode == ProfileMode::HostOnly
                 ? "host-only" : "hardware-observe");
-        output << ",\n\"host\":";
-        emitJsonString(output, hostDescription());
+        output << ",\n\"host\":{\"node\":";
+        emitJsonString(output, host_identity_.node);
+        output << ",\"system\":";
+        emitJsonString(output, host_identity_.system);
+        output << ",\"release\":";
+        emitJsonString(output, host_identity_.release);
+        output << ",\"machine\":";
+        emitJsonString(output, host_identity_.machine);
+        output << '}';
         output << ",\n\"policy_root\":";
         emitJsonString(
             output,
             std::filesystem::canonical(options_.policy_root).string());
-        output << ",\n\"duration_per_policy_seconds\":"
+        output << ",\n\"policy_assets\":[\n";
+        for (std::size_t index = 0; index < policy_assets_.size(); ++index)
+        {
+            if (index != 0)
+            {
+                output << ",\n";
+            }
+            output << "{\"path\":";
+            emitJsonString(output, policy_assets_[index].path);
+            output << ",\"sha256\":";
+            emitJsonString(output, policy_assets_[index].sha256);
+            output << '}';
+        }
+        output << "\n],\n\"duration_per_policy_seconds\":"
                << options_.duration_seconds
                << ",\n\"hardware_confirmation\":"
                << (options_.hardware_confirmed ? "true" : "false")
@@ -969,7 +1075,9 @@ private:
             first = false;
             output << "{\"policy\":";
             emitJsonString(output, result.policy);
-            output << ",\"inference_duration\":";
+            output << ",\"duration_seconds\":"
+                   << options_.duration_seconds
+                   << ",\"inference_duration\":";
             emitDistribution(output, result.inference);
             output << ",\"control_timing\":";
             emitLoopTiming(output, result.control_timing);
@@ -1036,6 +1144,8 @@ private:
     }
 
     ProfileOptions options_;
+    ProfileHostIdentity host_identity_;
+    std::vector<LWDeploymentFileRecord> policy_assets_;
     LWRuntimeCore runtime_core_;
     std::shared_ptr<ProfilePassiveState> passive_state_;
     RobotState<float> synthetic_state_;

@@ -943,6 +943,7 @@ if(SYSTEM_TYPE STREQUAL "Linux")
         target_link_libraries(lw_config_profiler
             LW_sdk
             rl_sdk_lw_deployment
+            lw_deployment_bundle
             observation_buffer
             ${YAML_CPP_LIBRARIES}
             Threads::Threads

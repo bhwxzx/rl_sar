@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 
@@ -30,7 +31,13 @@ def distribution(count: int, p50: float, p999: float, maximum: float) -> dict:
     }
 
 
-def policy(name: str, cpu: int, priority: int, deadline_us: float) -> dict:
+def policy(
+    name: str,
+    cpu: int,
+    priority: int,
+    deadline_us: float,
+    duration: float = 30.0,
+) -> dict:
     startup = {
         "requested_cpu": cpu,
         "requested_realtime_priority": priority,
@@ -50,6 +57,7 @@ def policy(name: str, cpu: int, priority: int, deadline_us: float) -> dict:
     }
     return {
         "policy": name,
+        "duration_seconds": duration,
         "inference_duration": distribution(1000, 1000, 1500, 1700),
         "control_timing": timing,
         "inference_timing": timing,
@@ -68,7 +76,12 @@ class ProfileAnalyzerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        self.base = self.root / "base.yaml"
+        self.policy_root = self.root / "policy"
+        for relative in MODULE.POLICY_ASSETS:
+            asset = self.policy_root / relative
+            asset.parent.mkdir(parents=True, exist_ok=True)
+            asset.write_text(f"test asset: {relative}\n", encoding="utf-8")
+        self.base = self.policy_root / "LW/base.yaml"
         self.base.write_text(
             "LW:\n"
             "  dt: 0.005\n"
@@ -82,13 +95,53 @@ class ProfileAnalyzerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def write_report(self, name: str, mode: str, cpu: int, deadline: float) -> Path:
+    def policy_assets(self, root: Path | None = None) -> list[dict]:
+        selected_root = self.policy_root if root is None else root
+        return [
+            {
+                "path": relative,
+                "sha256": MODULE.file_digest(selected_root / relative),
+            }
+            for relative in MODULE.POLICY_ASSETS
+        ]
+
+    def copy_policy_root(self, name: str) -> Path:
+        destination = self.root / name
+        shutil.copytree(self.policy_root, destination)
+        return destination
+
+    def write_report(
+        self,
+        name: str,
+        mode: str,
+        cpu: int,
+        deadline: float,
+        *,
+        duration: float = 30.0,
+        source_commit: str = "a" * 40,
+        policy_root: Path | None = None,
+        host: dict | None = None,
+    ) -> Path:
+        selected_root = self.policy_root if policy_root is None else policy_root
         report = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "source_commit": source_commit,
             "mode": mode,
+            "host": host or {
+                "node": "lw-host",
+                "system": "Linux",
+                "release": "test-kernel",
+                "machine": "x86_64",
+            },
+            "policy_root": str(selected_root.resolve()),
+            "policy_assets": self.policy_assets(selected_root),
+            "duration_per_policy_seconds": duration,
             "hardware_confirmation": mode == "hardware-observe",
             "failed": False,
-            "policies": [policy(item, cpu, 0, deadline) for item in MODULE.POLICIES],
+            "policies": [
+                policy(item, cpu, 0, deadline, duration)
+                for item in MODULE.POLICIES
+            ],
             "hardware": {
                 "initial_disable_writes_complete": mode == "hardware-observe",
                 "initial_disable_packets": 20 if mode == "hardware-observe" else 0,
@@ -107,9 +160,17 @@ class ProfileAnalyzerTests(unittest.TestCase):
                 "left_feedback_first_sample_delay_us": 5500,
                 "left_feedback_final_age_us": 4200,
                 "left_feedback_gap": distribution(2000, 5000, 6200, 7200),
-                "serial_write_duration": distribution(2000, 300, 500, 600),
+                "serial_write_duration": (
+                    distribution(2000, 300, 500, 600)
+                    if mode == "hardware-observe"
+                    else distribution(0, 0, 0, 0)
+                ),
                 "serial_write_failures": 0,
-                "commands_sent": "motors_disable_only",
+                "commands_sent": (
+                    "motors_disable_only"
+                    if mode == "hardware-observe"
+                    else "none"
+                ),
             },
         }
         path = self.root / name
@@ -144,6 +205,13 @@ class ProfileAnalyzerTests(unittest.TestCase):
         before = self.base.read_bytes()
         self.assertEqual(self.analyze([slower, faster, hardware], output), 0)
         result = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(result["schema_version"], 2)
+        self.assertEqual(result["deployment_identity"]["source_commit"], "a" * 40)
+        self.assertEqual(
+            result["base_configuration"]["sha256"],
+            MODULE.file_digest(self.base),
+        )
+        self.assertEqual(len(result["input_reports"]), 3)
         overlay = result["candidate_overlay"]["LW"]
         self.assertEqual(overlay["control_loop_cpu"], 3)
         self.assertFalse(overlay["control_loop_require_realtime"])
@@ -199,6 +267,143 @@ class ProfileAnalyzerTests(unittest.TestCase):
         output = self.root / "candidate.json"
         self.assertEqual(self.analyze([host], output, sensor_bound=None), 1)
         self.assertFalse(output.exists())
+
+    def test_rejects_duplicate_and_reordered_policies(self) -> None:
+        for mutation in ("duplicate", "reordered"):
+            host = self.write_report(
+                f"host-{mutation}.json", "host-only", 1, 400
+            )
+            report = json.loads(host.read_text(encoding="utf-8"))
+            if mutation == "duplicate":
+                report["policies"][-1] = report["policies"][0]
+            else:
+                report["policies"][0], report["policies"][1] = (
+                    report["policies"][1],
+                    report["policies"][0],
+                )
+            host.write_text(json.dumps(report), encoding="utf-8")
+            output = self.root / f"candidate-{mutation}.json"
+            self.assertEqual(self.analyze([host], output, sensor_bound=None), 1)
+            self.assertFalse(output.exists())
+
+    def test_rejects_mixed_deployment_identity(self) -> None:
+        cases = (
+            {
+                "source_commit": "b" * 40,
+            },
+            {
+                "host": {
+                    "node": "other-host",
+                    "system": "Linux",
+                    "release": "test-kernel",
+                    "machine": "x86_64",
+                },
+            },
+            {
+                "policy_root": self.copy_policy_root("other-policy"),
+            },
+        )
+        for index, overrides in enumerate(cases):
+            first = self.write_report(
+                f"identity-{index}-a.json", "host-only", 1, 400
+            )
+            second = self.write_report(
+                f"identity-{index}-b.json",
+                "host-only",
+                2,
+                400,
+                **overrides,
+            )
+            output = self.root / f"identity-{index}-candidate.json"
+            self.assertEqual(
+                self.analyze([first, second], output, sensor_bound=None), 1
+            )
+            self.assertFalse(output.exists())
+
+    def test_rejects_mixed_policy_asset_digest(self) -> None:
+        first = self.write_report("asset-a.json", "host-only", 1, 400)
+        second = self.write_report("asset-b.json", "host-only", 2, 400)
+        report = json.loads(second.read_text(encoding="utf-8"))
+        report["policy_assets"][1]["sha256"] = "b" * 64
+        second.write_text(json.dumps(report), encoding="utf-8")
+        output = self.root / "asset-candidate.json"
+        self.assertEqual(
+            self.analyze([first, second], output, sensor_bound=None), 1
+        )
+        self.assertFalse(output.exists())
+
+    def test_rejects_legacy_schema(self) -> None:
+        host = self.write_report("legacy.json", "host-only", 1, 400)
+        report = json.loads(host.read_text(encoding="utf-8"))
+        report["schema_version"] = 1
+        host.write_text(json.dumps(report), encoding="utf-8")
+        output = self.root / "legacy-candidate.json"
+        self.assertEqual(self.analyze([host], output, sensor_bound=None), 1)
+        self.assertFalse(output.exists())
+
+    def test_rejects_mixed_host_durations(self) -> None:
+        first = self.write_report("duration-a.json", "host-only", 1, 400)
+        second = self.write_report(
+            "duration-b.json", "host-only", 2, 400, duration=60.0
+        )
+        output = self.root / "duration-candidate.json"
+        self.assertEqual(
+            self.analyze([first, second], output, sensor_bound=None), 1
+        )
+        self.assertFalse(output.exists())
+
+    def test_allows_independent_hardware_duration(self) -> None:
+        host = self.write_report(
+            "duration-host.json", "host-only", 1, 400, duration=30.0
+        )
+        hardware = self.write_report(
+            "duration-hardware.json",
+            "hardware-observe",
+            1,
+            400,
+            duration=60.0,
+        )
+        output = self.root / "duration-valid-candidate.json"
+        self.assertEqual(self.analyze([host, hardware], output), 0)
+        result = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [item["duration_per_policy_seconds"] for item in result["input_reports"]],
+            [30.0, 60.0],
+        )
+
+    def test_rejects_stale_base_and_policy_assets(self) -> None:
+        host = self.write_report("stale.json", "host-only", 1, 400)
+        self.base.write_text(self.base.read_text(encoding="utf-8") + "# stale\n")
+        output = self.root / "stale-candidate.json"
+        self.assertEqual(self.analyze([host], output, sensor_bound=None), 1)
+        self.assertFalse(output.exists())
+
+    def test_rejects_unknown_or_contradictory_mode(self) -> None:
+        unknown = self.write_report("unknown.json", "unknown", 1, 400)
+        output = self.root / "unknown-candidate.json"
+        self.assertEqual(self.analyze([unknown], output, sensor_bound=None), 1)
+        self.assertFalse(output.exists())
+
+        host = self.write_report("contradictory.json", "host-only", 1, 400)
+        report = json.loads(host.read_text(encoding="utf-8"))
+        report["hardware_confirmation"] = True
+        host.write_text(json.dumps(report), encoding="utf-8")
+        output = self.root / "contradictory-candidate.json"
+        self.assertEqual(self.analyze([host], output, sensor_bound=None), 1)
+        self.assertFalse(output.exists())
+
+    def test_detects_report_change_after_loading(self) -> None:
+        host = self.write_report("changing.json", "host-only", 1, 400)
+        loaded = MODULE.load_report(host)
+        identity = MODULE.deployment_identity(loaded)
+        host.write_text(host.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        with self.assertRaises(RuntimeError):
+            MODULE.validate_inputs_unchanged(
+                [loaded],
+                self.base,
+                MODULE.file_digest(self.base),
+                identity,
+            )
 
     def test_refuses_to_overwrite_analysis(self) -> None:
         host = self.write_report("host.json", "host-only", 1, 400)
