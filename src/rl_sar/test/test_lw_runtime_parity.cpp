@@ -146,15 +146,17 @@ struct Harness
     {
         core.runControlCycle(
             LWControlCycleHooks{
-                [this, x, keyboard, gamepad]()
+                [this, x, gamepad]()
                 {
                     rl.control.x = x;
                     rl.control.y = -0.2f;
                     rl.control.yaw = 0.3f;
-                    rl.control.SetKeyboard(keyboard);
                     rl.control.SetGamepad(gamepad);
                 },
-                {},
+                [this, keyboard]()
+                {
+                    rl.control.SetKeyboard(keyboard);
+                },
                 []() { return true; },
                 []() { return true; },
                 {},
@@ -317,6 +319,49 @@ void testS1PreservesRecoveryInputAndZerosVelocity()
             "S1 velocity");
     }
     requireSafetyEqual(real, sim);
+}
+
+void testLWKeyboardVelocityCommandsAreIgnored()
+{
+    for (const auto keyboard : {
+             Input::Keyboard::W,
+             Input::Keyboard::S,
+             Input::Keyboard::A,
+             Input::Keyboard::D,
+             Input::Keyboard::Q,
+             Input::Keyboard::E,
+             Input::Keyboard::Space})
+    {
+        Harness real;
+        Harness sim;
+        real.cycle(0.6f, keyboard);
+        sim.cycle(0.6f, keyboard);
+
+        for (Harness* harness : {&real, &sim})
+        {
+            require(
+                harness->rl.nominal->observed_keyboard == keyboard,
+                "LW FSM did not observe the keyboard event");
+            requireVectorEqual(
+                {harness->rl.control.x,
+                 harness->rl.control.y,
+                 harness->rl.control.yaw},
+                {0.6f, -0.2f, 0.3f},
+                "LW keyboard changed joystick velocity");
+        }
+        requireSafetyEqual(real, sim);
+    }
+}
+
+void testNonLWStateControllerRetainsLegacyKeyboardVelocity()
+{
+    ReplayRL rl;
+    rl.control.x = 0.6f;
+    rl.control.SetKeyboard(Input::Keyboard::W);
+    rl.StateController(&rl.robot_state, &rl.robot_command);
+    require(
+        std::fabs(rl.control.x - 0.7f) <= 1.0e-6f,
+        "non-LW StateController lost its legacy keyboard velocity behavior");
 }
 
 void testS2ExecutesPassiveDamping()
@@ -489,6 +534,8 @@ int main()
         testNominalReplayParity();
         testExactPolicyInferenceReplayParity();
         testS1PreservesRecoveryInputAndZerosVelocity();
+        testLWKeyboardVelocityCommandsAreIgnored();
+        testNonLWStateControllerRetainsLegacyKeyboardVelocity();
         testS2ExecutesPassiveDamping();
         testS3AndS4LatchAndZeroActuators();
         testInjectedFaultDecisionParity();

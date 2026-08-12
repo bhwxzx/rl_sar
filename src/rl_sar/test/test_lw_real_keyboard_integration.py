@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
+import re
 import sys
 import unittest
 
@@ -36,10 +37,14 @@ class RealKeyboardIntegrationTests(unittest.TestCase):
         runtime_core = RUNTIME_CORE.read_text(encoding="utf-8")
         self.assertLess(
             runtime_core.index("call(hooks.apply_keyboard);"),
-            runtime_core.index(
-                "rl_->StateController(&rl_->robot_state, &rl_->robot_command);"
-            ),
+            runtime_core.index("rl_->StateController("),
         )
+        lw_controller_calls = re.findall(
+            r"rl_->StateController\(\s*&rl_->robot_state,"
+            r"\s*&rl_->robot_command,\s*false\);",
+            runtime_core,
+        )
+        self.assertEqual(len(lw_controller_calls), 2)
         self.assertNotIn("loop_keyboard", source)
         self.assertNotIn("loop_keyboard", REAL_HEADER.read_text(encoding="utf-8"))
 
@@ -65,6 +70,8 @@ class RealKeyboardIntegrationTests(unittest.TestCase):
         self.assertIn("enable_keyboard:=false", guide)
         self.assertIn("/dev/tty", guide)
         self.assertIn("数字键 `9`", guide)
+        self.assertIn("键盘不提供速度控制", guide)
+        self.assertIn("`Space` 不会停车", guide)
 
 
 if __name__ == "__main__":

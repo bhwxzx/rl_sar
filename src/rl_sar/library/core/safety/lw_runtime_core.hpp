@@ -294,12 +294,18 @@ public:
                 && rl_->fsm.current_state_->GetStateName()
                     != "RLFSMStatePassive")
             {
-                rl_->StateController(&rl_->robot_state, &rl_->robot_command);
+                rl_->StateController(
+                    &rl_->robot_state,
+                    &rl_->robot_command,
+                    false);
             }
         }
         else
         {
-            rl_->StateController(&rl_->robot_state, &rl_->robot_command);
+            rl_->StateController(
+                &rl_->robot_state,
+                &rl_->robot_command,
+                false);
         }
         if (controlledFallbackLatched())
         {

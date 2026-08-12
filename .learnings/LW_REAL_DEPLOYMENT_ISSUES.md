@@ -2031,7 +2031,7 @@ loop has no failure or timeout condition.
 ## [LW-025] Persistent and composable keyboard velocity input
 
 **Priority**: P1 / high
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-006, LW-019, LW-021
 
 ### Problem
@@ -2068,6 +2068,30 @@ does not provide the documented persistent stop semantics for keyboard input.
   deterministic precedence rule without stale values reappearing.
 - Automated parity tests cover persistence, zeroing, source switching, and FSM
   recovery buttons in real-like and Sim2Sim-like harnesses.
+
+### Resolution
+
+- **Resolved**: 2026-08-12T15:39:32+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 用户明确决定以取消 LW 键盘速度功能替代原持久化与
+  输入仲裁方案。真实机和 Sim2Sim 的共享 LW 运行核心均禁止
+  `W/S/A/D/Q/E/Space` 修改 `x/y/yaw`，摇杆成为唯一人工速度来源；键盘
+  FSM/模式事件（包括数字键 `9` 的 `GetDown`）继续进入状态机，手柄断联和
+  控制时序降级的锁存零速语义保持不变。通用非 LW `StateController` 默认行为
+  未改变。
+- **Changed Files**: `src/rl_sar/library/core/rl_sdk/rl_sdk.{hpp,cpp}`、
+  `src/rl_sar/library/core/safety/lw_runtime_core.hpp`、
+  `src/rl_sar/test/{test_lw_runtime_parity.cpp,test_lw_real_keyboard_integration.py}`、
+  `docs/LW_BUILD_DEPLOYMENT_CN.md`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 当前 Debug 工作树完整构建真实机和 Sim2Sim 入口并通过
+  36/36 CTest；定向测试覆盖七个原速度键不改变摇杆三轴、键盘事件仍到达 FSM、
+  S1 保留恢复键且锁住零速，以及非 LW 默认行为未被改变。Release 构建两个入口
+  并通过终端键盘、真机键盘集成和运行时一致性测试；严格警告配置构建两个入口
+  和一致性测试（仅输出该配置已知且已降级的 MuJoCo/旧适配层警告）；ASan/UBSan
+  运行时一致性测试通过。Python 严格语法和 `git diff --check` 通过。未打开真机
+  串口、未启动 ROS 节点、MuJoCo 图形窗口或电机控制，也未进行实机试键。
+- **Remaining Follow-ups**: none
 
 ---
 

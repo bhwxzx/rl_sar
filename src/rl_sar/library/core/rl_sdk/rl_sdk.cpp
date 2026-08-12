@@ -74,7 +74,10 @@ void LWPolicyOutputTransport::clear() noexcept
     latest_.clear();
 }
 
-void RL::StateController(const RobotState<float>* state, RobotCommand<float>* command)
+void RL::StateController(
+    const RobotState<float>* state,
+    RobotCommand<float>* command,
+    bool apply_keyboard_velocity)
 {
     auto updateState = [&](std::shared_ptr<FSMState> statePtr)
     {
@@ -93,35 +96,38 @@ void RL::StateController(const RobotState<float>* state, RobotCommand<float>* co
 
     this->motiontime++;
 
-    if (this->control.current_keyboard == Input::Keyboard::W)
+    if (apply_keyboard_velocity)
     {
-        this->control.x += 0.1f;
-    }
-    if (this->control.current_keyboard == Input::Keyboard::S)
-    {
-        this->control.x -= 0.1f;
-    }
-    if (this->control.current_keyboard == Input::Keyboard::A)
-    {
-        this->control.y += 0.1f;
-    }
-    if (this->control.current_keyboard == Input::Keyboard::D)
-    {
-        this->control.y -= 0.1f;
-    }
-    if (this->control.current_keyboard == Input::Keyboard::Q)
-    {
-        this->control.yaw += 0.1f;
-    }
-    if (this->control.current_keyboard == Input::Keyboard::E)
-    {
-        this->control.yaw -= 0.1f;
-    }
-    if (this->control.current_keyboard == Input::Keyboard::Space)
-    {
-        this->control.x = 0.0f;
-        this->control.y = 0.0f;
-        this->control.yaw = 0.0f;
+        if (this->control.current_keyboard == Input::Keyboard::W)
+        {
+            this->control.x += 0.1f;
+        }
+        if (this->control.current_keyboard == Input::Keyboard::S)
+        {
+            this->control.x -= 0.1f;
+        }
+        if (this->control.current_keyboard == Input::Keyboard::A)
+        {
+            this->control.y += 0.1f;
+        }
+        if (this->control.current_keyboard == Input::Keyboard::D)
+        {
+            this->control.y -= 0.1f;
+        }
+        if (this->control.current_keyboard == Input::Keyboard::Q)
+        {
+            this->control.yaw += 0.1f;
+        }
+        if (this->control.current_keyboard == Input::Keyboard::E)
+        {
+            this->control.yaw -= 0.1f;
+        }
+        if (this->control.current_keyboard == Input::Keyboard::Space)
+        {
+            this->control.x = 0.0f;
+            this->control.y = 0.0f;
+            this->control.yaw = 0.0f;
+        }
     }
     if (this->control.current_keyboard == Input::Keyboard::N || this->control.current_gamepad == Input::Gamepad::X)
     {
