@@ -100,7 +100,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 27 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
 | 28 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
 | 29 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
-| 30 | LW-031 | P2 / low | pending | Restore a warning-clean strict build for maintained LW code and tests |
+| 30 | LW-031 | P2 / low | resolved | Restore a warning-clean strict build for maintained LW code and tests |
 | 31 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
 
 ---
@@ -2441,7 +2441,7 @@ a nonzero moving gait phase.
 ## [LW-031] Warning-clean maintained LW build
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: none
 
 ### Problem
@@ -2472,6 +2472,38 @@ among third-party MuJoCo warning noise.
   and `-Werror`.
 - Third-party warnings do not suppress or obscure maintained-code failures.
 - The normal build and full CTest suite remain green.
+
+### Resolution
+
+- **Resolved**: 2026-08-12T20:18:05+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 修正维护代码中全部审计警告且不改变行为：按声明顺序
+  初始化 `ObservationBuffer`，FSM 测试按值构造字符串，real/Sim2Sim 的
+  `LowCmd`/`LowState` 使用完整值初始化，并明确标记 real 构造函数保留参数未
+  使用。新增默认关闭的 `LW_STRICT_WARNINGS` CMake 选项，对 GCC/Clang 维护
+  目标施加 `-Wall -Wextra -Wpedantic -Werror`，对 MSVC 使用 `/W4 /WX`。
+  joystick 与 MuJoCo simulate 源码拆分为独立 vendor 库，硬件 SDK、joystick
+  和 MuJoCo 头文件通过 `SYSTEM` 边界传播；仅 vendor 编译目标在严格模式关闭
+  自身诊断，不修改第三方源码，也不豁免维护目标。新增临时目录一键严格构建与
+  全量 CTest 脚本。
+- **Changed Files**: `src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/library/core/observation_buffer/observation_buffer.cpp`、
+  `src/rl_sar/include/{rl_real_LW.hpp,rl_sim_LW.hpp}`、
+  `src/rl_sar/src/rl_real_LW.cpp`、
+  `src/rl_sar/test/{test_lw_fsm_transitions.cpp,test_build_workflow.py}`、
+  `scripts/validate_lw_strict_build.sh`、`README.md`、`README_CN.md`、
+  `docs/LW_BUILD_DEPLOYMENT_CN.md`、`.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 初始完整 `-Wall -Wextra -Wpedantic` 审计统计 873 条诊断：
+  维护代码包含 `-Wreorder`、`-Wrange-loop-construct`、聚合初始化和未使用参数，
+  其余 850 余条来自 vendored MuJoCo/joystick。修复后运行
+  `scripts/validate_lw_strict_build.sh`，全新 Debug 严格构建的所有维护库、测试、
+  `rl_real_LW`、`rl_sim_LW` 和 `lw_config_profiler` 均在 `-Werror` 下成功，vendor
+  输出无警告噪声，随后 38/38 CTest 通过；脚本自动清理临时目录。普通 Debug
+  全构建及 38/38 CTest 同样通过。独立 Release 成功构建 real、Sim2Sim、MuJoCo
+  生命周期和 FSM 目标，3/3 定向 CTest 通过。构建工作流静态测试 13/13、定向
+  `cppcheck`、Python 严格语法、shell 语法和 `git diff --check` 通过。未启动
+  MuJoCo GUI、真机节点，未访问串口或电机。
+- **Remaining Follow-ups**: none
 
 ---
 

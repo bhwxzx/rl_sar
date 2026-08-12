@@ -55,6 +55,17 @@ source /opt/ros/humble/setup.bash
 The build validates the vendored LW description locally; it never clones or
 updates robot descriptions from the network.
 
+Before committing maintained C++ changes, run the warning-clean validation:
+
+```bash
+scripts/validate_lw_strict_build.sh
+```
+
+It performs a fresh Debug build and the full CTest suite with
+`-Wall -Wextra -Wpedantic -Werror` on maintained LW targets. Vendored MuJoCo,
+joystick, and hardware-SDK sources and headers are isolated from this warning
+policy; their diagnostics cannot hide failures in maintained code.
+
 ## Sim2Sim
 
 After building and sourcing the workspace:

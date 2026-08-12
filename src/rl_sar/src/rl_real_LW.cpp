@@ -48,6 +48,8 @@ RL_Real::RL_Real(
     LWStartupDisableGuard& startup_disable)
     : startup_disable_(&startup_disable)
 {
+    (void)argc;
+    (void)argv;
     startup_disable_->requireHealthy();
     runtime_core_.bind(
         *this,

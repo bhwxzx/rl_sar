@@ -5,6 +5,49 @@ project(rl_sar VERSION 4.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(
+    LW_STRICT_WARNINGS
+    "Treat warnings in maintained LW targets as build errors"
+    OFF
+)
+if(LW_STRICT_WARNINGS)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(
+            "$<$<COMPILE_LANGUAGE:CXX>:-Wall>"
+            "$<$<COMPILE_LANGUAGE:CXX>:-Wextra>"
+            "$<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>"
+            "$<$<COMPILE_LANGUAGE:CXX>:-Werror>"
+        )
+    elseif(MSVC)
+        add_compile_options(
+            "$<$<COMPILE_LANGUAGE:CXX>:/W4>"
+            "$<$<COMPILE_LANGUAGE:CXX>:/WX>"
+        )
+    else()
+        message(FATAL_ERROR
+            "LW_STRICT_WARNINGS is unsupported by ${CMAKE_CXX_COMPILER_ID}")
+    endif()
+endif()
+
+function(lw_silence_vendor_warnings target_name)
+    if(NOT TARGET ${target_name})
+        message(FATAL_ERROR "Unknown LW vendor target: ${target_name}")
+    endif()
+    if(LW_STRICT_WARNINGS)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(
+                ${target_name} PRIVATE
+                "$<$<COMPILE_LANGUAGE:CXX>:-w>"
+            )
+        elseif(MSVC)
+            target_compile_options(
+                ${target_name} PRIVATE
+                "$<$<COMPILE_LANGUAGE:CXX>:/w>"
+            )
+        endif()
+    endif()
+endfunction()
+
 # System environment detection
 set(SYSTEM_TYPE ${CMAKE_SYSTEM_NAME})
 
@@ -482,10 +525,21 @@ endif()
 
 # LW_sdk
 add_library(LW_sdk INTERFACE)
-target_include_directories(LW_sdk INTERFACE
+target_include_directories(LW_sdk SYSTEM INTERFACE
     library/thirdparty/robot_sdk/lfr/LW_sdk
 )
 target_link_libraries(LW_sdk INTERFACE Threads::Threads)
+
+if(SYSTEM_TYPE STREQUAL "Linux")
+    add_library(
+        lw_joystick_vendor
+        library/thirdparty/joystick/joystick.cc
+    )
+    target_include_directories(lw_joystick_vendor SYSTEM PUBLIC
+        library/thirdparty/joystick
+    )
+    lw_silence_vendor_warnings(lw_joystick_vendor)
+endif()
 
 if(NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
     add_library(
@@ -665,6 +719,7 @@ if(BUILD_TESTING)
                     ${PROJECT_ROOT_DIR}/scripts/install_pytorch_jetson.sh
                     ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                     ${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_lw_deployment.sh
+                    ${PROJECT_ROOT_DIR}/scripts/validate_lw_strict_build.sh
         )
         add_test(
             NAME lw_inference_runtime_architecture
@@ -740,6 +795,12 @@ if(BUILD_TESTING)
     add_executable(test_lw_joystick_safety
         test/test_lw_joystick_safety.cpp
     )
+    if(TARGET lw_joystick_vendor)
+        target_link_libraries(
+            test_lw_joystick_safety
+            PRIVATE lw_joystick_vendor
+        )
+    endif()
     add_test(NAME lw_joystick_safety COMMAND test_lw_joystick_safety)
 
     add_executable(test_lw_runtime_sync
@@ -881,29 +942,28 @@ if(SYSTEM_TYPE STREQUAL "Linux"
             IMPORTED_NO_SONAME TRUE
         )
 
-        # Include directories
-        include_directories(
-            ${MUJOCO_INCLUDE_DIR}
-            library/thirdparty/joystick
-        )
-
         # Source files
         file(GLOB MUJOCO_SIMULATE_SRC library/thirdparty/mujoco_simulate/*.cc)
-        set(JOYSTICK_SRC library/thirdparty/joystick/joystick.cc)
+        add_library(
+            lw_mujoco_simulate_vendor
+            ${MUJOCO_SIMULATE_SRC}
+        )
+        target_include_directories(lw_mujoco_simulate_vendor SYSTEM PUBLIC
+            library/thirdparty/mujoco_simulate
+        )
+        target_link_libraries(lw_mujoco_simulate_vendor PUBLIC
+            Threads::Threads mujoco_prebuilt glfw
+        )
+        lw_silence_vendor_warnings(lw_mujoco_simulate_vendor)
 
         # Build executable
-        add_executable(rl_sim_LW src/rl_sim_LW.cpp ${MUJOCO_SIMULATE_SRC} ${JOYSTICK_SRC})
-
-        # Add include directories for mujoco_simulate and joystick headers
-        target_include_directories(rl_sim_LW PRIVATE
-            library/thirdparty/mujoco_simulate
-            library/thirdparty/joystick
-        )
+        add_executable(rl_sim_LW src/rl_sim_LW.cpp)
 
         target_link_libraries(rl_sim_LW
             rl_sdk observation_buffer lw_actuator_models
             ${YAML_CPP_LIBRARIES} LW_sdk
             Threads::Threads mujoco_prebuilt glfw
+            lw_mujoco_simulate_vendor lw_joystick_vendor
         )
         if(BUILD_TESTING)
             add_executable(
@@ -942,8 +1002,6 @@ if(SYSTEM_TYPE STREQUAL "Linux"
             add_executable(
                 test_lw_mujoco_lifecycle
                 test/test_lw_mujoco_lifecycle.cpp
-                library/thirdparty/mujoco_simulate/platform_ui_adapter.cc
-                library/thirdparty/mujoco_simulate/simulate.cc
             )
             target_compile_definitions(
                 test_lw_mujoco_lifecycle
@@ -954,11 +1012,13 @@ if(SYSTEM_TYPE STREQUAL "Linux"
                 test_lw_mujoco_lifecycle
                 PRIVATE
                     library/core/simulation
-                    library/thirdparty/mujoco_simulate
             )
             target_link_libraries(
                 test_lw_mujoco_lifecycle
-                PRIVATE mujoco_prebuilt Threads::Threads
+                PRIVATE
+                    lw_mujoco_simulate_vendor
+                    mujoco_prebuilt
+                    Threads::Threads
             )
             add_test(
                 NAME lw_mujoco_lifecycle
@@ -978,22 +1038,16 @@ endif()
 # executable for rl real LW
 if(SYSTEM_TYPE STREQUAL "Linux")
     if(NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
-        if(NOT DEFINED JOYSTICK_SRC)
-            set(JOYSTICK_SRC library/thirdparty/joystick/joystick.cc)
-        endif()
         add_executable(rl_real_LW 
             src/rl_real_LW.cpp
-            ${JOYSTICK_SRC}
         )
         add_executable(
             lw_config_profiler
             src/lw_config_profiler.cpp
         )
-        target_include_directories(rl_real_LW PRIVATE
-            library/thirdparty/joystick
-        )
         target_link_libraries(rl_real_LW
             LW_sdk
+            lw_joystick_vendor
             lw_debug_publisher
             rl_sdk_lw_deployment
             lw_deployment_bundle

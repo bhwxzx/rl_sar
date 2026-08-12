@@ -89,8 +89,8 @@ private:
 
     // LW interface
     LWSDK lw_sdk;
-    LowCmd lw_low_command = {0};
-    LowState lw_low_state = {0};
+    LowCmd lw_low_command{};
+    LowState lw_low_state{};
     LWRuntimeCore runtime_core_;
     void disable_lw_robot();
 

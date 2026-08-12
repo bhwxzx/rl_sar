@@ -63,7 +63,7 @@ void testPolicyRootResolution(TestRL& rl)
             == (root / "LW/base.yaml").string(),
         "policy root did not resolve a valid relative path");
 
-    for (const std::string& invalid : {
+    for (const std::string invalid : {
              "../policy/LW/base.yaml",
              "LW/../base.yaml",
              "/tmp/base.yaml",

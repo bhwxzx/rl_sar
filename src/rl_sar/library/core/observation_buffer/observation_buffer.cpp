@@ -17,8 +17,8 @@ ObservationBuffer::ObservationBuffer(int num_envs,
                                      const std::string& priority)
     : num_envs(num_envs),
       obs_dims(obs_dims),
-      history_length(history_length),
-      priority(priority)
+      priority(priority),
+      history_length(history_length)
 {
     if (num_envs <= 0 || history_length <= 0)
     {

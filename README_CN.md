@@ -69,6 +69,17 @@ source /opt/ros/humble/setup.bash
 指定包时会自动包含其工作区依赖，例如 `./build.sh fdilink_ahrs` 会先构建
 `serial`，`./build.sh rl_sar` 会包含其声明的 IMU/串口依赖。
 
+提交维护代码前应运行严格警告门禁：
+
+```bash
+scripts/validate_lw_strict_build.sh
+```
+
+脚本会创建临时 Debug 构建目录，以
+`-Wall -Wextra -Wpedantic -Werror` 编译全部维护目标并运行完整 CTest，结束后
+清理临时目录。vendored MuJoCo、joystick 和硬件 SDK 源码/头文件使用独立目标与
+系统头边界，不会用第三方警告掩盖维护代码错误。
+
 ### Jetson 构建
 
 默认不需要手工声明平台。构建入口、推理运行时脚本和 CMake 会在

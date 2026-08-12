@@ -17,6 +17,7 @@ RUNTIME_DOWNLOADER = Path(sys.argv.pop(1)).resolve()
 REMOVED_JETSON_INSTALLER = Path(sys.argv.pop(1)).resolve()
 CMAKE_FILE = Path(sys.argv.pop(1)).resolve()
 DEPLOYMENT_BUILDER = Path(sys.argv.pop(1)).resolve()
+STRICT_BUILD_VALIDATOR = Path(sys.argv.pop(1)).resolve()
 
 
 class BuildWorkflowTests(unittest.TestCase):
@@ -130,6 +131,26 @@ class BuildWorkflowTests(unittest.TestCase):
         self.assertIn("python3-pip", packages)
         self.assertIn("libtbb-dev", packages)
         self.assertIn("ros-humble-ros2-control", packages)
+
+    def test_strict_warning_gate_is_reproducible_and_vendor_scoped(self) -> None:
+        validator = STRICT_BUILD_VALIDATOR.read_text(encoding="utf-8")
+        self.assertIn("-DLW_STRICT_WARNINGS=ON", validator)
+        self.assertIn('cmake --build "${strict_build_dir}"', validator)
+        self.assertIn('ctest --test-dir "${strict_build_dir}"', validator)
+
+        cmake = CMAKE_FILE.read_text(encoding="utf-8")
+        self.assertIn("option(\n    LW_STRICT_WARNINGS", cmake)
+        for warning in ("-Wall", "-Wextra", "-Wpedantic", "-Werror"):
+            self.assertIn(warning, cmake)
+        self.assertIn("function(lw_silence_vendor_warnings", cmake)
+        self.assertIn("lw_joystick_vendor", cmake)
+        self.assertIn("lw_mujoco_simulate_vendor", cmake)
+        self.assertIn("target_include_directories(LW_sdk SYSTEM INTERFACE", cmake)
+
+        sim_target = cmake[cmake.index("add_executable(rl_sim_LW") :]
+        sim_target = sim_target[: sim_target.index("target_link_libraries(rl_sim_LW")]
+        self.assertNotIn("MUJOCO_SIMULATE_SRC", sim_target)
+        self.assertNotIn("JOYSTICK_SRC", sim_target)
 
     def test_missing_dependencies_invoke_package_manager(self) -> None:
         with tempfile.TemporaryDirectory(

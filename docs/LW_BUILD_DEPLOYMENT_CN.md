@@ -140,6 +140,16 @@ CUDA 标志，并在日志中输出 `Jetson mode: true`。只有容器等环境�
 - `./build.sh` 生成开发机上的 Sim2Sim 程序；
 - `build_lw_deployment.sh` 在部署机生成实机正式运行版本。
 
+维护 C++ 代码还必须通过独立的严格警告门禁：
+
+```bash
+scripts/validate_lw_strict_build.sh
+```
+
+该脚本使用全新临时目录，以 `-Wall -Wextra -Wpedantic -Werror` 完整构建维护
+目标并运行全部 CTest。MuJoCo simulate、joystick 和硬件 SDK 等 vendored 依赖
+使用独立编译目标与系统头边界；门禁不会修改或全局豁免维护代码的警告。
+
 ### 第三步：在开发机完成 Sim2Sim 验证
 
 构建成功后，在开发机启动 LW 的 MuJoCo Sim2Sim：

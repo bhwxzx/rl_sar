@@ -87,8 +87,8 @@ private:
     // main() owns this guard and constructs it before ROS initialization.
     // RL_Real is destroyed before the guard leaves main()'s scope.
     LWStartupDisableGuard* startup_disable_ = nullptr;
-    LowCmd lw_low_command = {0};
-    LowState lw_low_state = {0};
+    LowCmd lw_low_command{};
+    LowState lw_low_state{};
     LWRuntimeCore runtime_core_;
     std::atomic<bool> fatal_error_latched_{false};
     std::atomic<bool> shutdown_requested_{false};
