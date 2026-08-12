@@ -21,6 +21,9 @@ struct LWDeploymentBundleInfo
     std::string source_commit;
     std::string build_type;
     std::string executable_sha256;
+    std::string onnx_runtime_version;
+    std::string onnx_runtime_architecture;
+    std::vector<LWDeploymentFileRecord> onnx_runtime_libraries;
     std::vector<LWDeploymentFileRecord> files;
     std::vector<LWDeploymentFileRecord> runtime_files;
 };

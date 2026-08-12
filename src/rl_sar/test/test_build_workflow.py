@@ -104,10 +104,17 @@ class BuildWorkflowTests(unittest.TestCase):
         self.assertIn("set(TORCH_BACKEND_ALLOWED FALSE)", cmake)
         self.assertIn("LibTorch disabled", cmake)
         self.assertIn("ONNX Runtime validation failed", cmake)
+        self.assertIn('INSTALL_RPATH "$ORIGIN/onnxruntime"', cmake)
+        self.assertIn('RENAME "libonnxruntime.so.1"', cmake)
+        self.assertIn("LW_ONNX_RUNTIME_PROVIDER_LIBRARY", cmake)
 
         deployment = DEPLOYMENT_BUILDER.read_text(encoding="utf-8")
         self.assertIn("validate_inference_runtime.sh", deployment)
         self.assertIn('grep -Eq "libtorch|libc10"', deployment)
+        self.assertIn("$ORIGIN/onnxruntime", deployment)
+        self.assertIn("retains build-tree ONNX RPATH", deployment)
+        self.assertIn("resolved ONNX Runtime outside the deployment", deployment)
+        self.assertIn('verify_deployment_prefix "$relocated_prefix"', deployment)
 
     def test_dependency_installer_lists_base_and_ros_packages(self) -> None:
         environment = os.environ.copy()

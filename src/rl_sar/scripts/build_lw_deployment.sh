@@ -71,13 +71,19 @@ python3 "$source_tree/src/rl_sar/scripts/verify_lw_policy_parity.py" \
     --manifest "$manifest"
 if find "$output_prefix/lib/rl_sar/rl_real_LW" \
         "$output_prefix/lib/rl_sar/lw_config_profiler" \
+        "$output_prefix/lib/rl_sar/onnxruntime" \
         "$output_prefix/lib/rl_sar/profile_lw_runtime_config.py" \
         "$output_prefix/share/rl_sar/deployment/LW" -type l -print -quit \
         | grep -q .; then
     echo "Production bundle contains symbolic links" >&2
     exit 1
 fi
-LW_DEPLOYMENT_PREFIX="$output_prefix" bash -c '
+
+verify_deployment_prefix()
+{
+    local deployment_prefix=$1
+    LW_DEPLOYMENT_PREFIX="$deployment_prefix" \
+    LW_BUILD_ONNX_DIRECTORY="$inference_runtime/onnxruntime/lib" bash -c '
     source "$LW_DEPLOYMENT_PREFIX/setup.bash"
     for package in serial fdilink_ahrs rl_sar; do
         package_prefix=$(ros2 pkg prefix "$package")
@@ -97,16 +103,44 @@ LW_DEPLOYMENT_PREFIX="$output_prefix" bash -c '
             exit 1
         fi
         if [[ "$executable" == */lib/rl_sar/rl_real_LW \
-              || "$executable" == */lib/rl_sar/lw_config_profiler ]] \
-           && grep -Eq "libtorch|libc10" <<< "$ldd_output"; then
-            echo "LW production executable unexpectedly depends on LibTorch: $executable" >&2
-            printf "%s\n" "$ldd_output" >&2
-            exit 1
+              || "$executable" == */lib/rl_sar/lw_config_profiler ]]; then
+            if grep -Eq "libtorch|libc10" <<< "$ldd_output"; then
+                echo "LW production executable unexpectedly depends on LibTorch: $executable" >&2
+                printf "%s\n" "$ldd_output" >&2
+                exit 1
+            fi
+            dynamic_section=$(LC_ALL=C readelf -d "$executable")
+            if ! grep -Fq '\''$ORIGIN/onnxruntime'\'' <<< "$dynamic_section"; then
+                echo "LW production executable lacks relocatable ONNX RPATH: $executable" >&2
+                printf "%s\n" "$dynamic_section" >&2
+                exit 1
+            fi
+            if grep -Fq "$LW_BUILD_ONNX_DIRECTORY" <<< "$dynamic_section"; then
+                echo "LW production executable retains build-tree ONNX RPATH: $executable" >&2
+                printf "%s\n" "$dynamic_section" >&2
+                exit 1
+            fi
+            resolved_onnx=$(awk '\''$1 == "libonnxruntime.so.1" {print $3; exit}'\'' \
+                <<< "$ldd_output")
+            expected_onnx="$LW_DEPLOYMENT_PREFIX/lib/rl_sar/onnxruntime/libonnxruntime.so.1"
+            if [[ -z "$resolved_onnx" \
+                  || $(realpath -m "$resolved_onnx") != $(realpath -m "$expected_onnx") ]]; then
+                echo "LW production executable resolved ONNX Runtime outside the deployment: $executable" >&2
+                printf "%s\n" "$ldd_output" >&2
+                exit 1
+            fi
         fi
     done
     "$LW_DEPLOYMENT_PREFIX/lib/rl_sar/rl_real_LW" \
         --verify-deployment-only
 '
+}
+
+verify_deployment_prefix "$output_prefix"
+
+relocated_prefix="$temporary_root/relocated-install"
+cp -a "$output_prefix" "$relocated_prefix"
+verify_deployment_prefix "$relocated_prefix"
 
 echo "LW deployment created from commit $source_commit"
 echo "Install prefix: $output_prefix"

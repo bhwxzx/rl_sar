@@ -5,6 +5,8 @@ execute_process(
         --install-prefix "${CMAKE_INSTALL_PREFIX}"
         --source-commit "@RL_SAR_SOURCE_COMMIT@"
         --build-type "@CMAKE_BUILD_TYPE@"
+        --onnx-version "@ONNX_RUNTIME_VERSION@"
+        --onnx-architecture "@RUNTIME_VALIDATION_ARCH@"
     RESULT_VARIABLE LW_MANIFEST_RESULT
     OUTPUT_VARIABLE LW_MANIFEST_OUTPUT
     ERROR_VARIABLE LW_MANIFEST_ERROR

@@ -58,7 +58,7 @@ def main() -> int:
             asset.write_bytes(f"asset:{relative_string}\n".encode())
 
         lines = [
-            "schema_version: 2",
+            "schema_version: 3",
             f'source_commit: "{"a" * 40}"',
             'build_type: "Release"',
             "files:",

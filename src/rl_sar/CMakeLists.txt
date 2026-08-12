@@ -227,6 +227,35 @@ if(EXISTS "${ONNX_RUNTIME_DIR}/include" AND EXISTS "${ONNX_RUNTIME_DIR}/lib")
 
         set(ONNX_RUNTIME_LIB onnxruntime_prebuilt)
         message(STATUS "ONNX Runtime library: ${ONNX_RUNTIME_LIB_PATH}")
+
+        if(LW_PRODUCTION_DEPLOYMENT)
+            if(NOT ONNX_RUNTIME_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+                message(FATAL_ERROR
+                    "LW production deployment requires a valid ONNX Runtime "
+                    "VERSION_NUMBER")
+            endif()
+            get_filename_component(
+                LW_ONNX_RUNTIME_REAL_LIBRARY
+                "${ONNX_RUNTIME_LIB_PATH}"
+                REALPATH
+            )
+            set(
+                LW_ONNX_RUNTIME_PROVIDER_LIBRARY
+                "${ONNX_RUNTIME_DIR}/lib/libonnxruntime_providers_shared.so"
+            )
+            if(NOT EXISTS "${LW_ONNX_RUNTIME_REAL_LIBRARY}"
+               OR IS_SYMLINK "${LW_ONNX_RUNTIME_REAL_LIBRARY}")
+                message(FATAL_ERROR
+                    "Resolved ONNX Runtime library must be a regular file: "
+                    "${LW_ONNX_RUNTIME_REAL_LIBRARY}")
+            endif()
+            if(NOT EXISTS "${LW_ONNX_RUNTIME_PROVIDER_LIBRARY}"
+               OR IS_SYMLINK "${LW_ONNX_RUNTIME_PROVIDER_LIBRARY}")
+                message(FATAL_ERROR
+                    "ONNX Runtime provider library must be a regular file: "
+                    "${LW_ONNX_RUNTIME_PROVIDER_LIBRARY}")
+            endif()
+        endif()
     else()
         if(IS_JETSON OR LW_PRODUCTION_DEPLOYMENT)
             message(FATAL_ERROR "ONNX Runtime library not found")
@@ -971,6 +1000,27 @@ if(SYSTEM_TYPE STREQUAL "Linux")
             TARGETS rl_real_LW lw_config_profiler
             DESTINATION lib/${PROJECT_NAME}
         )
+        if(LW_PRODUCTION_DEPLOYMENT)
+            set(LW_ONNX_RUNTIME_INSTALL_DIRECTORY
+                "lib/${PROJECT_NAME}/onnxruntime")
+            set_target_properties(
+                rl_real_LW lw_config_profiler
+                PROPERTIES
+                    BUILD_WITH_INSTALL_RPATH FALSE
+                    BUILD_RPATH "${ONNX_RUNTIME_DIR}/lib"
+                    INSTALL_RPATH "$ORIGIN/onnxruntime"
+                    INSTALL_RPATH_USE_LINK_PATH FALSE
+            )
+            install(
+                FILES "${LW_ONNX_RUNTIME_REAL_LIBRARY}"
+                DESTINATION "${LW_ONNX_RUNTIME_INSTALL_DIRECTORY}"
+                RENAME "libonnxruntime.so.1"
+            )
+            install(
+                FILES "${LW_ONNX_RUNTIME_PROVIDER_LIBRARY}"
+                DESTINATION "${LW_ONNX_RUNTIME_INSTALL_DIRECTORY}"
+            )
+        endif()
         if(BUILD_TESTING)
             add_test(NAME lw_config_profiler_help COMMAND lw_config_profiler --help)
             add_test(

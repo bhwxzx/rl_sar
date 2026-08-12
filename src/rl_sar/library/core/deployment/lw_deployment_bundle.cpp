@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cctype>
+#include <cstdint>
 #include <fstream>
 #include <iomanip>
 #include <memory>
@@ -52,6 +53,15 @@ const std::set<std::string>& requiredRuntimeFiles()
     return files;
 }
 
+const std::set<std::string>& requiredOnnxRuntimeFiles()
+{
+    static const std::set<std::string> files = {
+        "lib/rl_sar/onnxruntime/libonnxruntime.so.1",
+        "lib/rl_sar/onnxruntime/libonnxruntime_providers_shared.so",
+    };
+    return files;
+}
+
 [[noreturn]] void fail(const std::string& message)
 {
     throw std::runtime_error(
@@ -73,6 +83,89 @@ bool isLowerHex(const std::string& value, std::size_t length)
         }
     }
     return true;
+}
+
+bool isSemanticVersion(const std::string& value)
+{
+    int component_count = 1;
+    bool component_has_digit = false;
+    for (const unsigned char character : value)
+    {
+        if (std::isdigit(character))
+        {
+            component_has_digit = true;
+            continue;
+        }
+        if (character != '.' || !component_has_digit || component_count == 3)
+        {
+            return false;
+        }
+        ++component_count;
+        component_has_digit = false;
+    }
+    return component_count == 3 && component_has_digit;
+}
+
+std::string compiledArchitecture()
+{
+#if defined(__x86_64__) || defined(_M_X64)
+    return "x86_64";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    return "aarch64";
+#else
+    fail("unsupported compiled architecture");
+#endif
+}
+
+std::uint16_t expectedElfMachine(const std::string& architecture)
+{
+    if (architecture == "x86_64")
+    {
+        return 62;
+    }
+    if (architecture == "aarch64")
+    {
+        return 183;
+    }
+    fail("unsupported ONNX Runtime architecture: " + architecture);
+}
+
+void requireElfArchitecture(
+    const fs::path& path,
+    const std::string& architecture)
+{
+    std::ifstream input(path, std::ios::binary);
+    std::array<unsigned char, 20> header{};
+    input.read(
+        reinterpret_cast<char*>(header.data()),
+        static_cast<std::streamsize>(header.size()));
+    if (input.gcount() != static_cast<std::streamsize>(header.size())
+        || header[0] != 0x7f || header[1] != 'E' || header[2] != 'L'
+        || header[3] != 'F' || header[4] != 2)
+    {
+        fail("ONNX Runtime library is not ELF64: " + path.string());
+    }
+
+    std::uint16_t machine = 0;
+    if (header[5] == 1)
+    {
+        machine = static_cast<std::uint16_t>(header[18])
+            | static_cast<std::uint16_t>(header[19] << 8);
+    }
+    else if (header[5] == 2)
+    {
+        machine = static_cast<std::uint16_t>(header[18] << 8)
+            | static_cast<std::uint16_t>(header[19]);
+    }
+    else
+    {
+        fail("ONNX Runtime library has invalid ELF encoding: "
+             + path.string());
+    }
+    if (machine != expectedElfMachine(architecture))
+    {
+        fail("ONNX Runtime architecture mismatch for: " + path.string());
+    }
 }
 
 bool isWithin(const fs::path& root, const fs::path& candidate)
@@ -282,7 +375,7 @@ LWDeploymentBundleInfo LWDeploymentBundle::Verify(
         fail("manifest root must be a mapping");
     }
     const YAML::Node schema = manifest["schema_version"];
-    if (!schema || !schema.IsScalar() || schema.as<int>() != 2)
+    if (!schema || !schema.IsScalar() || schema.as<int>() != 3)
     {
         fail("unsupported manifest schema_version");
     }
@@ -330,6 +423,90 @@ LWDeploymentBundleInfo LWDeploymentBundle::Verify(
     if (Sha256File(running_canonical) != executable_sha256)
     {
         fail("running executable SHA-256 mismatch");
+    }
+
+    const YAML::Node onnx_runtime = manifest["onnx_runtime"];
+    if (!onnx_runtime || !onnx_runtime.IsMap())
+    {
+        fail("manifest onnx_runtime field must be a mapping");
+    }
+    const std::string onnx_runtime_version =
+        requiredScalar(onnx_runtime, "version");
+    if (!isSemanticVersion(onnx_runtime_version))
+    {
+        fail("manifest ONNX Runtime version is invalid");
+    }
+    const std::string onnx_runtime_architecture =
+        requiredScalar(onnx_runtime, "architecture");
+    if (onnx_runtime_architecture != compiledArchitecture())
+    {
+        fail("manifest ONNX Runtime architecture does not match the binary");
+    }
+    const YAML::Node onnx_libraries = onnx_runtime["libraries"];
+    if (!onnx_libraries || !onnx_libraries.IsSequence())
+    {
+        fail("manifest ONNX Runtime libraries field must be a sequence");
+    }
+
+    std::set<std::string> seen_onnx_paths;
+    std::vector<LWDeploymentFileRecord> onnx_records;
+    onnx_records.reserve(onnx_libraries.size());
+    for (const YAML::Node& entry : onnx_libraries)
+    {
+        if (!entry || !entry.IsMap())
+        {
+            fail("manifest ONNX Runtime library entry must be a mapping");
+        }
+        const std::string relative_string = requiredScalar(entry, "path");
+        const fs::path relative_path = validateRelativePath(relative_string);
+        if (!seen_onnx_paths.insert(relative_string).second)
+        {
+            fail("duplicate ONNX Runtime manifest path: " + relative_string);
+        }
+        const std::string expected_sha256 = requiredScalar(entry, "sha256");
+        if (!isLowerHex(expected_sha256, 64))
+        {
+            fail("invalid ONNX Runtime SHA-256 for: " + relative_string);
+        }
+
+        requireNoSymlinkComponents(prefix, relative_path);
+        const fs::path library = prefix / relative_path;
+        requireRegularNonSymlink(library, "ONNX Runtime library");
+        const fs::path canonical_library = fs::canonical(library, error);
+        if (error || !isWithin(prefix, canonical_library))
+        {
+            fail("ONNX Runtime library escapes install prefix: "
+                 + relative_string);
+        }
+        requireElfArchitecture(library, onnx_runtime_architecture);
+        if (Sha256File(library) != expected_sha256)
+        {
+            fail("ONNX Runtime SHA-256 mismatch for: " + relative_string);
+        }
+        onnx_records.push_back({relative_string, expected_sha256});
+    }
+    if (seen_onnx_paths != requiredOnnxRuntimeFiles())
+    {
+        fail("manifest does not contain the exact approved ONNX Runtime set");
+    }
+    const fs::path onnx_directory = canonicalDirectory(
+        prefix / "lib" / "rl_sar" / "onnxruntime",
+        "ONNX Runtime directory");
+    std::set<std::string> actual_onnx_paths;
+    for (const fs::directory_entry& entry : fs::directory_iterator(onnx_directory))
+    {
+        const fs::file_status status = entry.symlink_status(error);
+        if (error || fs::is_symlink(status) || !fs::is_regular_file(status))
+        {
+            fail("ONNX Runtime directory contains a non-regular entry: "
+                 + entry.path().string());
+        }
+        actual_onnx_paths.insert(
+            entry.path().lexically_relative(prefix).generic_string());
+    }
+    if (actual_onnx_paths != requiredOnnxRuntimeFiles())
+    {
+        fail("ONNX Runtime directory does not contain the exact approved library set");
     }
 
     const YAML::Node files = manifest["files"];
@@ -438,6 +615,9 @@ LWDeploymentBundleInfo LWDeploymentBundle::Verify(
         source_commit,
         build_type,
         executable_sha256,
+        onnx_runtime_version,
+        onnx_runtime_architecture,
+        onnx_records,
         records,
         runtime_records,
     };

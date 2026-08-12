@@ -81,7 +81,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 8 | LW-024 | P1 / high | pending | Make the Sim2Sim physics-thread lifecycle bounded and joinable |
 | 9 | LW-025 | P1 / high | pending | Preserve keyboard velocity commands instead of replacing them every control cycle |
 | 10 | LW-026 | P1 / high | resolved | Bind configuration candidates to one exact deployment and comparable reports |
-| 11 | LW-027 | P1 / high | pending | Make the ONNX Runtime dependency reproducible and integrity-verified |
+| 11 | LW-027 | P1 / high | resolved | Make the ONNX Runtime dependency reproducible and integrity-verified |
 | 12 | LW-007 | P1 / high | resolved | Remove cross-thread data races with coherent snapshots |
 | 13 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
 | 14 | LW-009 | P1 / high | resolved | Use the configured 60 Hz wheel-to-leg reference rate |
@@ -2172,7 +2172,7 @@ produce a plausible review file for the wrong deployment.
 ## [LW-027] Reproducible ONNX Runtime deployment dependency
 
 **Priority**: P1 / high
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-010, LW-017, LW-020
 
 ### Problem
@@ -2209,6 +2209,37 @@ though `--verify-deployment-only` still accepts the bundle.
   original source-tree path.
 - Tampering with or omitting a required runtime library fails deployment
   verification before ROS, serial, or motor initialization.
+
+### Resolution
+
+- **Resolved**: 2026-08-12T17:24:40+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 正式部署将实际使用的 ONNX Runtime 主库和共享 provider
+  作为普通文件安装到 `lib/rl_sar/onnxruntime/`，两个生产可执行文件仅以
+  `$ORIGIN/onnxruntime` 相对 RPATH 加载它们。manifest 升级为 schema v3，
+  固定 ONNX Runtime 版本、规范化 CPU 架构、精确两库集合和各自 SHA-256；
+  C++ 启动校验拒绝缺失、多余、符号链接、目录逃逸、错误 ELF64 架构和哈希
+  不匹配。部署脚本拒绝源码树 ONNX RPATH 和部署外解析结果，并自动验收原部署
+  前缀及完整重定位副本。
+- **Changed Files**: `src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/cmake/install_lw_deployment.cmake.in`、
+  `src/rl_sar/library/core/deployment/{lw_deployment_bundle.cpp,lw_deployment_bundle.hpp}`、
+  `src/rl_sar/scripts/{build_lw_deployment.sh,generate_lw_deployment_manifest.py}`、
+  `src/rl_sar/test/{test_build_workflow.py,test_generate_lw_deployment_manifest.py,test_lw_deployment_bundle.cpp,test_verify_lw_policy_parity.py}`、
+  `docs/LW_BUILD_DEPLOYMENT_CN.md`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 当前 Debug 工作树完整构建并通过 36/36 CTest；manifest
+  生成器 13 项测试和 C++ bundle 18 条路径覆盖版本/架构、精确文件集合、缺失、
+  符号链接、错误 ELF 架构、篡改、重定位及既有策略/运行文件约束。Release 和
+  严格警告配置均构建主程序、配置测量工具与 bundle 测试并通过 4 项定向 CTest；
+  ASan/UBSan bundle 测试通过。真实 `LW_PRODUCTION_DEPLOYMENT=ON` Release
+  部署生成成功，manifest 记录 ONNX Runtime 1.22.0/x86_64 和两个库摘要；
+  `readelf` 仅见 `$ORIGIN/onnxruntime`，`ldd` 对两个生产可执行文件均解析到
+  当前部署前缀，原前缀和临时重定位副本的 `--verify-deployment-only` 均通过。
+  真实失效注入中，缺 provider、缺主库和替换 provider 内容分别由启动校验、
+  动态加载器和 SHA-256 校验在硬件初始化前拒绝。Python 严格语法、shell 语法、
+  定向 `cppcheck` 和 `git diff --check` 通过。未访问 ROS 设备、真机串口或电机。
+- **Remaining Follow-ups**: none
 
 ---
 

@@ -240,9 +240,9 @@ bash "$RL_SAR_ROOT/scripts/validate_inference_runtime.sh" \
 
 > [!NOTE]
 > 正式部署清单会校验 LW 可执行文件、模型、配置，以及项目自带的
-> `fdilink_ahrs` 和 `serial` 运行文件，但不会打包基础 ROS、ONNX Runtime、
-> Python、操作系统动态库和 USB 内核驱动。后者仍由部署机
-> 的系统环境提供。
+> `fdilink_ahrs`、`serial` 和 ONNX Runtime 运行文件。ONNX Runtime 会以
+> 普通文件随部署前缀携带；基础 ROS、Python、操作系统动态库和 USB 内核驱动
+> 仍由部署机的系统环境提供。
 
 ### 第四步：准备串口设备名和访问权限
 
@@ -314,11 +314,14 @@ src/rl_sar/scripts/build_lw_deployment.sh \
 2. 初始化该提交锁定的 Git 子模块；
 3. 使用 `Release` 和 `LW_PRODUCTION_DEPLOYMENT=ON` 编译；
 4. 安装 `serial`、`fdilink_ahrs`、`rl_real_LW`、LW 配置测量工具、五个
-   YAML、四个 ONNX 和两个状态转换 CSV；
-5. 生成记录源码提交、策略资源及项目内 IMU/串口运行文件 SHA-256 的
-   `manifest.yaml`；
+   YAML、四个 ONNX、两个状态转换 CSV，以及匹配本机构架的 ONNX Runtime；
+5. 生成 schema v3 `manifest.yaml`，记录源码提交、策略资源、项目内
+   IMU/串口运行文件以及 ONNX Runtime 版本、架构和库文件 SHA-256；
 6. 拒绝关键部署文件中的符号链接；
-7. 自动执行一次 `--verify-deployment-only` 离线验收。
+7. 检查生产可执行文件只通过 `$ORIGIN/onnxruntime` 解析随包推理库，不保留
+   项目源码树中的 ONNX Runtime 路径；
+8. 自动验收原部署前缀及其临时重定位副本，两个位置都必须通过
+   `--verify-deployment-only`。
 
 输出目录必须不存在或为空。脚本不会覆盖以前的部署版本。如果同一个提交需要重新构建，应使用新的带后缀目录，例如 `${SHORT_COMMIT}_02`，并保留必要的旧版本供回滚。
 
@@ -332,6 +335,9 @@ src/rl_sar/scripts/build_lw_deployment.sh \
 ├── lib/rl_sar/lw_config_profiler
 ├── lib/rl_sar/profile_lw_runtime_config.py
 ├── lib/rl_sar/rl_real_LW
+├── lib/rl_sar/onnxruntime/
+│   ├── libonnxruntime.so.1
+│   └── libonnxruntime_providers_shared.so
 ├── share/fdilink_ahrs/
 │   ├── launch/ahrs_driver.launch.py
 │   └── wheeltec_udev.sh
@@ -370,6 +376,7 @@ source "$DEPLOY_PREFIX/setup.bash"
 
 - 当前可执行文件是否属于清单记录的源码提交；
 - 可执行文件、五个 YAML、四个 ONNX 和两个 CSV 的哈希是否正确；
+- 随包 ONNX Runtime 的版本、架构、精确文件集合和 SHA-256 是否正确；
 - `libserial`、AHRS 节点、launch、udev 辅助脚本和两个 ROS 包索引的哈希
   是否正确；
 - 资源路径是否仍在部署目录内；
@@ -390,8 +397,11 @@ ldd "$DEPLOY_PREFIX/lib/fdilink_ahrs/ahrs_driver_node"
 
 `manifest.yaml` 中的 `source_commit` 应等于开发机交付的完整提交哈希。两次
 `ldd` 输出中如果出现 `not found`，说明部署机缺少运行库，不得启动实机程序。
-`rl_real_LW` 和 `lw_config_profiler` 应包含 `libonnxruntime.so`，且不得出现
-`libtorch`、`libtorch_cpu` 或 `libc10`；正式部署构建脚本会自动检查这一约束。
+`rl_real_LW` 和 `lw_config_profiler` 应依赖 `libonnxruntime.so.1`，解析结果必须
+位于 `$DEPLOY_PREFIX/lib/rl_sar/onnxruntime/`，且不得出现 `libtorch`、
+`libtorch_cpu` 或 `libc10`。其 ELF 动态段应包含 `$ORIGIN/onnxruntime`，不得
+包含项目中 `library/inference_runtime/onnxruntime/lib` 的绝对路径；正式部署
+构建脚本会自动检查这些约束。
 
 还必须确认包解析没有回退到旧开发工作区：
 
@@ -778,11 +788,16 @@ source "$DEPLOY_PREFIX/setup.bash"
 
 ## 9. 可选：从开发机复制部署版本
 
-只有开发机和部署机的 CPU 架构、操作系统、ROS 版本、C/C++ ABI、推理库版本及相关路径兼容时，才考虑在开发机构建后复制完整部署前缀。
+只有开发机和部署机的 CPU 架构、操作系统、ROS 版本及 C/C++ ABI 兼容时，
+才考虑在开发机构建后复制完整部署前缀。ONNX Runtime 已包含在部署前缀中，
+不再要求目标机另有项目内推理库路径，但其架构仍必须匹配目标机。
 
 不能只复制 `rl_real_LW` 或 `deployment/LW`，必须复制整个 `<DEPLOY_PREFIX>`。复制到部署机后，仍必须重新执行 `--verify-deployment-only` 和 `ldd` 检查。
 
-当前可执行文件可能记录构建机上的推理库搜索路径。因此，只要不能确认两台机器的环境兼容，就应使用本文推荐方案：在部署机自己的 `rl_sar` 项目中按指定提交本地构建。
+生产可执行文件使用相对于自身的 ONNX Runtime 搜索路径；构建脚本会把部署前缀
+复制到临时新位置并再次验收。基础 ROS、Python 和系统 ABI 仍可能不同，因此
+只要不能确认两台机器的环境兼容，就应使用本文推荐方案：在部署机自己的
+`rl_sar` 项目中按指定提交本地构建。
 
 不要把完整开发仓库中的 `library/inference_runtime` 从 x86_64 主机复制到
 Jetson。即使目录结构完整，其 ELF 架构仍不兼容；当前构建会在 CMake 前明确
@@ -808,7 +823,10 @@ Jetson。即使目录结构完整，其 ELF 架构仍不兼容；当前构建会
 
 ### ONNX Runtime 缺失
 
-脚本会报 `ONNX Runtime dependency is missing`。检查部署机当前项目中的 `library/inference_runtime/onnxruntime` 是否完整。
+构建前脚本报 `ONNX Runtime dependency is missing` 时，检查部署机当前项目中的
+`library/inference_runtime/onnxruntime` 是否完整。部署生成后若随包库缺失，
+manifest 校验或动态加载器会在 ROS、串口和电机初始化前拒绝运行；不要从其他
+部署目录手工补文件，应从预期提交重新生成整个部署版本。
 
 ### ONNX Runtime 架构不匹配
 
@@ -838,7 +856,9 @@ ros2 pkg prefix rl_sar
 
 ### 动态库缺失
 
-使用 `ldd` 查找 `not found` 项，并在部署机安装 ABI 兼容的 ROS、推理库和系统依赖。仅有部署目录并不代表外部运行库已经齐全。
+使用 `ldd` 查找 `not found` 项。ONNX Runtime 必须解析到当前部署前缀；其他
+缺失项应通过部署机安装 ABI 兼容的 ROS 和系统依赖解决，不得用
+`LD_LIBRARY_PATH` 指向项目源码树来绕过随包 ONNX Runtime 校验。
 
 ## 11. 相关文件
 
@@ -848,4 +868,4 @@ ros2 pkg prefix rl_sar
 - 清单生成器：`src/rl_sar/scripts/generate_lw_deployment_manifest.py`
 - LW 实机启动文件：`src/rl_sar/launch/rl_real_LW.launch.py`
 - LW 实机部署问题记录：`.learnings/LW_REAL_DEPLOYMENT_ISSUES.md` 中的
-  `LW-010`、`LW-011` 和 `LW-017`
+  `LW-010`、`LW-011`、`LW-017` 和 `LW-027`

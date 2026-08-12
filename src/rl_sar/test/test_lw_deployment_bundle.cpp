@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <cstdint>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -41,6 +42,22 @@ const std::vector<std::string> kRuntimeFiles = {
     "share/fdilink_ahrs/wheeltec_udev.sh",
     "share/serial/package.xml",
 };
+const std::vector<std::string> kOnnxRuntimeFiles = {
+    "lib/rl_sar/onnxruntime/libonnxruntime.so.1",
+    "lib/rl_sar/onnxruntime/libonnxruntime_providers_shared.so",
+};
+
+#if defined(__x86_64__) || defined(_M_X64)
+const std::string kArchitecture = "x86_64";
+constexpr std::uint16_t kElfMachine = 62;
+constexpr std::uint16_t kOtherElfMachine = 183;
+#elif defined(__aarch64__) || defined(_M_ARM64)
+const std::string kArchitecture = "aarch64";
+constexpr std::uint16_t kElfMachine = 183;
+constexpr std::uint16_t kOtherElfMachine = 62;
+#else
+#error Unsupported test architecture
+#endif
 
 void require(bool condition, const std::string& message)
 {
@@ -59,6 +76,21 @@ void writeFile(const fs::path& path, const std::string& content)
         throw std::runtime_error("failed to create " + path.string());
     }
     output << content;
+}
+
+std::string elf64Bytes(std::uint16_t machine)
+{
+    std::string header(20, '\0');
+    header[0] = 0x7f;
+    header[1] = 'E';
+    header[2] = 'L';
+    header[3] = 'F';
+    header[4] = 2;
+    header[5] = 1;
+    header[6] = 1;
+    header[18] = static_cast<char>(machine & 0xff);
+    header[19] = static_cast<char>((machine >> 8) & 0xff);
+    return header + "test ELF payload\n";
 }
 
 class Fixture
@@ -89,6 +121,10 @@ public:
         {
             writeFile(prefix / relative, "runtime:" + relative + "\n");
         }
+        for (const std::string& relative : kOnnxRuntimeFiles)
+        {
+            writeFile(prefix / relative, elf64Bytes(kElfMachine));
+        }
         writeManifest();
     }
 
@@ -100,10 +136,12 @@ public:
 
     void writeManifest(
         const std::string& source_commit = kCommit,
-        const std::string& first_manifest_path = "")
+        const std::string& first_manifest_path = "",
+        const std::string& onnx_version = "1.22.0",
+        const std::string& onnx_architecture = kArchitecture)
     {
         std::ostringstream manifest;
-        manifest << "schema_version: 2\n"
+        manifest << "schema_version: 3\n"
                  << "source_commit: \"" << source_commit << "\"\n"
                  << "build_type: \"Release\"\n"
                  << "executable:\n"
@@ -111,7 +149,18 @@ public:
                  << "  sha256: \""
                  << LWDeploymentBundle::Sha256File(executable)
                  << "\"\n"
-                 << "files:\n";
+                 << "onnx_runtime:\n"
+                 << "  version: \"" << onnx_version << "\"\n"
+                 << "  architecture: \"" << onnx_architecture << "\"\n"
+                 << "  libraries:\n";
+        for (const std::string& relative : kOnnxRuntimeFiles)
+        {
+            manifest << "    - path: \"" << relative << "\"\n"
+                     << "      sha256: \""
+                     << LWDeploymentBundle::Sha256File(prefix / relative)
+                     << "\"\n";
+        }
+        manifest << "files:\n";
         for (std::size_t index = 0; index < kPolicyFiles.size(); ++index)
         {
             const std::string& actual_path = kPolicyFiles[index];
@@ -170,6 +219,12 @@ void testValidAndRelocatableBundle()
     require(initial.files.size() == kPolicyFiles.size(), "wrong file count");
     require(initial.runtime_files.size() == kRuntimeFiles.size(),
             "wrong runtime file count");
+    require(initial.onnx_runtime_libraries.size() == kOnnxRuntimeFiles.size(),
+            "wrong ONNX Runtime library count");
+    require(initial.onnx_runtime_version == "1.22.0",
+            "wrong ONNX Runtime version");
+    require(initial.onnx_runtime_architecture == kArchitecture,
+            "wrong ONNX Runtime architecture");
     require(initial.source_commit == kCommit, "wrong source commit");
 
     const fs::path moved_prefix = fixture.root / "moved-install";
@@ -272,6 +327,104 @@ void testSymlinkRuntimeDependencyFails()
         "symbolic link");
 }
 
+void testMissingOnnxRuntimeLibraryFails()
+{
+    Fixture fixture;
+    fs::remove(fixture.prefix / kOnnxRuntimeFiles.front());
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "ONNX Runtime library must be a regular non-symlink file");
+}
+
+void testTamperedOnnxRuntimeLibraryFails()
+{
+    Fixture fixture;
+    std::ofstream output(
+        fixture.prefix / kOnnxRuntimeFiles.back(),
+        std::ios::binary | std::ios::app);
+    output << "tampered";
+    output.close();
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "ONNX Runtime SHA-256 mismatch");
+}
+
+void testSymlinkOnnxRuntimeLibraryFails()
+{
+    Fixture fixture;
+    const fs::path library = fixture.prefix / kOnnxRuntimeFiles.front();
+    const fs::path external = fixture.root / "external-onnx";
+    writeFile(external, elf64Bytes(kElfMachine));
+    fs::remove(library);
+    fs::create_symlink(external, library);
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "symbolic link");
+}
+
+void testWrongOnnxRuntimeElfArchitectureFails()
+{
+    Fixture fixture;
+    writeFile(
+        fixture.prefix / kOnnxRuntimeFiles.back(),
+        elf64Bytes(kOtherElfMachine));
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "ONNX Runtime architecture mismatch");
+}
+
+void testManifestOnnxRuntimeArchitectureMismatchFails()
+{
+    Fixture fixture;
+    const std::string other_architecture =
+        kArchitecture == "x86_64" ? "aarch64" : "x86_64";
+    fixture.writeManifest(kCommit, "", "1.22.0", other_architecture);
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "architecture does not match the binary");
+}
+
+void testInvalidOnnxRuntimeVersionFails()
+{
+    Fixture fixture;
+    fixture.writeManifest(kCommit, "", "latest");
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "ONNX Runtime version is invalid");
+}
+
+void testExtraOnnxRuntimeLibraryFails()
+{
+    Fixture fixture;
+    writeFile(
+        fixture.prefix / "lib/rl_sar/onnxruntime/libunexpected.so",
+        elf64Bytes(kElfMachine));
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "exact approved library set");
+}
+
 void testSourceCommitMismatchFails()
 {
     Fixture fixture;
@@ -341,6 +494,13 @@ int main()
         testMissingRuntimeDependencyFails();
         testTamperedRuntimeDependencyFails();
         testSymlinkRuntimeDependencyFails();
+        testMissingOnnxRuntimeLibraryFails();
+        testTamperedOnnxRuntimeLibraryFails();
+        testSymlinkOnnxRuntimeLibraryFails();
+        testWrongOnnxRuntimeElfArchitectureFails();
+        testManifestOnnxRuntimeArchitectureMismatchFails();
+        testInvalidOnnxRuntimeVersionFails();
+        testExtraOnnxRuntimeLibraryFails();
         testSourceCommitMismatchFails();
         testSymlinkAssetFails();
         testSymlinkInstalledExecutableFails();

@@ -35,6 +35,23 @@ RUNTIME_FILES = (
     "share/serial/package.xml",
 )
 
+ONNX_RUNTIME_FILES = (
+    "lib/rl_sar/onnxruntime/libonnxruntime.so.1",
+    "lib/rl_sar/onnxruntime/libonnxruntime_providers_shared.so",
+)
+
+ARCHITECTURE_ALIASES = {
+    "amd64": "x86_64",
+    "x86_64": "x86_64",
+    "arm64": "aarch64",
+    "aarch64": "aarch64",
+}
+
+ELF_MACHINE_BY_ARCHITECTURE = {
+    "x86_64": 62,
+    "aarch64": 183,
+}
+
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -59,22 +76,65 @@ def require_no_symlink_components(root: Path, relative_path: Path) -> None:
             raise RuntimeError(f"bundle path contains a symbolic link: {current}")
 
 
+def normalize_architecture(architecture: str) -> str:
+    normalized = ARCHITECTURE_ALIASES.get(architecture.lower())
+    if normalized is None:
+        raise RuntimeError(
+            f"unsupported ONNX Runtime architecture: {architecture}"
+        )
+    return normalized
+
+
+def require_elf_architecture(path: Path, architecture: str) -> None:
+    with path.open("rb") as source:
+        header = source.read(20)
+    if len(header) != 20 or header[:4] != b"\x7fELF" or header[4] != 2:
+        raise RuntimeError(f"ONNX Runtime library is not ELF64: {path}")
+    if header[5] == 1:
+        byte_order = "little"
+    elif header[5] == 2:
+        byte_order = "big"
+    else:
+        raise RuntimeError(f"ONNX Runtime library has invalid ELF encoding: {path}")
+    machine = int.from_bytes(header[18:20], byte_order)
+    expected_machine = ELF_MACHINE_BY_ARCHITECTURE[architecture]
+    if machine != expected_machine:
+        raise RuntimeError(
+            "ONNX Runtime architecture mismatch: "
+            f"expected {architecture}, ELF machine is {machine} in {path}"
+        )
+
+
 def render_manifest(
     source_commit: str,
     build_type: str,
     executable_sha256: str,
+    onnx_version: str,
+    onnx_architecture: str,
+    onnx_hashes: list[tuple[str, str]],
     policy_hashes: list[tuple[str, str]],
     runtime_hashes: list[tuple[str, str]],
 ) -> str:
     lines = [
-        "schema_version: 2",
+        "schema_version: 3",
         f'source_commit: "{source_commit}"',
         f'build_type: "{build_type}"',
         "executable:",
         '  name: "rl_real_LW"',
         f'  sha256: "{executable_sha256}"',
-        "files:",
+        "onnx_runtime:",
+        f'  version: "{onnx_version}"',
+        f'  architecture: "{onnx_architecture}"',
+        "  libraries:",
     ]
+    for relative_path, digest in onnx_hashes:
+        lines.extend(
+            (
+                f'    - path: "{relative_path}"',
+                f'      sha256: "{digest}"',
+            )
+        )
+    lines.append("files:")
     for relative_path, digest in policy_hashes:
         lines.extend(
             (
@@ -97,11 +157,16 @@ def generate_manifest(
     install_prefix: Path,
     source_commit: str,
     build_type: str,
+    onnx_version: str,
+    onnx_architecture: str,
 ) -> Path:
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
         raise RuntimeError("source commit must be a full lowercase Git SHA-1")
     if build_type != "Release":
         raise RuntimeError("LW production deployment requires build type Release")
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", onnx_version):
+        raise RuntimeError("ONNX Runtime version must use major.minor.patch")
+    normalized_architecture = normalize_architecture(onnx_architecture)
 
     prefix = install_prefix.resolve(strict=True)
     executable = prefix / "lib" / "rl_sar" / "rl_real_LW"
@@ -112,6 +177,35 @@ def generate_manifest(
         raise RuntimeError(
             f"LW deployment bundle is not a real directory: {bundle_root}"
         )
+
+    onnx_directory = prefix / "lib" / "rl_sar" / "onnxruntime"
+    if onnx_directory.is_symlink() or not onnx_directory.is_dir():
+        raise RuntimeError(
+            f"ONNX Runtime directory must be a real directory: {onnx_directory}"
+        )
+    actual_onnx_files = {
+        entry.relative_to(prefix).as_posix() for entry in onnx_directory.iterdir()
+    }
+    if actual_onnx_files != set(ONNX_RUNTIME_FILES):
+        raise RuntimeError(
+            "ONNX Runtime directory does not contain the exact approved library set"
+        )
+
+    onnx_hashes = []
+    for relative_string in ONNX_RUNTIME_FILES:
+        relative_path = Path(relative_string)
+        require_no_symlink_components(prefix, relative_path)
+        library = prefix / relative_path
+        require_regular_file(library, "ONNX Runtime library")
+        resolved_library = library.resolve(strict=True)
+        try:
+            resolved_library.relative_to(prefix)
+        except ValueError as error:
+            raise RuntimeError(
+                f"ONNX Runtime library escapes install prefix: {relative_string}"
+            ) from error
+        require_elf_architecture(library, normalized_architecture)
+        onnx_hashes.append((relative_string, sha256_file(library)))
 
     policy_hashes = []
     for relative_string in POLICY_FILES:
@@ -148,6 +242,9 @@ def generate_manifest(
         source_commit,
         build_type,
         sha256_file(executable),
+        onnx_version,
+        normalized_architecture,
+        onnx_hashes,
         policy_hashes,
         runtime_hashes,
     )
@@ -174,6 +271,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--install-prefix", required=True, type=Path)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--build-type", required=True)
+    parser.add_argument("--onnx-version", required=True)
+    parser.add_argument("--onnx-architecture", required=True)
     return parser.parse_args()
 
 
@@ -184,6 +283,8 @@ def main() -> int:
             args.install_prefix,
             args.source_commit,
             args.build_type,
+            args.onnx_version,
+            args.onnx_architecture,
         )
     except (OSError, RuntimeError) as error:
         print(f"LW deployment manifest generation failed: {error}", file=os.sys.stderr)
