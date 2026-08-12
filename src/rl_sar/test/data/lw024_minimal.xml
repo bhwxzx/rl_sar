@@ -1,0 +1,8 @@
+<mujoco model="lw024_minimal">
+  <worldbody>
+    <body name="pendulum" pos="0 0 0.3">
+      <joint name="hinge" type="hinge" axis="0 1 0"/>
+      <geom type="capsule" size="0.03 0.2" mass="1"/>
+    </body>
+  </worldbody>
+</mujoco>

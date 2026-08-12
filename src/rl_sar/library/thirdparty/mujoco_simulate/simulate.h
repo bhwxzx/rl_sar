@@ -73,6 +73,10 @@ class Simulate {
   // requesting the UI load a model
   void LoadMessageClear(void);
 
+  // Request shutdown and release a simulation thread waiting for the render
+  // thread to accept a model.
+  void RequestExit(void);
+
   // functions below are used by the renderthread
   // load mjb or xml model that has been requested by load()
   void LoadOnRenderThread();

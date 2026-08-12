@@ -1960,7 +1960,7 @@ disable-before-preload boundary, but the normal deployment entry point does not.
 ## [LW-024] Joinable and bounded Sim2Sim physics lifecycle
 
 **Priority**: P1 / high
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-001, LW-021
 
 ### Problem
@@ -1996,6 +1996,35 @@ loop has no failure or timeout condition.
 - Repeated start/exit and injected initialization failures pass under a suitable
   sanitizer or deterministic lifecycle stress test.
 - No detached thread retains a pointer to an `RL_Real` or `Simulate` member.
+
+### Resolution
+
+- **Resolved**: 2026-08-12T13:33:29+08:00
+- **Commit**: 待本次提交
+- **Approved Scope**: 以 RAII 生命周期对象同步加载并唯一持有初始
+  `mjModel`/`mjData`，再通过有界启动握手启动可 join 的物理 worker；删除
+  `rl_sim_LW` 的 detached thread 和全局 `d` 无限轮询。为尚未启动或正在退出
+  的渲染循环增加可取消模型交接，所有正常、窗口、安全请求和异常路径均先停止
+  业务循环、唤醒并 join 物理 worker，之后才释放 MuJoCo 资源和 `Simulate`。
+  线程异常跨边界传播到主线程；无效场景保留文件名和 MuJoCo 诊断。保持 LW-021
+  的共享运行时及 S1–S4 安全动作语义，不处理 LW-028 的信号处理器重构。
+- **Changed Files**: `src/rl_sar/library/core/simulation/lw_joinable_worker.hpp`、
+  `src/rl_sar/library/thirdparty/mujoco_simulate/{mujoco_utils.hpp,simulate.h,simulate.cc}`、
+  `src/rl_sar/include/rl_sim_LW.hpp`、`src/rl_sar/src/rl_sim_LW.cpp`、
+  `src/rl_sar/test/{test_lw_joinable_worker.cpp,test_lw_mujoco_lifecycle.cpp,test_lw_sim_lifecycle_integration.py}`、
+  `src/rl_sar/test/data/lw024_minimal.xml`、`src/rl_sar/CMakeLists.txt`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 当前 Debug 全目标构建成功，`rl_sim_LW` 完成链接，完整
+  36/36 CTest 通过。全新 Release 构建成功，joinable worker、生命周期入口、
+  MuJoCo 同步和真实无窗口 MuJoCo 生命周期测试 4/4 通过。真实 MuJoCo 测试
+  覆盖无效场景诊断、渲染接管前取消、join、资源清空及幂等停止，连续 50 轮
+  确定性压力通过；通用 worker 覆盖正常停止、启动超时、注入启动/运行异常和
+  200 次内部重复生命周期，并在 AddressSanitizer/UndefinedBehaviorSanitizer
+  下连续 20 轮通过。ASan/UBSan 版本 `rl_sim_LW` 构建成功；严格警告构建在仅
+  降级 MuJoCo 既有 reorder、缺失初始化、未使用参数/函数和 sign-compare
+  类别后通过。定向 `cppcheck`、Python 集成测试和 `git diff --check` 通过。
+  未启动图形窗口、未访问真机硬件，也未改变 LW-028 信号处理器。
+- **Remaining Follow-ups**: none
 
 ---
 

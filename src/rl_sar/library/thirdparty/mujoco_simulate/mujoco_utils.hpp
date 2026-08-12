@@ -22,6 +22,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -29,6 +30,7 @@
 #include "glfw_adapter.h"
 #include "simulate.h"
 #include "array_safety.h"
+#include "lw_joinable_worker.hpp"
 
 #define MUJOCO_PLUGIN_DIR "mujoco_plugin"
 
@@ -269,7 +271,7 @@ mjModel* LoadModel(const char* file, mj::Simulate& sim) {
 }
 
 // simulate in background thread (while rendering in main thread)
-void PhysicsLoop(mj::Simulate& sim) {
+void PhysicsLoop(mj::Simulate& sim, mjModel*& model, mjData*& data) {
   // cpu-sim syncronization point
   std::chrono::time_point<mj::Simulate::Clock> syncCPU;
   mjtNum syncSim = 0;
@@ -286,15 +288,21 @@ void PhysicsLoop(mj::Simulate& sim) {
       if (dnew) {
         sim.Load(mnew, dnew, sim.dropfilename);
 
+        if (sim.exitrequest.load()) {
+          mj_deleteData(dnew);
+          mj_deleteModel(mnew);
+          break;
+        }
+
         // lock the sim mutex
         const std::unique_lock<std::recursive_mutex> lock(sim.mtx);
 
-        mj_deleteData(d);
-        mj_deleteModel(m);
+        mj_deleteData(data);
+        mj_deleteModel(model);
 
-        m = mnew;
-        d = dnew;
-        mj_forward(m, d);
+        model = mnew;
+        data = dnew;
+        mj_forward(model, data);
 
       } else {
         sim.LoadMessageClear();
@@ -310,15 +318,21 @@ void PhysicsLoop(mj::Simulate& sim) {
       if (dnew) {
         sim.Load(mnew, dnew, sim.filename);
 
+        if (sim.exitrequest.load()) {
+          mj_deleteData(dnew);
+          mj_deleteModel(mnew);
+          break;
+        }
+
         // lock the sim mutex
         const std::unique_lock<std::recursive_mutex> lock(sim.mtx);
 
-        mj_deleteData(d);
-        mj_deleteModel(m);
+        mj_deleteData(data);
+        mj_deleteModel(model);
 
-        m = mnew;
-        d = dnew;
-        mj_forward(m, d);
+        model = mnew;
+        data = dnew;
+        mj_forward(model, data);
 
       } else {
         sim.LoadMessageClear();
@@ -338,7 +352,7 @@ void PhysicsLoop(mj::Simulate& sim) {
       const std::unique_lock<std::recursive_mutex> lock(sim.mtx);
 
       // run only if model is present
-      if (m) {
+      if (model) {
         // running
         if (sim.run) {
           bool stepped = false;
@@ -348,7 +362,7 @@ void PhysicsLoop(mj::Simulate& sim) {
 
           // elapsed CPU and simulation time since last sync
           const auto elapsedCPU = startCPU - syncCPU;
-          double elapsedSim = d->time - syncSim;
+          double elapsedSim = data->time - syncSim;
 
           // requested slow-down factor
           double slowdown = 100 / sim.percentRealTime[sim.real_time_index];
@@ -362,12 +376,12 @@ void PhysicsLoop(mj::Simulate& sim) {
               misaligned || sim.speed_changed) {
             // re-sync
             syncCPU = startCPU;
-            syncSim = d->time;
+            syncSim = data->time;
             sim.speed_changed = false;
 
             // run single step, let next iteration deal with timing
-            mj_step(m, d);
-            const char* message = Diverged(m->opt.disableflags, d);
+            mj_step(model, data);
+            const char* message = Diverged(model->opt.disableflags, data);
             if (message) {
               sim.run = 0;
               mju::strcpy_arr(sim.load_error, message);
@@ -379,12 +393,12 @@ void PhysicsLoop(mj::Simulate& sim) {
           // in-sync: step until ahead of cpu
           else {
             bool measured = false;
-            mjtNum prevSim = d->time;
+            mjtNum prevSim = data->time;
 
             double refreshTime = simRefreshFraction/sim.refresh_rate;
 
             // step while sim lags behind cpu and within refreshTime
-            while (Seconds((d->time - syncSim)*slowdown) < mj::Simulate::Clock::now() - syncCPU &&
+            while (Seconds((data->time - syncSim)*slowdown) < mj::Simulate::Clock::now() - syncCPU &&
                    mj::Simulate::Clock::now() - startCPU < Seconds(refreshTime)) {
               // measure slowdown before first step
               if (!measured && elapsedSim) {
@@ -397,8 +411,8 @@ void PhysicsLoop(mj::Simulate& sim) {
               sim.InjectNoise();
 
               // call mj_step
-              mj_step(m, d);
-              const char* message = Diverged(m->opt.disableflags, d);
+              mj_step(model, data);
+              const char* message = Diverged(model->opt.disableflags, data);
               if (message) {
                 sim.run = 0;
                 mju::strcpy_arr(sim.load_error, message);
@@ -407,7 +421,7 @@ void PhysicsLoop(mj::Simulate& sim) {
               }
 
               // break if reset
-              if (d->time < prevSim) {
+              if (data->time < prevSim) {
                 break;
               }
             }
@@ -422,7 +436,7 @@ void PhysicsLoop(mj::Simulate& sim) {
         // paused
         else {
           // run mj_forward, to update rendering and joint sliders
-          mj_forward(m, d);
+          mj_forward(model, data);
           sim.speed_changed = true;
         }
       }
@@ -432,6 +446,102 @@ void PhysicsLoop(mj::Simulate& sim) {
 }  // namespace
 
 //-------------------------------------- physics_thread --------------------------------------------
+
+class LWMuJoCoPhysicsLifecycle
+{
+public:
+  explicit LWMuJoCoPhysicsLifecycle(mj::Simulate& sim)
+      : sim_(sim), worker_([this]() { sim_.RequestExit(); }) {}
+
+  ~LWMuJoCoPhysicsLifecycle() {
+    Stop();
+  }
+
+  LWMuJoCoPhysicsLifecycle(const LWMuJoCoPhysicsLifecycle&) = delete;
+  LWMuJoCoPhysicsLifecycle& operator=(const LWMuJoCoPhysicsLifecycle&) = delete;
+
+  void Start(const std::string& filename) {
+    if (model_ || data_ || worker_.joinable()) {
+      throw std::logic_error("MuJoCo physics lifecycle is already started");
+    }
+
+    sim_.LoadMessage(filename.c_str());
+    mjModel* loaded_model = LoadModel(filename.c_str(), sim_);
+    if (!loaded_model) {
+      sim_.LoadMessageClear();
+      const std::string detail = sim_.load_error[0]
+          ? sim_.load_error
+          : "MuJoCo returned no model";
+      throw std::runtime_error(
+          "Failed to load MuJoCo scene '" + filename + "': " + detail);
+    }
+
+    mjData* loaded_data = mj_makeData(loaded_model);
+    if (!loaded_data) {
+      mj_deleteModel(loaded_model);
+      sim_.LoadMessageClear();
+      throw std::runtime_error(
+          "Failed to allocate MuJoCo data for scene '" + filename + "'");
+    }
+
+    {
+      const std::unique_lock<std::recursive_mutex> lock(sim_.mtx);
+      model_ = loaded_model;
+      data_ = loaded_data;
+    }
+
+    try {
+      worker_.start(
+          []() {},
+          [this, filename]() {
+            sim_.Load(model_, data_, filename.c_str());
+            if (sim_.exitrequest.load()) {
+              return;
+            }
+            {
+              const std::unique_lock<std::recursive_mutex> lock(sim_.mtx);
+              mj_forward(model_, data_);
+            }
+            PhysicsLoop(sim_, model_, data_);
+          },
+          std::chrono::seconds(2));
+    } catch (...) {
+      Stop();
+      throw;
+    }
+  }
+
+  void Stop() noexcept {
+    worker_.shutdown();
+
+    const std::unique_lock<std::recursive_mutex> lock(sim_.mtx);
+    if (sim_.m_ == model_) {
+      sim_.m_ = nullptr;
+      sim_.d_ = nullptr;
+    }
+    if (sim_.mnew_ == model_) {
+      sim_.mnew_ = nullptr;
+      sim_.dnew_ = nullptr;
+    }
+    mj_deleteData(data_);
+    mj_deleteModel(model_);
+    data_ = nullptr;
+    model_ = nullptr;
+  }
+
+  mjModel* model() const noexcept { return model_; }
+  mjData* data() const noexcept { return data_; }
+
+  void RethrowWorkerError() const {
+    worker_.rethrowWorkerError();
+  }
+
+private:
+  mj::Simulate& sim_;
+  LWJoinableWorker worker_;
+  mjModel* model_ = nullptr;
+  mjData* data_ = nullptr;
+};
 
 void PhysicsThread(mj::Simulate* sim, const char* filename) {
   // request loadmodel if file given (otherwise drag-and-drop)
@@ -447,6 +557,14 @@ void PhysicsThread(mj::Simulate* sim, const char* filename) {
     if (d) {
       sim->Load(m, d, filename);
 
+      if (sim->exitrequest.load()) {
+        mj_deleteData(d);
+        mj_deleteModel(m);
+        d = nullptr;
+        m = nullptr;
+        return;
+      }
+
       // lock the sim mutex
       const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
 
@@ -457,7 +575,7 @@ void PhysicsThread(mj::Simulate* sim, const char* filename) {
     }
   }
 
-  PhysicsLoop(*sim);
+  PhysicsLoop(*sim, m, d);
 
   // delete everything we allocated
   mj_deleteData(d);

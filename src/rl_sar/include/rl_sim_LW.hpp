@@ -43,6 +43,8 @@ public:
     std::shared_ptr<rclcpp::Node> ros2_node;
     std::unique_ptr<mj::Simulate> sim;
     static RL_Real* instance;
+    void RequestSimulationStop() noexcept;
+    void RethrowPhysicsError() const;
 
 private:
     // rl functions
@@ -79,9 +81,11 @@ private:
     mjvCamera cam;
     mjvOption opt;
     mjvPerturb pert;
-    mjData *mj_data;
-    mjModel *mj_model;
+    mjData *mj_data = nullptr;
+    mjModel *mj_model = nullptr;
+    std::unique_ptr<LWMuJoCoPhysicsLifecycle> physics_lifecycle_;
     std::string scene_name;
+    void RefreshMuJoCoPointersLocked() noexcept;
 
     // LW interface
     LWSDK lw_sdk;

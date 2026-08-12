@@ -2150,7 +2150,9 @@ void Simulate::Load(mjModel* m, mjData* d, const char* displayed_filename) {
     // Wait for the render thread to be done loading
     // so that we know the old model and data's memory can
     // be free'd by the other thread (sometimes python)
-    cond_loadrequest.wait(lock, [this]() { return this->loadrequest == 0; });
+    cond_loadrequest.wait(lock, [this]() {
+      return this->loadrequest == 0 || this->exitrequest.load();
+    });
   }
 }
 
@@ -2159,6 +2161,16 @@ void Simulate::LoadMessageClear(void) {
     MutexLock lock(mtx);
     this->loadrequest = 0;
   }
+}
+
+void Simulate::RequestExit(void) {
+  {
+    MutexLock lock(mtx);
+    this->run = 0;
+    this->exitrequest.store(1);
+    this->loadrequest = 0;
+  }
+  cond_loadrequest.notify_all();
 }
 
 
@@ -2734,6 +2746,8 @@ void Simulate::RenderLoop() {
   }
 
   this->exitrequest.store(2);
+  this->loadrequest = 0;
+  cond_loadrequest.notify_all();
 }
 
 // add state to history buffer

@@ -71,9 +71,6 @@ RL_Real::RL_Real(int argc, char **argv)
     //     [this] (const sensor_msgs::msg::Imu::SharedPtr imu_msg) {this->ImuCallback(imu_msg);}
     // );
 
-    // Set static instance pointer early for signal handler
-    instance = this;
-
     // scan for libraries in the plugin directory to load additional plugins
     scanPluginLibraries();
 
@@ -92,24 +89,13 @@ RL_Real::RL_Real(int argc, char **argv)
     this->scene_name = "scene"; // "scene" "scene_terrain"
     std::string filename = std::string(CMAKE_CURRENT_SOURCE_DIR) + "/../rl_sar_zoo/" + this->robot_name + "_description/mjcf/" + this->scene_name + ".xml";
 
-    // start physics thread
-    std::thread physicsthreadhandle(&PhysicsThread, sim.get(), filename.c_str());
-    physicsthreadhandle.detach();
-
-    while (1)
+    physics_lifecycle_ = std::make_unique<LWMuJoCoPhysicsLifecycle>(*sim);
+    physics_lifecycle_->Start(filename);
     {
-        {
-            const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
-            if (d)
-            {
-                this->mj_model = m;
-                this->mj_data = d;
-                std::cout << LOGGER::INFO << "[MuJoCo] Data prepared" << std::endl;
-                break;
-            }
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
+        RefreshMuJoCoPointersLocked();
     }
+    std::cout << LOGGER::INFO << "[MuJoCo] Data prepared" << std::endl;
 
     this->SetupSysJoystick("/dev/input/js1", 16);
 
@@ -249,17 +235,47 @@ RL_Real::RL_Real(int argc, char **argv)
     this->CSVInit(this->robot_name);
 #endif
 
+    instance = this;
+
 }
 
 RL_Real::~RL_Real()
 {
     runtime_core_.reportSafetyEvent(LWSafetyEvent::NormalShutdown);
     instance = nullptr;
-    this->loop_joystick->shutdown();
-    this->loop_rl->shutdown();
     this->loop_control->shutdown();
+    this->loop_rl->shutdown();
+    this->loop_joystick->shutdown();
+    if (physics_lifecycle_)
+    {
+        physics_lifecycle_->Stop();
+    }
+    mj_data = nullptr;
+    mj_model = nullptr;
     //disable_lw_robot();
     std::cout << LOGGER::INFO << "RL_Real exit" << std::endl;
+}
+
+void RL_Real::RequestSimulationStop() noexcept
+{
+    if (sim)
+    {
+        sim->RequestExit();
+    }
+}
+
+void RL_Real::RethrowPhysicsError() const
+{
+    if (physics_lifecycle_)
+    {
+        physics_lifecycle_->RethrowWorkerError();
+    }
+}
+
+void RL_Real::RefreshMuJoCoPointersLocked() noexcept
+{
+    mj_model = physics_lifecycle_ ? physics_lifecycle_->model() : nullptr;
+    mj_data = physics_lifecycle_ ? physics_lifecycle_->data() : nullptr;
 }
 
 void RL_Real::jointstate_plot_callback(void)
@@ -274,8 +290,7 @@ void RL_Real::jointstate_plot_callback(void)
         return;
     }
     const std::unique_lock<std::recursive_mutex> simulation_lock(sim->mtx);
-    mj_model = m;
-    mj_data = d;
+    RefreshMuJoCoPointersLocked();
     if (!mj_model || !mj_data)
     {
         return;
@@ -538,8 +553,7 @@ void RL_Real::ZeroActiveMuJoCoActuators() noexcept
     try
     {
         const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
-        mj_model = m;
-        mj_data = d;
+        RefreshMuJoCoPointersLocked();
         if (!mj_model || !mj_data)
         {
             return;
@@ -601,8 +615,7 @@ void RL_Real::ApplySimulationControls()
         return;
     }
     const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
-    mj_model = m;
-    mj_data = d;
+    RefreshMuJoCoPointersLocked();
     if (this->control.current_keyboard == Input::Keyboard::R || this->control.current_gamepad == Input::Gamepad::RB_Y)
     {
         if (this->mj_model && this->mj_data)
@@ -816,8 +829,7 @@ void RL_Real::GetState(RobotState<float> *state)
         return;
     }
     const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
-    mj_model = m;
-    mj_data = d;
+    RefreshMuJoCoPointersLocked();
     if (mj_data)
     {
         // xml的sensor顺序为： jointpos jointvel jointtorque quat gyro accmeter
@@ -883,8 +895,7 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
     if (sim)
     {
         const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
-        mj_model = m;
-        mj_data = d;
+        RefreshMuJoCoPointersLocked();
         if (!mj_data)
         {
             ApplySafetyEvent(
@@ -1266,20 +1277,84 @@ void signalHandler(int signum)
 
 int main(int argc, char **argv)
 {
-    rclcpp::init(argc, argv);
-    auto rl_sar = std::make_shared<RL_Real>(argc, argv);
-    std::thread ros_thread([&]() {
-        rclcpp::spin(rl_sar->ros2_node);
-    });
+    try
+    {
+        rclcpp::init(argc, argv);
+        auto rl_sar = std::make_shared<RL_Real>(argc, argv);
+        std::exception_ptr ros_error;
+        std::thread ros_thread([&]() {
+            try
+            {
+                rclcpp::spin(rl_sar->ros2_node);
+            }
+            catch (...)
+            {
+                ros_error = std::current_exception();
+                rl_sar->RequestSimulationStop();
+            }
+        });
 
-    signal(SIGINT, signalHandler);
-    if (rl_sar->sim) {
-        rl_sar->sim->RenderLoop(); 
+        std::exception_ptr main_thread_error;
+        try
+        {
+            signal(SIGINT, signalHandler);
+            if (rl_sar->sim)
+            {
+                rl_sar->sim->RenderLoop();
+            }
+        }
+        catch (...)
+        {
+            main_thread_error = std::current_exception();
+            rl_sar->RequestSimulationStop();
+        }
+
+        try
+        {
+            rclcpp::shutdown();
+        }
+        catch (...)
+        {
+            if (!main_thread_error)
+            {
+                main_thread_error = std::current_exception();
+            }
+            rl_sar->RequestSimulationStop();
+        }
+        if (ros_thread.joinable())
+        {
+            ros_thread.join();
+        }
+        rl_sar->RethrowPhysicsError();
+        if (ros_error)
+        {
+            std::rethrow_exception(ros_error);
+        }
+        if (main_thread_error)
+        {
+            std::rethrow_exception(main_thread_error);
+        }
     }
-
-    rclcpp::shutdown();
-    if (ros_thread.joinable()) {
-        ros_thread.join();
+    catch (const std::exception& error)
+    {
+        if (rclcpp::ok())
+        {
+            rclcpp::shutdown();
+        }
+        std::cerr << LOGGER::ERROR
+                  << "[LW Sim2Sim] Fatal lifecycle error: "
+                  << error.what() << std::endl;
+        return 1;
+    }
+    catch (...)
+    {
+        if (rclcpp::ok())
+        {
+            rclcpp::shutdown();
+        }
+        std::cerr << LOGGER::ERROR
+                  << "[LW Sim2Sim] Unknown lifecycle error" << std::endl;
+        return 1;
     }
     return 0;
 }

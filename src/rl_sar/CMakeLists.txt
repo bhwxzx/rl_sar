@@ -325,6 +325,20 @@ find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(test_lw_joinable_worker
+        test/test_lw_joinable_worker.cpp
+    )
+    target_include_directories(test_lw_joinable_worker PRIVATE
+        library/core/simulation
+    )
+    target_link_libraries(test_lw_joinable_worker PRIVATE Threads::Threads)
+    add_test(NAME lw_joinable_worker COMMAND test_lw_joinable_worker)
+    add_test(
+        NAME lw_sim_lifecycle_integration
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/test/test_lw_sim_lifecycle_integration.py
+    )
+
     add_executable(test_loop_lifecycle
         test/test_loop_lifecycle.cpp
     )
@@ -486,6 +500,7 @@ include_directories(
     library/core/motion_loader
     library/core/inference_runtime
     library/core/logger
+    library/core/simulation
     fsm_robot
 )
 
@@ -861,6 +876,32 @@ if(SYSTEM_TYPE STREQUAL "Linux"
             add_test(
                 NAME lw_mujoco_synchronization
                 COMMAND test_lw_mujoco_synchronization
+            )
+
+            add_executable(
+                test_lw_mujoco_lifecycle
+                test/test_lw_mujoco_lifecycle.cpp
+                library/thirdparty/mujoco_simulate/platform_ui_adapter.cc
+                library/thirdparty/mujoco_simulate/simulate.cc
+            )
+            target_compile_definitions(
+                test_lw_mujoco_lifecycle
+                PRIVATE
+                    "LW_TEST_SCENE=\"${CMAKE_CURRENT_SOURCE_DIR}/test/data/lw024_minimal.xml\""
+            )
+            target_include_directories(
+                test_lw_mujoco_lifecycle
+                PRIVATE
+                    library/core/simulation
+                    library/thirdparty/mujoco_simulate
+            )
+            target_link_libraries(
+                test_lw_mujoco_lifecycle
+                PRIVATE mujoco_prebuilt Threads::Threads
+            )
+            add_test(
+                NAME lw_mujoco_lifecycle
+                COMMAND test_lw_mujoco_lifecycle
             )
         endif()
         ament_target_dependencies(rl_sim_LW
