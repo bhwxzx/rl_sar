@@ -553,10 +553,21 @@ if(USE_TORCH)
         target_link_libraries(inference_runtime PUBLIC ${OPENMP_LIBRARIES})
     endif()
 endif()
+
 if(USE_ONNX)
     target_link_libraries(inference_runtime PUBLIC ${ONNX_RUNTIME_LIB})
     target_compile_definitions(inference_runtime PRIVATE USE_ONNX)
 endif()
+
+add_library(
+    lw_actuator_models
+    library/core/simulation/lw_actuator_models.cpp
+)
+target_include_directories(lw_actuator_models PUBLIC
+    library/core/inference_runtime
+    library/core/simulation
+)
+target_link_libraries(lw_actuator_models PUBLIC inference_runtime)
 if(NOT USE_CMAKE)
     if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
         install(TARGETS inference_runtime DESTINATION lib/${PROJECT_NAME})
@@ -791,6 +802,16 @@ if(BUILD_TESTING)
     )
 
     add_executable(
+        test_lw_actuator_models
+        test/test_lw_actuator_models.cpp
+    )
+    target_link_libraries(
+        test_lw_actuator_models
+        PRIVATE lw_actuator_models
+    )
+    add_test(NAME lw_actuator_models COMMAND test_lw_actuator_models)
+
+    add_executable(
         test_lw_config_profile
         test/test_lw_config_profile.cpp
     )
@@ -880,7 +901,8 @@ if(SYSTEM_TYPE STREQUAL "Linux"
         )
 
         target_link_libraries(rl_sim_LW
-            rl_sdk observation_buffer ${YAML_CPP_LIBRARIES} LW_sdk
+            rl_sdk observation_buffer lw_actuator_models
+            ${YAML_CPP_LIBRARIES} LW_sdk
             Threads::Threads mujoco_prebuilt glfw
         )
         if(BUILD_TESTING)

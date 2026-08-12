@@ -64,6 +64,19 @@ source install/setup.bash
 ros2 run rl_sar rl_sim_LW
 ```
 
+Optional TorchScript actuator models can be enabled with:
+
+```bash
+ros2 run rl_sar rl_sim_LW \
+    --policy-root /absolute/path/to/policy \
+    --use_actuator_net
+```
+
+Both actuator models are resolved exclusively below the selected policy root
+at `LW/robot_lab/motors/{leg,foot}_actuator_net.pt`. Startup reports both
+resolved paths and fails if either model is missing, cannot load, or violates
+the expected six-input/one-output contract.
+
 The simulator loads
 `src/rl_sar_zoo/LW_description/mjcf/scene.xml`. The terrain scene and its
 height map are tracked in the same package and are covered by a headless model

@@ -95,7 +95,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 22 | LW-021 | P1 / high | resolved | Make Sim2Sim and real deployment share one testable control and safety core |
 | 23 | LW-022 | P1 / high | resolved | Measure suspended real-runtime behavior and generate review-only configuration candidates |
 | 24 | LW-028 | P2 / medium | resolved | Replace unsafe Sim2Sim signal-handler work with a signal-safe shutdown request |
-| 25 | LW-029 | P2 / medium | pending | Resolve optional actuator models through the selected Sim2Sim policy root |
+| 25 | LW-029 | P2 / medium | resolved | Resolve optional actuator models through the selected Sim2Sim policy root |
 | 26 | LW-030 | P2 / medium | pending | Keep inhibited commands and gait-phase observations coherent |
 | 27 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
 | 28 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
@@ -2312,7 +2312,7 @@ arriving during those operations can deadlock or race with destruction.
 ## [LW-029] Sim2Sim actuator-model policy-root consistency
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-010, LW-021
 
 ### Problem
@@ -2344,6 +2344,35 @@ policy root is complete.
 - Tests demonstrate relocation, missing-model rejection, and consistent model
   selection without requiring a GUI run.
 - Startup diagnostics identify the exact resolved actuator-model paths.
+
+### Resolution
+
+- **Resolved**: 2026-08-12T19:32:04+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 将 Sim2Sim 可选执行器模型解析集中到独立组件，并以
+  `SetPolicyRoot()` 保存的规范化策略根作为唯一来源。启用
+  `--use_actuator_net` 时固定解析
+  `LW/robot_lab/motors/{leg,foot}_actuator_net.pt`，逐项记录最终绝对路径，
+  任一文件缺失、TorchScript 加载失败、拒绝 6 维输入、未产生恰好一个输出或
+  产生非有限输出都会抛出带模型路径的启动错误；未启用该选项时仍不要求这两个
+  可选资产。未修改真机执行路径。
+- **Changed Files**: `src/rl_sar/library/core/simulation/lw_actuator_models.{hpp,cpp}`、
+  `src/rl_sar/src/rl_sim_LW.cpp`、`src/rl_sar/include/rl_sim_LW.hpp`、
+  `src/rl_sar/test/{test_lw_actuator_models.cpp,test_lw_sim_lifecycle_integration.py}`、
+  `src/rl_sar/CMakeLists.txt`、`README.md`、`README_CN.md`、
+  `docs/LW_BUILD_DEPLOYMENT_CN.md`、`.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 当前 Debug 工作树完整构建并通过 38/38 CTest。新增无 GUI
+  测试把仓库实际 leg/foot `.pt` 文件复制到临时搬迁策略根并从该根成功加载、
+  预热，同时确认所选根缺少 foot 文件而编译期根仍有同名文件时会明确拒绝、
+  不会回退；伪模型覆盖未加载、非 TorchScript、6 维输入不兼容、多输出和非有限
+  输出。当前仓库两个原始模型也通过相同 6→1 契约。独立 Release 构建
+  `rl_sim_LW` 和测试目标并通过 2/2 定向 CTest；新组件与测试在
+  `-Wall -Wextra -Wpedantic -Werror` 下构建并通过。ASan/UBSan 测试逻辑完成，
+  禁用泄漏检测后无地址或未定义行为报告；启用 LeakSanitizer 时测试已打印通过，
+  但进程退出阶段在 Conda `libstdc++` 的 `std::filesystem` 路径中报告 707 字节
+  残留。定向 `cppcheck`、Python 严格语法和 `git diff --check` 通过。未启动
+  MuJoCo GUI、真机节点，未访问串口或电机。
+- **Remaining Follow-ups**: none
 
 ---
 

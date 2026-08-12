@@ -150,6 +150,20 @@ source "$RL_SAR_ROOT/install/setup.bash"
 ros2 run rl_sar rl_sim_LW
 ```
 
+需要可选执行器网络时，策略根必须同时包含四套主策略以及两个 `.pt` 模型：
+
+```bash
+ros2 run rl_sar rl_sim_LW \
+    --policy-root /absolute/path/to/policy \
+    --use_actuator_net
+```
+
+两个模型固定解析为所选策略根下的
+`LW/robot_lab/motors/{leg,foot}_actuator_net.pt`，不会回退到编译期策略目录。
+启动日志会分别显示最终绝对路径；任一文件缺失、无法加载，或不满足 6 维输入和
+单值有限输出契约时，Sim2Sim 会明确报错并终止。未指定
+`--use_actuator_net` 时，这两个模型仍是可选资产。
+
 关闭 MuJoCo 窗口或按 `Ctrl+C` 都会进入同一条正常线程关闭路径：先请求渲染循环
 退出，再关闭 ROS，并按顺序等待业务线程和物理线程结束。`SIGINT` 在任何工作
 线程创建前被阻塞，由专用可联结线程同步等待；重复按键只产生一次关闭请求，

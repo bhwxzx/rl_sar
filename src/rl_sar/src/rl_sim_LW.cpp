@@ -124,17 +124,18 @@ RL_Real::RL_Real(int argc, char **argv)
         }
     }
 
-    // 如果开启了执行器网络，加载 ONNX 并初始化 Buffer
+    // 如果开启了执行器网络，加载 TorchScript 并初始化 Buffer
     if (this->use_actuator_net_) {
-        // 这里的路径请根据实际情况修改
-        std::string leg_mlp_path = std::string(POLICY_DIR) + "/" + this->robot_name + "/robot_lab/motors/leg_actuator_net.pt";
-        std::string foot_mlp_path = std::string(POLICY_DIR) + "/" + this->robot_name + "/robot_lab/motors/foot_actuator_net.pt";
-        this->leg_actuator_model_ = InferenceRuntime::ModelFactory::load_model(leg_mlp_path);
-        this->foot_actuator_model_ = InferenceRuntime::ModelFactory::load_model(foot_mlp_path);
-        
-        if (!this->leg_actuator_model_ || !this->foot_actuator_model_) {
-            std::cout << LOGGER::ERROR << "Failed to load Actuator Network ONNX!" << std::endl;
-        }
+        const LWActuatorModelPaths actuator_paths =
+            ResolveLWActuatorModelPaths(policy_root_, this->robot_name);
+        std::cout << LOGGER::INFO << "Loading leg actuator model: "
+                  << actuator_paths.leg << std::endl;
+        std::cout << LOGGER::INFO << "Loading foot actuator model: "
+                  << actuator_paths.foot << std::endl;
+        this->leg_actuator_model_ =
+            LoadLWActuatorModel(actuator_paths.leg);
+        this->foot_actuator_model_ =
+            LoadLWActuatorModel(actuator_paths.foot);
 
         int num_dofs = this->params.Get<int>("num_of_dofs");
         int decimation = this->params.Get<int>("decimation");

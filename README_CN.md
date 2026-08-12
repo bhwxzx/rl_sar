@@ -47,7 +47,10 @@ sudo 密码。普通 x86_64 开发机构建会准备 LibTorch 和 ONNX Runtime�
 
 这里的 LibTorch 是 C++ 版 PyTorch，供 Sim2Sim 可选的
 `--use_actuator_net` 加载 `.pt` 执行器模型。训练脚本使用的 Python `torch`
-不是编译依赖，不由 `build.sh` 通过 pip 修改用户 Python 环境。
+不是编译依赖，不由 `build.sh` 通过 pip 修改用户 Python 环境。启用执行器网络时，
+两个模型只会从 `--policy-root` 选定目录下的
+`LW/robot_lab/motors/{leg,foot}_actuator_net.pt` 加载；缺失或契约不兼容会使
+Sim2Sim 启动失败，不会回退到编译期策略目录。
 
 ```bash
 ROS_DISTRO=humble scripts/install_build_dependencies.sh --print-packages

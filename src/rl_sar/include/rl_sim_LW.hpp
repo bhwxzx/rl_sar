@@ -14,6 +14,7 @@
 #include "inference_runtime.hpp"
 #include "loop.hpp"
 #include "lw_control_safety.hpp"
+#include "lw_actuator_models.hpp"
 #include "lw_joystick_safety.hpp"
 #include "lw_loop_config.hpp"
 #include "lw_runtime_core.hpp"

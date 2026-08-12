@@ -109,6 +109,27 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
             main.index("shutdown_coordinator.Unbind();"),
         )
 
+    def test_optional_actuator_models_follow_the_selected_policy_root(self) -> None:
+        source = SIM_SOURCE.read_text(encoding="utf-8")
+        constructor = source[
+            source.index("RL_Real::RL_Real(") : source.index("RL_Real::~RL_Real()")
+        ]
+        actuator_block = constructor[
+            constructor.index("if (this->use_actuator_net_)") : constructor.index(
+                "// auto load FSM"
+            )
+        ]
+
+        self.assertIn(
+            "ResolveLWActuatorModelPaths(policy_root_, this->robot_name)",
+            actuator_block,
+        )
+        self.assertIn("LoadLWActuatorModel(actuator_paths.leg)", actuator_block)
+        self.assertIn("LoadLWActuatorModel(actuator_paths.foot)", actuator_block)
+        self.assertNotIn("POLICY_DIR", actuator_block)
+        self.assertIn("Loading leg actuator model:", actuator_block)
+        self.assertIn("Loading foot actuator model:", actuator_block)
+
 
 if __name__ == "__main__":
     unittest.main()
