@@ -17,6 +17,7 @@
 #include "lw_loop_config.hpp"
 #include "lw_runtime_core.hpp"
 #include "lw_safety_policy.hpp"
+#include "lw_startup_disable.hpp"
 #include "lw_terminal_keyboard.hpp"
 #include "lw_debug_publisher.hpp"
 #include "fsm_LW.hpp"
@@ -39,7 +40,11 @@
 class RL_Real : public RL
 {
 public:
-    RL_Real(int argc, char **argv, const std::string& policy_root);
+    RL_Real(
+        int argc,
+        char **argv,
+        const std::string& policy_root,
+        LWStartupDisableGuard& startup_disable);
     ~RL_Real();
 
     std::shared_ptr<rclcpp::Node> ros2_node;
@@ -79,10 +84,11 @@ private:
     std::unique_ptr<LWTerminalKeyboard> terminal_keyboard_;
 
     // LW interface
-    LWSDK lw_sdk;
+    // main() owns this guard and constructs it before ROS initialization.
+    // RL_Real is destroyed before the guard leaves main()'s scope.
+    LWStartupDisableGuard* startup_disable_ = nullptr;
     LowCmd lw_low_command = {0};
     LowState lw_low_state = {0};
-    CommandGate command_gate_;
     LWRuntimeCore runtime_core_;
     std::atomic<bool> fatal_error_latched_{false};
     std::atomic<bool> shutdown_requested_{false};

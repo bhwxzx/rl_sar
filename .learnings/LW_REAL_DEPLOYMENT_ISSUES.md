@@ -53,32 +53,55 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 - Existing issue IDs remain stable; only the authoritative execution order and
   risk-based priorities changed.
 
+## Post-remediation Review Addendum
+
+- Reviewed: 2026-08-12
+- Repository HEAD during review: `57f184e`
+- Review scope: all changes from `6761b82` through `57f184e`, including the
+  shared LW runtime, real and Sim2Sim adapters, input handling, deployment
+  bundle, Jetson build path, and suspended configuration profiler.
+- Verification: the current root build completed and its full 31/31 CTest suite
+  passed; the configuration analyzer's 8/8 unit tests, Bash syntax checks, and
+  `git diff --check` passed. A warning-enabled build and targeted `cppcheck`
+  inspection were also run.
+- No robot node or serial device was started and no motor command was sent.
+- The review confirmed the pending issues `LW-023` through `LW-031` below.
+
 ## Ordered Summary
 
 | Order | ID | Priority | Status | Summary |
 |---:|---|---|---|---|
-| 1 | LW-001 | P0 / critical | resolved | Make control-loop shutdown and exception handling fail-safe |
-| 2 | LW-002 | P0 / critical | resolved | Require valid, fresh IMU and bilateral motor feedback before commanding |
-| 3 | LW-003 | P0 / critical | resolved | Repair serial receive parsing and complete-write handling |
-| 4 | LW-004 | P0 / critical | resolved | Remove invalid FSM transition targets and validate all transitions |
-| 5 | LW-005 | P0 / critical | resolved | Enforce finite commands and state-aware attitude protection |
-| 6 | LW-006 | P0 / critical | resolved | Latch joystick disconnects, clear commands, and validate indices |
-| 7 | LW-007 | P1 / high | resolved | Remove cross-thread data races with coherent snapshots |
-| 8 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
-| 9 | LW-009 | P1 / high | resolved | Use the configured 60 Hz wheel-to-leg reference rate |
-| 10 | LW-010 | P1 / high | resolved | Make deployed binary, configuration, and models reproducible |
-| 11 | LW-016 | P1 / high | resolved | Audit every safety trigger for proportional and recoverable behavior |
-| 12 | LW-013 | P1 / high | resolved | Validate YAML, mappings, observation sizes, and model outputs |
-| 13 | LW-011 | P1 / high | resolved | Make the control loop suitable for deterministic real-time execution |
-| 14 | LW-017 | P1 / high | resolved | Bundle and verify the LW IMU/serial runtime dependencies |
-| 15 | LW-019 | P1 / high | resolved | Enable a real-robot terminal keyboard recovery channel |
-| 16 | LW-020 | P1 / high | resolved | Make the Jetson production inference bootstrap architecture-safe and ONNX-only |
-| 17 | LW-021 | P1 / high | resolved | Make Sim2Sim and real deployment share one testable control and safety core |
-| 18 | LW-022 | P1 / high | resolved | Measure suspended real-runtime behavior and generate review-only configuration candidates |
-| 19 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
-| 20 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
-| 21 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
-| 22 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
+| 1 | LW-023 | P0 / critical | resolved | Disable an enabled-on-power STM32 before fallible real-node startup work |
+| 2 | LW-001 | P0 / critical | resolved | Make control-loop shutdown and exception handling fail-safe |
+| 3 | LW-002 | P0 / critical | resolved | Require valid, fresh IMU and bilateral motor feedback before commanding |
+| 4 | LW-003 | P0 / critical | resolved | Repair serial receive parsing and complete-write handling |
+| 5 | LW-004 | P0 / critical | resolved | Remove invalid FSM transition targets and validate all transitions |
+| 6 | LW-005 | P0 / critical | resolved | Enforce finite commands and state-aware attitude protection |
+| 7 | LW-006 | P0 / critical | resolved | Latch joystick disconnects, clear commands, and validate indices |
+| 8 | LW-024 | P1 / high | pending | Make the Sim2Sim physics-thread lifecycle bounded and joinable |
+| 9 | LW-025 | P1 / high | pending | Preserve keyboard velocity commands instead of replacing them every control cycle |
+| 10 | LW-026 | P1 / high | pending | Bind configuration candidates to one exact deployment and comparable reports |
+| 11 | LW-027 | P1 / high | pending | Make the ONNX Runtime dependency reproducible and integrity-verified |
+| 12 | LW-007 | P1 / high | resolved | Remove cross-thread data races with coherent snapshots |
+| 13 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
+| 14 | LW-009 | P1 / high | resolved | Use the configured 60 Hz wheel-to-leg reference rate |
+| 15 | LW-010 | P1 / high | resolved | Make deployed binary, configuration, and models reproducible |
+| 16 | LW-016 | P1 / high | resolved | Audit every safety trigger for proportional and recoverable behavior |
+| 17 | LW-013 | P1 / high | resolved | Validate YAML, mappings, observation sizes, and model outputs |
+| 18 | LW-011 | P1 / high | resolved | Make the control loop suitable for deterministic real-time execution |
+| 19 | LW-017 | P1 / high | resolved | Bundle and verify the LW IMU/serial runtime dependencies |
+| 20 | LW-019 | P1 / high | resolved | Enable a real-robot terminal keyboard recovery channel |
+| 21 | LW-020 | P1 / high | resolved | Make the Jetson production inference bootstrap architecture-safe and ONNX-only |
+| 22 | LW-021 | P1 / high | resolved | Make Sim2Sim and real deployment share one testable control and safety core |
+| 23 | LW-022 | P1 / high | resolved | Measure suspended real-runtime behavior and generate review-only configuration candidates |
+| 24 | LW-028 | P2 / medium | pending | Replace unsafe Sim2Sim signal-handler work with a signal-safe shutdown request |
+| 25 | LW-029 | P2 / medium | pending | Resolve optional actuator models through the selected Sim2Sim policy root |
+| 26 | LW-030 | P2 / medium | pending | Keep inhibited commands and gait-phase observations coherent |
+| 27 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
+| 28 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
+| 29 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
+| 30 | LW-031 | P2 / low | pending | Restore a warning-clean strict build for maintained LW code and tests |
+| 31 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
 
 ---
 
@@ -1283,7 +1306,7 @@ for each sample.
 ### Resolution
 
 - **Resolved**: 2026-08-11T12:01:35+08:00
-- **Commit**: 待本次提交
+- **Commit**: 本提交
 - **Approved Scope**: 将 LW 实机调试发布改为默认关闭的显式 ROS/launch
   参数；保留 LW-007 的一致快照和非阻塞发布边界；逐条刷新消息时间戳；关闭时
   不创建 publisher、定时器或控制线程调试快照。
@@ -1854,6 +1877,401 @@ hard-disable behavior; neither can be selected from latency samples alone.
   目标 Jetson 的 CPU/实时数据及吊装硬件数据必须按中文文档现场采集，不能由
   当前无硬件验收替代。
 - **Remaining Follow-ups**: none
+
+---
+
+## [LW-023] Disable-before-startup safety boundary
+
+**Priority**: P0 / critical
+**Status**: resolved
+**Dependencies**: LW-010, LW-017, LW-020
+
+### Problem
+
+The deployed STM32 enables motors at power-on, but the normal real-robot node
+does not open the two motor-board serial ports or send its first disable packet
+until after ROS/input setup, YAML validation, and all four policies and policy
+contexts have been preloaded. A missing model, invalid configuration, terminal
+failure, allocation failure, or other exception before serial initialization
+can therefore leave the powered hardware enabled without any upper-layer
+disable attempt. The LW-022 hardware profiler already establishes a stricter
+disable-before-preload boundary, but the normal deployment entry point does not.
+
+### Evidence
+
+- `src/rl_sar/src/rl_real_LW.cpp:44-127`
+- `src/rl_sar/src/rl_real_LW.cpp:143-169`
+- `src/rl_sar/src/lw_config_profiler.cpp:401-425`
+
+### Intended Scope
+
+- Preserve offline deployment-integrity verification before hardware access.
+- After verification, establish and confirm the real-node motor-disable output
+  before policy preload or other lengthy/fallible runtime initialization.
+- Keep disable output safe across every constructor failure after either serial
+  port has been opened.
+- Do not weaken the existing startup, command-gate, or final-disable checks.
+
+### Acceptance Criteria
+
+- With both serial ports available, no model preload starts before complete
+  disable packets have been written to both boards.
+- Every failure after serial initialization closes command delivery and attempts
+  a bounded final disable sequence before releasing the ports.
+- A partial serial initialization cannot start any worker loop or model preload.
+- Tests prove the operation order and constructor-failure cleanup without
+  accessing physical hardware.
+- The deployment guide accurately states the earliest unavoidable enabled
+  interval and the remaining need for physical isolation and emergency stop.
+
+### Resolution
+
+- **Resolved**: 2026-08-12T12:50:24+08:00
+- **Commit**: 待本次提交
+- **Approved Scope**: 在正式部署完整性校验通过后、ROS/终端/YAML/FSM/模型及
+  `RL_Real` 堆分配之前，以栈上 RAII 守卫打开左右电机板串口并确认 20 个双侧
+  完整失能包，随后以独立 5 ms 线程持续只发送失能；全部运行资源准备完成后
+  join 保活、应用已验证的运行时写超时并补发交接失能，才允许启动工作循环。
+  任一部分串口初始化或后续构造失败均关闭命令门、停止保活并尝试最终 20 包
+  失能。保留部署离线校验、统一串口命令门和正常退出顺序，不把主机完整写入
+  称为 STM32 物理执行确认。
+- **Changed Files**: `src/rl_sar/library/core/safety/lw_startup_disable.hpp`、
+  `src/rl_sar/include/rl_real_LW.hpp`、`src/rl_sar/src/rl_real_LW.cpp`、
+  `src/rl_sar/test/{test_lw_startup_disable.cpp,test_lw_real_startup_disable_integration.py}`、
+  `src/rl_sar/CMakeLists.txt`、`docs/LW_BUILD_DEPLOYMENT_CN.md`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 当前 Debug 全目标构建成功，完整 33/33 CTest 通过；启动失能
+  PTY 生命周期测试和正式入口顺序集成测试连续 20 轮通过。全新 Release 构建
+  成功生成 `rl_real_LW`，启动失能、正式入口顺序、串口 SDK、循环生命周期和
+  安全策略测试 5/5 通过。新增 C++ 测试通过独立
+  `-Wall -Wextra -Wpedantic -Werror` 构建、AddressSanitizer/
+  UndefinedBehaviorSanitizer 和定向 `cppcheck`；Python 编译及
+  `git diff --check` 通过。隔离 detached 临时验证提交成功生成 ONNX-only
+  Release 正式部署，策略哈希、部署清单、动态依赖和
+  `rl_real_LW --verify-deployment-only` 均通过，临时工作树随后已清理。
+  全部自动化仅使用 PTY 或离线路径；未访问真实串口、未启动真机 ROS 节点、
+  未发送真实电机命令，也未把主机 `write()` 当作硬件失能回执。部署文档明确
+  保留上电至首批失能写入之间的不可避免窗口，以及可靠吊装、机械隔离和物理
+  急停要求。
+- **Remaining Follow-ups**: none
+
+---
+
+## [LW-024] Joinable and bounded Sim2Sim physics lifecycle
+
+**Priority**: P1 / high
+**Status**: pending
+**Dependencies**: LW-001, LW-021
+
+### Problem
+
+`rl_sim_LW` detaches the MuJoCo physics thread while passing it a raw pointer to
+the owned `Simulate` object. The destructor does not wait for that thread, so
+normal exit or a constructor exception can destroy `sim` while physics cleanup
+still accesses it. Startup also waits forever for global MuJoCo data when model
+loading fails, because the physics thread has no result channel and the polling
+loop has no failure or timeout condition.
+
+### Evidence
+
+- `src/rl_sar/src/rl_sim_LW.cpp:74-112`
+- `src/rl_sar/src/rl_sim_LW.cpp:250-269`
+- `src/rl_sar/library/thirdparty/mujoco_simulate/mujoco_utils.hpp:436-459`
+
+### Intended Scope
+
+- Keep the physics thread joinable and make ownership explicit.
+- Propagate model/data initialization success or failure to the constructor.
+- Bound startup waiting and ensure partial construction cannot leave a worker
+  accessing destroyed state.
+- Preserve the shared LW runtime behavior established by LW-021.
+
+### Acceptance Criteria
+
+- Every normal, signal-requested, safety-requested, and exceptional exit stops
+  and joins the physics thread before destroying `Simulate`, `mjData`, or
+  `mjModel` state.
+- An invalid or unloadable scene fails startup with a diagnostic instead of
+  waiting indefinitely.
+- Repeated start/exit and injected initialization failures pass under a suitable
+  sanitizer or deterministic lifecycle stress test.
+- No detached thread retains a pointer to an `RL_Real` or `Simulate` member.
+
+---
+
+## [LW-025] Persistent and composable keyboard velocity input
+
+**Priority**: P1 / high
+**Status**: pending
+**Dependencies**: LW-006, LW-019, LW-021
+
+### Problem
+
+Each control cycle copies joystick-mailbox `x/y/yaw` into the shared control
+state before keyboard processing. `W/S/A/D/Q/E` then changes that state for only
+the current 5 ms cycle; the next cycle replaces it with the joystick value.
+This contradicts the documented persistent keyboard velocity behavior and a
+50 Hz inference loop can miss the short pulse entirely. `Space` consequently
+does not provide the documented persistent stop semantics for keyboard input.
+
+### Evidence
+
+- `src/rl_sar/src/rl_real_LW.cpp:875-885`
+- `src/rl_sar/src/rl_sim_LW.cpp:957-967`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:96-125`
+- `docs/LW_BUILD_DEPLOYMENT_CN.md:474-485`
+
+### Intended Scope
+
+- Give keyboard velocity commands durable state with explicit merge/precedence
+  rules relative to joystick velocity.
+- Keep FSM button events edge-triggered and preserve the joystick-fault and
+  timing-degraded zero-velocity latches.
+- Apply identical hardware-independent behavior in real and Sim2Sim adapters.
+
+### Acceptance Criteria
+
+- A keyboard velocity step remains visible to subsequent control and inference
+  cycles until changed or cleared according to the documented rules.
+- `Space`, joystick disconnect, and timing degradation reliably force all three
+  velocity axes to zero.
+- Switching between keyboard and joystick input follows one documented,
+  deterministic precedence rule without stale values reappearing.
+- Automated parity tests cover persistence, zeroing, source switching, and FSM
+  recovery buttons in real-like and Sim2Sim-like harnesses.
+
+---
+
+## [LW-026] Configuration-profile provenance and comparability
+
+**Priority**: P1 / high
+**Status**: pending
+**Dependencies**: LW-010, LW-022
+
+### Problem
+
+The profiler records `source_commit`, `policy_root`, host identity, and duration,
+but the analyzer does not validate or compare those fields. Host and hardware
+reports from different commits or policy trees can therefore be combined with
+an unrelated `base.yaml`. The exact-policy check uses a set, so duplicate policy
+records are accepted, and accumulated miss counts are ranked without requiring
+comparable measurement durations. A mixed or stale report set can consequently
+produce a plausible review file for the wrong deployment.
+
+### Evidence
+
+- `src/rl_sar/src/lw_config_profiler.cpp:930-983`
+- `src/rl_sar/scripts/profile_lw_runtime_config.py:166-187`
+- `src/rl_sar/scripts/profile_lw_runtime_config.py:294-320`
+- `src/rl_sar/scripts/profile_lw_runtime_config.py:234-287`
+
+### Intended Scope
+
+- Bind every analyzed report and the selected base configuration to one exact,
+  reviewable deployment identity.
+- Require exactly one record for each approved policy and reject duplicates.
+- Require comparable durations or normalize every duration-dependent ranking
+  metric explicitly.
+- Preserve review-only output and the existing physical-safety limits.
+
+### Acceptance Criteria
+
+- The analyzer rejects mixed source commits, policy roots/assets, incompatible
+  base configurations, modes, and non-comparable report durations.
+- Four policy records means exactly four unique records in the approved order or
+  another explicitly validated canonical representation.
+- Every accepted identity field is copied into the candidate report so a human
+  can trace the candidate to its measurements and base file.
+- Tests cover mixed commits, mixed policy roots/assets, duplicate policies,
+  duration mismatch, stale base input, and valid same-deployment reports.
+
+---
+
+## [LW-027] Reproducible ONNX Runtime deployment dependency
+
+**Priority**: P1 / high
+**Status**: pending
+**Dependencies**: LW-010, LW-017, LW-020
+
+### Problem
+
+Production LW executables embed an absolute build-host RPATH to the repository's
+ONNX Runtime directory. The generated deployment prefix neither contains that
+runtime nor records its hash in the manifest. Moving the prefix can therefore
+break startup, while replacing the external runtime can change execution even
+though `--verify-deployment-only` still accepts the bundle.
+
+### Evidence
+
+- `src/rl_sar/CMakeLists.txt:295-320`
+- `src/rl_sar/scripts/generate_lw_deployment_manifest.py:25-36`
+- `src/rl_sar/library/core/deployment/lw_deployment_bundle.cpp:38-53`
+- `docs/LW_BUILD_DEPLOYMENT_CN.md:739-749`
+
+### Intended Scope
+
+- Define whether ONNX Runtime is bundled or is an explicitly external verified
+  dependency, then enforce that contract consistently.
+- Remove reliance on an unverified mutable build-tree library path.
+- Include every required runtime library and relevant identity in deployment
+  generation, integrity checking, and relocation tests.
+
+### Acceptance Criteria
+
+- A deployment either carries the required ONNX Runtime libraries under a
+  relocatable runtime search path or rejects startup unless an external runtime
+  with the recorded identity is present.
+- Runtime libraries are architecture-validated and integrity-verified together
+  with the executable and policies.
+- Relocating the complete approved deployment prefix does not depend on the
+  original source-tree path.
+- Tampering with or omitting a required runtime library fails deployment
+  verification before ROS, serial, or motor initialization.
+
+---
+
+## [LW-028] Signal-safe Sim2Sim shutdown request
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-024
+
+### Problem
+
+The Sim2Sim `SIGINT` handler writes through `std::cout` and dereferences a global
+`RL_Real` pointer to reach the `Simulate` object. C++ streams, shared-object
+lifetime checks, and general object access are not async-signal-safe; a signal
+arriving during those operations can deadlock or race with destruction.
+
+### Evidence
+
+- `src/rl_sar/src/rl_sim_LW.cpp:74-75`
+- `src/rl_sar/src/rl_sim_LW.cpp:1257-1277`
+
+### Intended Scope
+
+- Restrict the signal handler to a signal-safe notification mechanism.
+- Perform logging, actuator zeroing, ROS shutdown, and object access in normal
+  thread context.
+- Coordinate with the joinable lifecycle introduced by LW-024.
+
+### Acceptance Criteria
+
+- The installed handler performs no C++ stream, allocation, locking, or object
+  graph access.
+- Repeated SIGINT injection during startup, steady simulation, and shutdown
+  produces a deterministic clean exit without use-after-free or deadlock.
+- Normal window-close and safety shutdown paths retain their existing behavior.
+
+---
+
+## [LW-029] Sim2Sim actuator-model policy-root consistency
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-010, LW-021
+
+### Problem
+
+`rl_sim_LW --policy-root` redirects the four primary LW policies, but optional
+actuator-network models are still loaded through the compile-time `POLICY_DIR`.
+The same process can therefore combine primary policies from one tree with
+actuator models from another, or fail after relocation even when the selected
+policy root is complete.
+
+### Evidence
+
+- `src/rl_sar/src/rl_sim_LW.cpp:54-67`
+- `src/rl_sar/src/rl_sim_LW.cpp:134-152`
+
+### Intended Scope
+
+- Resolve every Sim2Sim policy-related asset through the selected, validated
+  policy root.
+- Fail explicitly when `--use_actuator_net` is requested but either model is
+  missing or incompatible.
+- Keep the optional actuator network outside the real deployment scope unless
+  separately approved.
+
+### Acceptance Criteria
+
+- No `--use_actuator_net` asset path falls back to compile-time `POLICY_DIR`
+  after an explicit policy root is selected.
+- Tests demonstrate relocation, missing-model rejection, and consistent model
+  selection without requiring a GUI run.
+- Startup diagnostics identify the exact resolved actuator-model paths.
+
+---
+
+## [LW-030] Coherent inhibited-command gait observation
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-021, LW-025
+
+### Problem
+
+When external input is faulty or the safety supervisor inhibits input, the
+inference observation publishes zero `commands`, but `command_norm` and the
+moving gait phase are computed from the pre-inhibition local control snapshot.
+An inference frame can therefore contain a zero velocity command together with
+a nonzero moving gait phase.
+
+### Evidence
+
+- `src/rl_sar/library/core/safety/lw_runtime_core.hpp:377-411`
+
+### Intended Scope
+
+- Derive command-dependent observation fields from one effective command after
+  all inhibition and external-fault rules have been applied.
+- Preserve current gait-phase timing for valid nonzero commands.
+- Keep real, Sim2Sim, and host-profiler inference behavior identical.
+
+### Acceptance Criteria
+
+- A zeroed effective command always produces the documented stationary gait
+  observation in the same inference frame.
+- Tests cover normal movement, joystick fault, timing degradation, and external
+  input fault without relying on scheduling luck.
+- Nominal policy input/output parity remains unchanged for valid commands.
+
+---
+
+## [LW-031] Warning-clean maintained LW build
+
+**Priority**: P2 / low
+**Status**: pending
+**Dependencies**: none
+
+### Problem
+
+A warning-enabled build exposes maintained-code warnings, including an
+`ObservationBuffer` member-initialization order mismatch and a range-loop test
+that binds `std::string` references to temporary conversions. The latter stops
+the existing strict `-Werror` build before all targets are checked. This weakens
+the value of compiler warnings as a regression gate and can hide new defects
+among third-party MuJoCo warning noise.
+
+### Evidence
+
+- `src/rl_sar/library/core/observation_buffer/observation_buffer.hpp:55-62`
+- `src/rl_sar/library/core/observation_buffer/observation_buffer.cpp:14-22`
+- `src/rl_sar/test/test_lw_fsm_transitions.cpp:66-71`
+
+### Intended Scope
+
+- Correct warnings in maintained LW source and tests without behavior changes.
+- Apply strict warning settings to maintained targets while treating vendored
+  third-party code as a separately scoped dependency.
+- Add a reproducible warning-clean check to the validation workflow.
+
+### Acceptance Criteria
+
+- Maintained LW source and test targets compile with the approved warning set
+  and `-Werror`.
+- Third-party warnings do not suppress or obscure maintained-code failures.
+- The normal build and full CTest suite remain green.
 
 ---
 

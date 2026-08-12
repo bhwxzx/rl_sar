@@ -365,6 +365,19 @@ if(BUILD_TESTING)
             library/thirdparty/robot_sdk/lfr/LW_sdk
         )
         add_test(NAME lw_serial_sdk COMMAND test_lw_serial_sdk)
+
+        add_executable(test_lw_startup_disable
+            test/test_lw_startup_disable.cpp
+        )
+        target_include_directories(test_lw_startup_disable PRIVATE
+            library/core/loop
+            library/core/safety
+            library/thirdparty/robot_sdk/lfr/LW_sdk
+        )
+        target_link_libraries(test_lw_startup_disable
+            Threads::Threads
+        )
+        add_test(NAME lw_startup_disable COMMAND test_lw_startup_disable)
     endif()
 endif()
 
@@ -918,6 +931,11 @@ if(SYSTEM_TYPE STREQUAL "Linux")
         )
         if(BUILD_TESTING)
             add_test(NAME lw_config_profiler_help COMMAND lw_config_profiler --help)
+            add_test(
+                NAME lw_real_startup_disable_integration
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_lw_real_startup_disable_integration.py
+            )
             add_test(
                 NAME lw_config_profiler_integration
                 COMMAND ${Python3_EXECUTABLE}

@@ -44,8 +44,11 @@ bool LWOperatorModeHasProgress(LWOperatorMode mode)
 RL_Real::RL_Real(
     int argc,
     char **argv,
-    const std::string& policy_root)
+    const std::string& policy_root,
+    LWStartupDisableGuard& startup_disable)
+    : startup_disable_(&startup_disable)
 {
+    startup_disable_->requireHealthy();
     runtime_core_.bind(
         *this,
         [this](const LWSafetyDecision& decision, const std::string& reason)
@@ -112,19 +115,31 @@ RL_Real::RL_Real(
     {
         throw std::runtime_error("LW serial_write_timeout must be a finite positive value");
     }
-    this->lw_sdk.SetWriteTimeout(
+    const LWSDK::Duration runtime_serial_write_timeout =
         std::chrono::duration_cast<LWSDK::Duration>(
-            std::chrono::duration<float>(serial_write_timeout_seconds)));
+            std::chrono::duration<float>(serial_write_timeout_seconds));
 
     // 提前加载所有的模型到内存
-    this->PreloadModel(this->robot_name + "/robot_lab/leg_loco");
-    this->PreloadModel(this->robot_name + "/robot_lab/wheel_loco");
-    this->PreloadModel(this->robot_name + "/robot_lab/leg_to_wheel");
-    this->PreloadModel(this->robot_name + "/robot_lab/wheel_to_leg");
-    this->PreloadLWPolicyContext(this->robot_name + "/robot_lab/leg_loco");
-    this->PreloadLWPolicyContext(this->robot_name + "/robot_lab/wheel_loco");
-    this->PreloadLWPolicyContext(this->robot_name + "/robot_lab/leg_to_wheel");
-    this->PreloadLWPolicyContext(this->robot_name + "/robot_lab/wheel_to_leg");
+    const auto preload_model = [this](const std::string& policy)
+    {
+        startup_disable_->requireHealthy();
+        this->PreloadModel(policy);
+        startup_disable_->requireHealthy();
+    };
+    const auto preload_context = [this](const std::string& policy)
+    {
+        startup_disable_->requireHealthy();
+        this->PreloadLWPolicyContext(policy);
+        startup_disable_->requireHealthy();
+    };
+    preload_model(this->robot_name + "/robot_lab/leg_loco");
+    preload_model(this->robot_name + "/robot_lab/wheel_loco");
+    preload_model(this->robot_name + "/robot_lab/leg_to_wheel");
+    preload_model(this->robot_name + "/robot_lab/wheel_to_leg");
+    preload_context(this->robot_name + "/robot_lab/leg_loco");
+    preload_context(this->robot_name + "/robot_lab/wheel_loco");
+    preload_context(this->robot_name + "/robot_lab/leg_to_wheel");
+    preload_context(this->robot_name + "/robot_lab/wheel_to_leg");
 
     // auto load FSM by robot_name
     if (FSMManager::GetInstance().IsTypeSupported(this->robot_name))
@@ -141,32 +156,7 @@ RL_Real::RL_Real(
     }
 
     // init robot
-    this->lw_sdk.InitCmdData(this->lw_low_command);
-    const LWSerialInitStatus serial_status =
-        this->lw_sdk.InitSerial("/dev/ttyLegRight", "/dev/ttyLegLeft");
-    if (!serial_status.bothInitialized())
-    {
-        runtime_core_.reportSafetyEvent(
-            LWSafetyEvent::StartupSerialInitializationFailed);
-        std::cerr << LOGGER::ERROR
-                  << "[Safety] LW serial initialization failed: "
-                  << serial_status.failureSummary()
-                  << "; control loops will not start"
-                  << std::endl;
-        SendEmergencyDisableBurst();
-        throw std::runtime_error("failed to initialize both LW serial ports");
-    }
-    const LWSendResult startup_disable = disable_lw_robot();
-    if (!startup_disable.complete())
-    {
-        runtime_core_.reportSafetyEvent(
-            LWSafetyEvent::StartupInitialDisableIncomplete);
-        std::cerr << LOGGER::ERROR
-                  << "[Safety] Initial disable command was incomplete: "
-                  << startup_disable.failureSummary() << std::endl;
-        SendEmergencyDisableBurst();
-        throw std::runtime_error("failed to send complete initial disable command");
-    }
+    startup_disable_->sdk().InitCmdData(this->lw_low_command);
     this->InitJointNum(this->params.Get<int>("num_of_dofs"));
     this->InitOutputs();
     this->InitControl();
@@ -231,6 +221,8 @@ RL_Real::RL_Real(
     this->CSVInit(this->robot_name);
 #endif
 
+    startup_disable_->requireHealthy();
+    startup_disable_->handOffToRuntime(runtime_serial_write_timeout);
     try
     {
         this->loop_joystick->start();
@@ -240,7 +232,7 @@ RL_Real::RL_Real(
     catch (...)
     {
         runtime_core_.reportSafetyEvent(LWSafetyEvent::StartupLoopStartFailed);
-        command_gate_.close();
+        startup_disable_->commandGate().close();
         this->loop_control->shutdown();
         this->loop_rl->shutdown();
         this->loop_joystick->shutdown();
@@ -254,18 +246,12 @@ RL_Real::~RL_Real()
     runtime_core_.reportSafetyEvent(LWSafetyEvent::NormalShutdown);
     // Close the gate before joining so no new enable command can race with the
     // final disable frame. Stop the command producer first.
-    command_gate_.close();
+    startup_disable_->commandGate().close();
     this->loop_control->shutdown();
     this->loop_rl->shutdown();
     this->loop_joystick->shutdown();
     this->terminal_keyboard_.reset();
-    const LWSendResult final_disable = disable_lw_robot(true);
-    if (!final_disable.complete())
-    {
-        std::cerr << LOGGER::ERROR
-                  << "[Safety] Final shutdown disable was incomplete: "
-                  << final_disable.failureSummary() << std::endl;
-    }
+    startup_disable_->finalize();
     std::cout << LOGGER::INFO << "RL_Real exit" << std::endl;
 }
 
@@ -380,30 +366,7 @@ void RL_Real::RuntimeDiagnosticsCallback()
 
 LWSendResult RL_Real::disable_lw_robot(bool latch_commands)
 {
-    LowCmd cmd = {0};
-    for (int i = 0; i < this->params.Get<int>("num_of_dofs"); i++)
-    {
-        cmd.motorCmd[i].action_set = 0.0f;
-        cmd.motorCmd[i].Kp = 0.0f;
-        cmd.motorCmd[i].Kd = 0.0f;
-    }
-    cmd.motors_disable = true;
-
-    LWSendResult result;
-    const auto send_disable = [this, &cmd, &result]()
-    {
-        result = this->lw_sdk.SendCmdData(cmd);
-    };
-
-    if (latch_commands)
-    {
-        command_gate_.closeAndSend(send_disable);
-    }
-    else
-    {
-        command_gate_.sendSerialized(send_disable);
-    }
-    return result;
+    return startup_disable_->sendDisable(latch_commands);
 }
 
 void RL_Real::HandleLoopError(const std::string& loop_name, std::exception_ptr error) noexcept
@@ -441,48 +404,7 @@ void RL_Real::HandleLoopTiming(
 
 void RL_Real::SendEmergencyDisableBurst() noexcept
 {
-    constexpr int disable_attempts = 20;
-    constexpr auto disable_interval = 5ms;
-
-    command_gate_.close();
-    bool send_error_logged = false;
-    for (int attempt = 0; attempt < disable_attempts; ++attempt)
-    {
-        try
-        {
-            const LWSendResult result = disable_lw_robot(true);
-            if (!result.complete() && !send_error_logged)
-            {
-                std::cerr << LOGGER::ERROR
-                          << "[Safety] Emergency disable was incomplete: "
-                          << result.failureSummary() << std::endl;
-                send_error_logged = true;
-            }
-        }
-        catch (const std::exception& exception)
-        {
-            if (!send_error_logged)
-            {
-                std::cerr << LOGGER::ERROR << "[Safety] Failed to send emergency disable: "
-                          << exception.what() << std::endl;
-                send_error_logged = true;
-            }
-        }
-        catch (...)
-        {
-            if (!send_error_logged)
-            {
-                std::cerr << LOGGER::ERROR << "[Safety] Failed to send emergency disable"
-                          << std::endl;
-                send_error_logged = true;
-            }
-        }
-
-        if (attempt + 1 < disable_attempts)
-        {
-            std::this_thread::sleep_for(disable_interval);
-        }
-    }
+    startup_disable_->sendEmergencyDisableBurst();
 }
 
 void RL_Real::HandleLWPolicyOutputFault(
@@ -611,7 +533,7 @@ void RL_Real::RobotControl()
             [this]() { return HandleSensorReadiness(); },
             [this]()
             {
-                if (!lw_sdk.MotorsProtect(lw_low_state))
+                if (!startup_disable_->sdk().MotorsProtect(lw_low_state))
                 {
                     return true;
                 }
@@ -697,7 +619,8 @@ void RL_Real::ImuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
 
 void RL_Real::GetState(RobotState<float> *state)
 {
-    const LWFeedbackUpdate feedback_update = this->lw_sdk.RecvFdData(this->lw_low_state);
+    const LWFeedbackUpdate feedback_update =
+        startup_disable_->sdk().RecvFdData(this->lw_low_state);
     const auto now = SafetyClock::now();
     if (feedback_update.readFailed())
     {
@@ -790,42 +713,48 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
     }
 
     LWSendResult send_result;
-    const bool command_sent = command_gate_.sendIfOpen([this, command, &send_result]()
-    {
-        auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
-        auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
-        int num_dofs = this->params.Get<int>("num_of_dofs");
-
-        for (int i = 0; i < num_dofs; ++i)
+    const bool command_sent = startup_disable_->commandGate().sendIfOpen(
+        [this, command, &send_result]()
         {
-            int motor_id = joint_mapping[i];
+            auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
+            auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
+            int num_dofs = this->params.Get<int>("num_of_dofs");
 
-            this->lw_low_command.motorCmd[motor_id].Kp = command->motor_command.kp[i];
-            this->lw_low_command.motorCmd[motor_id].Kd = command->motor_command.kd[i];
-
-            bool is_wheel = false;
-            for (int k : wheel_indices)
+            for (int i = 0; i < num_dofs; ++i)
             {
-                if (i == k)
+                int motor_id = joint_mapping[i];
+
+                this->lw_low_command.motorCmd[motor_id].Kp =
+                    command->motor_command.kp[i];
+                this->lw_low_command.motorCmd[motor_id].Kd =
+                    command->motor_command.kd[i];
+
+                bool is_wheel = false;
+                for (int k : wheel_indices)
                 {
-                    is_wheel = true;
-                    break;
+                    if (i == k)
+                    {
+                        is_wheel = true;
+                        break;
+                    }
+                }
+
+                if (is_wheel)
+                {
+                    this->lw_low_command.motorCmd[motor_id].action_set =
+                        command->motor_command.dq[i];
+                }
+                else
+                {
+                    this->lw_low_command.motorCmd[motor_id].action_set =
+                        command->motor_command.q[i];
                 }
             }
 
-            if (is_wheel)
-            {
-                this->lw_low_command.motorCmd[motor_id].action_set = command->motor_command.dq[i];
-            }
-            else
-            {
-                this->lw_low_command.motorCmd[motor_id].action_set = command->motor_command.q[i];
-            }
-        }
-
-        this->lw_low_command.motors_disable = false;
-        send_result = this->lw_sdk.SendCmdData(this->lw_low_command);
-    });
+            this->lw_low_command.motors_disable = false;
+            send_result =
+                startup_disable_->sdk().SendCmdData(this->lw_low_command);
+        });
 
     // The gate mutex has been released here. Entering fail-safe while holding
     // it would deadlock when the emergency disable tries to serialize a send.
@@ -1068,10 +997,17 @@ int main(int argc, char **argv)
             return 0;
         }
 
+        // The powered STM32 starts enabled. Establish and maintain a complete
+        // bilateral disable output before ROS, input, YAML, model, or heap-
+        // allocated RL_Real initialization can fail.
+        LWStartupDisableGuard startup_disable;
         rclcpp::init(argc, argv);
         ros_initialized = true;
         auto rl_sar = std::make_shared<RL_Real>(
-            argc, argv, deployment.policy_root.string());
+            argc,
+            argv,
+            deployment.policy_root.string(),
+            startup_disable);
         rclcpp::spin(rl_sar->ros2_node);
         rclcpp::shutdown();
         return 0;
