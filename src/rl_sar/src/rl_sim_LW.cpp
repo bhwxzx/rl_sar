@@ -5,7 +5,6 @@
 #include <sstream>
 
 using namespace std::chrono_literals;
-RL_Real* RL_Real::instance = nullptr;
 
 namespace
 {
@@ -235,14 +234,11 @@ RL_Real::RL_Real(int argc, char **argv)
     this->CSVInit(this->robot_name);
 #endif
 
-    instance = this;
-
 }
 
 RL_Real::~RL_Real()
 {
     runtime_core_.reportSafetyEvent(LWSafetyEvent::NormalShutdown);
-    instance = nullptr;
     this->loop_control->shutdown();
     this->loop_rl->shutdown();
     this->loop_joystick->shutdown();
@@ -1265,22 +1261,27 @@ void RL_Real::GetSysJoystick()
     // }
 }
 
-// Signal handler for Ctrl+C
-void signalHandler(int signum)
-{
-    std::cout << LOGGER::INFO << "Received signal " << signum << ", exiting..." << std::endl;
-    if (RL_Real::instance && RL_Real::instance->sim)
-    {
-        RL_Real::instance->sim->exitrequest.store(1);
-    }
-}
-
 int main(int argc, char **argv)
 {
     try
     {
-        rclcpp::init(argc, argv);
+        LWSimShutdownCoordinator shutdown_coordinator;
+        LWSigintWaiter sigint_waiter(
+            [&shutdown_coordinator]() { shutdown_coordinator.Request(); });
+        rclcpp::init(
+            argc,
+            argv,
+            rclcpp::InitOptions(),
+            rclcpp::SignalHandlerOptions::SigTerm);
         auto rl_sar = std::make_shared<RL_Real>(argc, argv);
+        shutdown_coordinator.Bind(
+            [weak_rl_sar = std::weak_ptr<RL_Real>(rl_sar)]()
+            {
+                if (const std::shared_ptr<RL_Real> locked = weak_rl_sar.lock())
+                {
+                    locked->RequestSimulationStop();
+                }
+            });
         std::exception_ptr ros_error;
         std::thread ros_thread([&]() {
             try
@@ -1297,10 +1298,15 @@ int main(int argc, char **argv)
         std::exception_ptr main_thread_error;
         try
         {
-            signal(SIGINT, signalHandler);
             if (rl_sar->sim)
             {
                 rl_sar->sim->RenderLoop();
+            }
+            if (shutdown_coordinator.requested())
+            {
+                std::cout << LOGGER::INFO
+                          << "Received SIGINT, exiting Sim2Sim..."
+                          << std::endl;
             }
         }
         catch (...)
@@ -1325,6 +1331,9 @@ int main(int argc, char **argv)
         {
             ros_thread.join();
         }
+        sigint_waiter.ShutdownAndKeepBlocked();
+        shutdown_coordinator.Unbind();
+        sigint_waiter.RethrowWaitError();
         rl_sar->RethrowPhysicsError();
         if (ros_error)
         {

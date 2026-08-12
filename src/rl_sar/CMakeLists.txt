@@ -362,6 +362,16 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_lw_joinable_worker PRIVATE Threads::Threads)
     add_test(NAME lw_joinable_worker COMMAND test_lw_joinable_worker)
+    if(SYSTEM_TYPE STREQUAL "Linux")
+        add_executable(test_lw_signal_shutdown
+            test/test_lw_signal_shutdown.cpp
+        )
+        target_include_directories(test_lw_signal_shutdown PRIVATE
+            library/core/simulation
+        )
+        target_link_libraries(test_lw_signal_shutdown PRIVATE Threads::Threads)
+        add_test(NAME lw_signal_shutdown COMMAND test_lw_signal_shutdown)
+    endif()
     add_test(
         NAME lw_sim_lifecycle_integration
         COMMAND ${Python3_EXECUTABLE}

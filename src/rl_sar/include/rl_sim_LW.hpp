@@ -18,10 +18,10 @@
 #include "lw_loop_config.hpp"
 #include "lw_runtime_core.hpp"
 #include "lw_safety_policy.hpp"
+#include "lw_signal_shutdown.hpp"
 #include "fsm_LW.hpp"
 
 #include "LW_sdk.hpp"
-#include <csignal>
 #include <random>
 
 #include <rclcpp/rclcpp.hpp>
@@ -42,7 +42,6 @@ public:
 
     std::shared_ptr<rclcpp::Node> ros2_node;
     std::unique_ptr<mj::Simulate> sim;
-    static RL_Real* instance;
     void RequestSimulationStop() noexcept;
     void RethrowPhysicsError() const;
 

@@ -74,6 +74,41 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
         self.assertIn("this->loadrequest = 0;", request_exit)
         self.assertIn("cond_loadrequest.notify_all();", request_exit)
 
+    def test_sigint_never_touches_the_simulation_from_signal_context(self) -> None:
+        source = SIM_SOURCE.read_text(encoding="utf-8")
+        header = (ROOT / "include" / "rl_sim_LW.hpp").read_text(encoding="utf-8")
+
+        self.assertNotIn("signalHandler", source)
+        self.assertNotIn("signal(SIGINT", source)
+        self.assertNotIn("RL_Real::instance", source)
+        self.assertNotIn("static RL_Real* instance", header)
+        self.assertIn("LWSigintWaiter sigint_waiter", source)
+        self.assertIn("rclcpp::SignalHandlerOptions::SigTerm", source)
+
+    def test_sigint_is_blocked_before_runtime_objects_and_stops_normally(self) -> None:
+        source = SIM_SOURCE.read_text(encoding="utf-8")
+        main = source[source.index("int main(") :]
+
+        self.assertLess(
+            main.index("LWSigintWaiter sigint_waiter"),
+            main.index("rclcpp::init("),
+        )
+        self.assertLess(
+            main.index("rclcpp::init("),
+            main.index("std::make_shared<RL_Real>"),
+        )
+        self.assertIn("shutdown_coordinator.Bind(", main)
+        self.assertIn("locked->RequestSimulationStop();", main)
+        self.assertIn("shutdown_coordinator.requested()", main)
+        self.assertLess(
+            main.index("rclcpp::shutdown();"),
+            main.index("sigint_waiter.ShutdownAndKeepBlocked();"),
+        )
+        self.assertLess(
+            main.index("sigint_waiter.ShutdownAndKeepBlocked();"),
+            main.index("shutdown_coordinator.Unbind();"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

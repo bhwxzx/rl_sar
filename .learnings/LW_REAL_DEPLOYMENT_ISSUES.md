@@ -94,7 +94,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 21 | LW-020 | P1 / high | resolved | Make the Jetson production inference bootstrap architecture-safe and ONNX-only |
 | 22 | LW-021 | P1 / high | resolved | Make Sim2Sim and real deployment share one testable control and safety core |
 | 23 | LW-022 | P1 / high | resolved | Measure suspended real-runtime behavior and generate review-only configuration candidates |
-| 24 | LW-028 | P2 / medium | pending | Replace unsafe Sim2Sim signal-handler work with a signal-safe shutdown request |
+| 24 | LW-028 | P2 / medium | resolved | Replace unsafe Sim2Sim signal-handler work with a signal-safe shutdown request |
 | 25 | LW-029 | P2 / medium | pending | Resolve optional actuator models through the selected Sim2Sim policy root |
 | 26 | LW-030 | P2 / medium | pending | Keep inhibited commands and gait-phase observations coherent |
 | 27 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
@@ -2246,7 +2246,7 @@ though `--verify-deployment-only` still accepts the bundle.
 ## [LW-028] Signal-safe Sim2Sim shutdown request
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-024
 
 ### Problem
@@ -2275,6 +2275,37 @@ arriving during those operations can deadlock or race with destruction.
 - Repeated SIGINT injection during startup, steady simulation, and shutdown
   produces a deterministic clean exit without use-after-free or deadlock.
 - Normal window-close and safety shutdown paths retain their existing behavior.
+
+### Resolution
+
+- **Resolved**: 2026-08-12T18:21:42+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 删除 Sim2Sim 的异步 `SIGINT` handler 和全局
+  `RL_Real*`。主线程在创建 ROS、MuJoCo 或工作线程前阻塞 `SIGINT`，专用可
+  联结线程通过 `sigtimedwait` 同步接收并把一次性请求交给普通线程 coordinator；
+  对象构造前收到的请求会锁存，绑定后通过 `weak_ptr` 调用既有
+  `RequestSimulationStop()`。ROS 仅管理 `SIGTERM`。渲染循环返回后才记录日志、
+  关闭 ROS 并联结线程；等待线程停止后保持 `SIGINT` 阻塞至进程退出，消除关闭
+  尾部恢复默认动作的竞争窗。窗口关闭和既有安全停止路径保持不变。
+- **Changed Files**: `src/rl_sar/src/rl_sim_LW.cpp`、
+  `src/rl_sar/include/rl_sim_LW.hpp`、
+  `src/rl_sar/library/core/simulation/lw_signal_shutdown.hpp`、
+  `src/rl_sar/test/{test_lw_signal_shutdown.cpp,test_lw_sim_lifecycle_integration.py}`、
+  `src/rl_sar/CMakeLists.txt`、`docs/LW_BUILD_DEPLOYMENT_CN.md`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 当前 Debug 工作树完整构建并通过 37/37 CTest。新增信号
+  测试覆盖构造前锁存、稳态重复请求、无信号有界关闭、关闭期间并发信号、回调
+  异常保留、原掩码恢复和进程退出前持续阻塞；源码集成测试确认不再存在自定义
+  异步 handler 或全局对象指针，并保留 MuJoCo 待加载唤醒及窗口关闭测试。
+  Release 和严格警告配置均构建 `rl_sim_LW` 与信号测试并通过 3 项定向 CTest；
+  ASan/UBSan 信号测试连续 5 次通过，既有 MuJoCo 生命周期测试单独受控运行通过。
+  真实 `rl_sim_LW` 进程连续 5 轮承受从稳态持续到进程退出的 SIGINT 洪泛，每轮
+  679–733 次，均打印正常退出日志并返回 0。ThreadSanitizer 在本机运行时初始化
+  即因 `unexpected memory mapping` 退出，未执行测试代码；定向 `cppcheck`、
+  Python 严格语法和 `git diff --check` 通过。进程在进入 `main()` 前仍遵循
+  操作系统默认 SIGINT 行为，该 pre-main 区间无法由程序内线程机制消除。未启动
+  真机节点、未访问串口或电机。
+- **Remaining Follow-ups**: none
 
 ---
 
