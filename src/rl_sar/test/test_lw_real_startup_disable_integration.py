@@ -6,9 +6,25 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 REAL_SOURCE = ROOT / "src" / "rl_real_LW.cpp"
+REAL_HEADER = ROOT / "include" / "rl_real_LW.hpp"
+REAL_LAUNCH = ROOT / "launch" / "rl_real_LW.launch.py"
 
 
 class RealStartupDisableIntegrationTests(unittest.TestCase):
+    def test_fdilink_topics_are_guarded_without_modifying_driver(self) -> None:
+        source = REAL_SOURCE.read_text(encoding="utf-8")
+        header = REAL_HEADER.read_text(encoding="utf-8")
+        launch = REAL_LAUNCH.read_text(encoding="utf-8")
+
+        self.assertIn("SetRemap(src='/imu', dst='/fdilink/raw_imu')", launch)
+        self.assertIn(
+            "SetRemap(src='/euler_angles', dst='/fdilink/raw_euler')", launch
+        )
+        self.assertIn('"/fdilink/raw_imu"', source)
+        self.assertIn('"/fdilink/raw_euler"', source)
+        self.assertIn("LWImuAhrsGuard imu_ahrs_guard_", header)
+        self.assertNotIn('create_subscription<sensor_msgs::msg::Imu>(\n        "/imu"', source)
+
     def test_disable_guard_precedes_ros_and_real_runtime(self) -> None:
         source = REAL_SOURCE.read_text(encoding="utf-8")
         main = source[source.index("int main(") :]

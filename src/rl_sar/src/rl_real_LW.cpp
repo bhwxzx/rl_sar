@@ -89,8 +89,12 @@ RL_Real::RL_Real(
     subscribers_qos.keep_last(1);
     subscribers_qos.best_effort();
     this->imu_subscriber_ = ros2_node->create_subscription<sensor_msgs::msg::Imu>(
-        "/imu", subscribers_qos,
+        "/fdilink/raw_imu", subscribers_qos,
         [this] (const sensor_msgs::msg::Imu::SharedPtr imu_msg) {this->ImuCallback(imu_msg);}
+    );
+    this->ahrs_subscriber_ = ros2_node->create_subscription<geometry_msgs::msg::Vector3>(
+        "/fdilink/raw_euler", subscribers_qos,
+        [this] (const geometry_msgs::msg::Vector3::SharedPtr ahrs_msg) {this->AhrsCallback(ahrs_msg);}
     );
 
     this->SetupSysJoystick("/dev/input/js0", 16);
@@ -107,9 +111,31 @@ RL_Real::RL_Real(
     {
         throw std::runtime_error("LW sensor_timeout must be a finite positive value");
     }
-    this->sensor_readiness_monitor_.setTimeout(
+    this->sensor_readiness_monitor_.setMotorFeedbackTimeout(
         std::chrono::duration_cast<SafetyClock::duration>(
             std::chrono::duration<float>(sensor_timeout_seconds)));
+    const float trusted_imu_timeout_seconds =
+        this->params.Get<float>("trusted_imu_timeout");
+    if (!std::isfinite(trusted_imu_timeout_seconds)
+        || trusted_imu_timeout_seconds <= 0.0f)
+    {
+        throw std::runtime_error(
+            "LW trusted_imu_timeout must be a finite positive value");
+    }
+    this->sensor_readiness_monitor_.setImuTimeout(
+        std::chrono::duration_cast<SafetyClock::duration>(
+            std::chrono::duration<float>(trusted_imu_timeout_seconds)));
+    const float imu_ahrs_pair_max_age_seconds =
+        this->params.Get<float>("imu_ahrs_pair_max_age");
+    if (!std::isfinite(imu_ahrs_pair_max_age_seconds)
+        || imu_ahrs_pair_max_age_seconds <= 0.0f)
+    {
+        throw std::runtime_error(
+            "LW imu_ahrs_pair_max_age must be a finite positive value");
+    }
+    this->imu_ahrs_guard_.setPairMaxAge(
+        std::chrono::duration_cast<LWImuAhrsGuard::Duration>(
+            std::chrono::duration<float>(imu_ahrs_pair_max_age_seconds)));
     const float serial_write_timeout_seconds =
         this->params.Get<float>("serial_write_timeout");
     if (!std::isfinite(serial_write_timeout_seconds)
@@ -613,10 +639,37 @@ std::vector<float> RL_Real::Forward()
 
 void RL_Real::ImuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
 {
+    const auto received_at = SafetyClock::now();
+    const LWImuAhrsGuardDecision decision = imu_ahrs_guard_.observeImu(
+        received_at,
+        {msg->orientation.w,
+         msg->orientation.x,
+         msg->orientation.y,
+         msg->orientation.z},
+        {msg->angular_velocity.x,
+         msg->angular_velocity.y,
+         msg->angular_velocity.z});
+    if (!decision.accepted())
+    {
+        return;
+    }
+
+    auto trusted = std::make_shared<sensor_msgs::msg::Imu>(*msg);
+    trusted->orientation.w /= decision.quaternion_norm;
+    trusted->orientation.x /= decision.quaternion_norm;
+    trusted->orientation.y /= decision.quaternion_norm;
+    trusted->orientation.z /= decision.quaternion_norm;
     auto sample = std::make_shared<TimedImuSample>();
-    sample->message = std::move(msg);
-    sample->received_at = SafetyClock::now();
+    sample->message = std::move(trusted);
+    sample->received_at = received_at;
     received_imu_sample_.set(std::move(sample));
+}
+
+void RL_Real::AhrsCallback(const geometry_msgs::msg::Vector3::SharedPtr msg)
+{
+    imu_ahrs_guard_.observeAhrs(
+        SafetyClock::now(),
+        {msg->x, msg->y, msg->z});
 }
 
 void RL_Real::GetState(RobotState<float> *state)

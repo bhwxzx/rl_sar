@@ -330,6 +330,8 @@ void ValidateLWBaseConfiguration(
         fail(source, "key 'decimation' must be positive");
     }
     requirePositiveFinite(config, "sensor_timeout", source);
+    requirePositiveFinite(config, "trusted_imu_timeout", source);
+    requirePositiveFinite(config, "imu_ahrs_pair_max_age", source);
     requirePositiveFinite(config, "serial_write_timeout", source);
 
     const int cpu = requireValue<int>(config, "control_loop_cpu", source);

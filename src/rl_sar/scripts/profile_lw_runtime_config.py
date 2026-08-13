@@ -146,6 +146,8 @@ def collect_hardware(args: argparse.Namespace) -> None:
         args.left_port,
         "--imu-topic",
         args.imu_topic,
+        "--ahrs-topic",
+        args.ahrs_topic,
         "--hardware-confirmation",
         HARDWARE_CONFIRMATION,
     ]
@@ -227,7 +229,7 @@ def load_report(path: Path) -> dict[str, Any]:
     if file_digest(path) != before_digest:
         fail(f"profile changed while it was being read: {path}")
     report = require_mapping(report, str(path))
-    if type(report.get("schema_version")) is not int or report["schema_version"] != 2:
+    if type(report.get("schema_version")) is not int or report["schema_version"] != 3:
         fail(f"unsupported profile schema in {path}")
     if report.get("failed") is not False:
         fail(f"profile reports failure and cannot be used: {path}")
@@ -334,6 +336,8 @@ def load_base_scalars(path: Path) -> dict[str, Any]:
     required = {
         "dt",
         "sensor_timeout",
+        "trusted_imu_timeout",
+        "imu_ahrs_pair_max_age",
         "serial_write_timeout",
         "control_loop_degraded_consecutive_misses",
         "control_loop_degraded_lateness",
@@ -566,8 +570,18 @@ def analyze(args: argparse.Namespace) -> None:
 
     if not hardware_reports:
         overlay["sensor_timeout"] = float(base["sensor_timeout"])
+        overlay["trusted_imu_timeout"] = float(base["trusted_imu_timeout"])
+        overlay["imu_ahrs_pair_max_age"] = float(
+            base["imu_ahrs_pair_max_age"]
+        )
         overlay["serial_write_timeout"] = float(base["serial_write_timeout"])
         decisions["sensor_timeout"] = {
+            "status": "hardware_measurement_required"
+        }
+        decisions["trusted_imu_timeout"] = {
+            "status": "hardware_measurement_required"
+        }
+        decisions["imu_ahrs_pair_max_age"] = {
             "status": "hardware_measurement_required"
         }
         decisions["serial_write_timeout"] = {
@@ -594,19 +608,40 @@ def analyze(args: argparse.Namespace) -> None:
             hardware, "serial_write_failures", "hardware"
         ) != 0:
             fail("hardware report contains serial write failures")
-        sensor_names = ("imu", "right_feedback", "left_feedback")
-        if any(hardware.get(f"{name}_seen") is not True for name in sensor_names):
+        required_sources = (
+            "imu",
+            "ahrs",
+            "trusted_imu",
+            "right_feedback",
+            "left_feedback",
+        )
+        if any(
+            hardware.get(f"{name}_seen") is not True
+            for name in required_sources
+        ):
             fail("hardware report did not observe every required sensor source")
-        sensor_distributions = [
-            require_mapping(hardware.get(f"{name}_gap"), f"{name}_gap")
-            for name in sensor_names
-        ]
+        source_distributions = {
+            name: require_mapping(hardware.get(f"{name}_gap"), f"{name}_gap")
+            for name in required_sources
+        }
         if any(
             require_integer(distribution, "count", "sensor")
             < args.minimum_hardware_samples
-            for distribution in sensor_distributions
+            for distribution in source_distributions.values()
         ):
             fail("hardware report has insufficient sensor-gap samples")
+        pair_distribution = require_mapping(
+            hardware.get("imu_ahrs_pair_age"), "imu_ahrs_pair_age"
+        )
+        if require_integer(
+            pair_distribution, "count", "imu_ahrs_pair_age"
+        ) < args.minimum_hardware_samples:
+            fail("hardware report has insufficient IMU/AHRS pair samples")
+        motor_names = ("right_feedback", "left_feedback")
+        motor_distributions = [
+            require_mapping(hardware.get(f"{name}_gap"), f"{name}_gap")
+            for name in motor_names
+        ]
         serial = require_mapping(
             hardware.get("serial_write_duration"), "serial_write_duration"
         )
@@ -622,11 +657,11 @@ def analyze(args: argparse.Namespace) -> None:
             }
         else:
             sensor_candidate_us = max(
-                max(require_number(item, "p50_us", "sensor") for item in sensor_distributions)
+                max(require_number(item, "p50_us", "sensor") for item in motor_distributions)
                 * 3.0,
-                max(require_number(item, "p999_us", "sensor") for item in sensor_distributions)
+                max(require_number(item, "p999_us", "sensor") for item in motor_distributions)
                 * 1.5,
-                max(require_number(item, "maximum_us", "sensor") for item in sensor_distributions)
+                max(require_number(item, "maximum_us", "sensor") for item in motor_distributions)
                 * 1.25,
                 max(
                     require_number(
@@ -634,7 +669,7 @@ def analyze(args: argparse.Namespace) -> None:
                         f"{name}_first_sample_delay_us",
                         "hardware",
                     )
-                    for name in sensor_names
+                    for name in motor_names
                 )
                 * 1.25,
                 max(
@@ -643,7 +678,7 @@ def analyze(args: argparse.Namespace) -> None:
                         f"{name}_final_age_us",
                         "hardware",
                     )
-                    for name in sensor_names
+                    for name in motor_names
                 )
                 * 1.25,
             )
@@ -658,6 +693,71 @@ def analyze(args: argparse.Namespace) -> None:
                 "status": "provisional_suspended_only",
                 "candidate_ms": sensor_candidate_ms,
                 "operator_maximum_safe_ms": args.max_safe_sensor_timeout_ms,
+            }
+
+        trusted_distribution = source_distributions["trusted_imu"]
+        if args.max_safe_trusted_imu_timeout_ms is None:
+            overlay["trusted_imu_timeout"] = float(base["trusted_imu_timeout"])
+            decisions["trusted_imu_timeout"] = {
+                "status": "manual_required",
+                "reason": "--max-safe-trusted-imu-timeout-ms was not supplied",
+            }
+        else:
+            trusted_candidate_us = max(
+                require_number(trusted_distribution, "p50_us", "trusted_imu")
+                * 3.0,
+                require_number(trusted_distribution, "p999_us", "trusted_imu")
+                * 1.5,
+                require_number(trusted_distribution, "maximum_us", "trusted_imu")
+                * 1.25,
+                require_number(
+                    hardware,
+                    "trusted_imu_final_age_us",
+                    "hardware",
+                )
+                * 1.25,
+            )
+            trusted_candidate_ms = rounded_up(
+                trusted_candidate_us / 1000.0, 0.1
+            )
+            if trusted_candidate_ms > args.max_safe_trusted_imu_timeout_ms:
+                fail(
+                    "observed trusted IMU gaps plus margin exceed the "
+                    "operator-supplied maximum safe trusted IMU timeout"
+                )
+            overlay["trusted_imu_timeout"] = trusted_candidate_ms / 1000.0
+            decisions["trusted_imu_timeout"] = {
+                "status": "provisional_suspended_only",
+                "candidate_ms": trusted_candidate_ms,
+                "operator_maximum_safe_ms":
+                    args.max_safe_trusted_imu_timeout_ms,
+            }
+
+        if args.max_safe_imu_ahrs_pair_age_ms is None:
+            overlay["imu_ahrs_pair_max_age"] = float(
+                base["imu_ahrs_pair_max_age"]
+            )
+            decisions["imu_ahrs_pair_max_age"] = {
+                "status": "manual_required",
+                "reason": "--max-safe-imu-ahrs-pair-age-ms was not supplied",
+            }
+        else:
+            pair_candidate_us = max(
+                require_number(pair_distribution, "p999_us", "pair") * 1.5,
+                require_number(pair_distribution, "maximum_us", "pair") * 1.25,
+            )
+            pair_candidate_ms = rounded_up(pair_candidate_us / 1000.0, 0.1)
+            if pair_candidate_ms > args.max_safe_imu_ahrs_pair_age_ms:
+                fail(
+                    "observed IMU/AHRS pair age plus margin exceeds the "
+                    "operator-supplied maximum safe pair age"
+                )
+            overlay["imu_ahrs_pair_max_age"] = pair_candidate_ms / 1000.0
+            decisions["imu_ahrs_pair_max_age"] = {
+                "status": "provisional_suspended_only",
+                "candidate_ms": pair_candidate_ms,
+                "operator_maximum_safe_ms":
+                    args.max_safe_imu_ahrs_pair_age_ms,
             }
 
         serial_candidate_ms = rounded_up(
@@ -677,7 +777,7 @@ def analyze(args: argparse.Namespace) -> None:
         }
 
     result = {
-        "schema_version": 2,
+        "schema_version": 3,
         "review_only": True,
         "must_not_be_applied_without_human_review": True,
         "deployment_identity": identity,
@@ -746,6 +846,7 @@ def build_parser() -> argparse.ArgumentParser:
     hardware.add_argument("--right-port", default="/dev/ttyLegRight")
     hardware.add_argument("--left-port", default="/dev/ttyLegLeft")
     hardware.add_argument("--imu-topic", default="/imu")
+    hardware.add_argument("--ahrs-topic", default="/euler_angles")
     hardware.add_argument("--confirmation", required=True)
     hardware.set_defaults(func=collect_hardware)
 
@@ -754,6 +855,8 @@ def build_parser() -> argparse.ArgumentParser:
     analyzer.add_argument("--reports", type=Path, nargs="+", required=True)
     analyzer.add_argument("--output", type=Path, required=True)
     analyzer.add_argument("--max-safe-sensor-timeout-ms", type=float)
+    analyzer.add_argument("--max-safe-trusted-imu-timeout-ms", type=float)
+    analyzer.add_argument("--max-safe-imu-ahrs-pair-age-ms", type=float)
     analyzer.add_argument("--max-safe-control-gap-ms", type=float)
     analyzer.add_argument("--minimum-hardware-samples", type=int, default=1000)
     analyzer.set_defaults(func=analyze)
@@ -767,7 +870,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         parser.error("--duration-seconds must be positive")
     if getattr(args, "minimum_hardware_samples", 1) <= 0:
         parser.error("--minimum-hardware-samples must be positive")
-    for name in ("max_safe_sensor_timeout_ms", "max_safe_control_gap_ms"):
+    for name in (
+        "max_safe_sensor_timeout_ms",
+        "max_safe_trusted_imu_timeout_ms",
+        "max_safe_imu_ahrs_pair_age_ms",
+        "max_safe_control_gap_ms",
+    ):
         value = getattr(args, name, None)
         if value is not None and (not math.isfinite(value) or value <= 0.0):
             parser.error(f"--{name.replace('_', '-')} must be positive")

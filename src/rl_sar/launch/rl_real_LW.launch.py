@@ -1,10 +1,10 @@
 
 import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import Node, SetRemap
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
@@ -12,10 +12,16 @@ def generate_launch_description():
     enable_debug_publisher = LaunchConfiguration('enable_debug_publisher')
     enable_keyboard = LaunchConfiguration('enable_keyboard')
 
-    fdilink_ahrs_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory("fdilink_ahrs"), "launch", "ahrs_driver.launch.py")
-        ),
+    fdilink_ahrs_launch = GroupAction(
+        actions=[
+            SetRemap(src='/imu', dst='/fdilink/raw_imu'),
+            SetRemap(src='/euler_angles', dst='/fdilink/raw_euler'),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(get_package_share_directory("fdilink_ahrs"), "launch", "ahrs_driver.launch.py")
+                ),
+            ),
+        ],
     )
 
     rl_real_LW_node = Node(

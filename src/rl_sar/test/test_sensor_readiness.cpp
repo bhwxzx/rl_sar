@@ -152,6 +152,29 @@ void testInvalidTimeoutIsRejected()
     }
     require(rejected, "non-positive timeout was accepted");
 }
+
+void testIndependentImuAndMotorTimeouts()
+{
+    SensorReadinessMonitor monitor(100ms);
+    monitor.setImuTimeout(20ms);
+    monitor.setMotorFeedbackTimeout(80ms);
+    const auto initial = SensorReadinessMonitor::TimePoint{};
+    monitor.markImuReceived(initial);
+    monitor.markRightFeedbackReceived(initial);
+    monitor.markLeftFeedbackReceived(initial);
+    require(
+        monitor.evaluate(initial).decision == SensorReadinessDecision::Ready,
+        "independent timeout monitor did not become ready");
+
+    const auto stale_imu = initial + 21ms;
+    const auto status = monitor.evaluate(stale_imu);
+    require(
+        status.decision == SensorReadinessDecision::FaultLatched,
+        "shorter IMU timeout did not latch first");
+    require(
+        status.missingSources() == "IMU",
+        "independent timeouts reported the wrong stale source");
+}
 } // namespace
 
 int main()
@@ -163,6 +186,7 @@ int main()
         testRuntimeTimeoutLatchesFault();
         testEveryRuntimeSourceCanLatchFault();
         testInvalidTimeoutIsRejected();
+        testIndependentImuAndMotorTimeouts();
         std::cout << "sensor readiness tests passed" << std::endl;
         return 0;
     }

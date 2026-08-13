@@ -36,6 +36,46 @@ Passive 命令（当前关节位置、`dq=0`、`tau=0`、`Kp=0`、`Kd=5`），�
 
 ---
 
+## [LRN-20260813-001] correction
+
+**Logged**: 2026-08-13T12:28:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: docs
+
+### Summary
+安全关键操作文档必须直接说明测算期间电机是否会被软件使能，并区分命令保证与硬件状态证明。
+
+### Details
+LW 吊装硬件观察说明原本描述了只发送 `motors_disable=true`、不允许 Passive 或
+shadow policy 命令进入串口，但没有用直接结论回答“测算过程中电机是否会使能”。
+用户指出这一歧义。实现能够证明测算程序不会发送使能或普通控制命令：初始化、
+5 ms 保活和退出序列只使用独立失能包，策略命令在 `SetCommand()` 中丢弃。由于
+反馈协议没有“失能已执行”回执，这个软件命令保证仍不能证明 STM32 已执行失能或
+电机物理状态已经失能。
+
+### Suggested Action
+安全步骤应先用醒目结论明确“程序是否会发送使能命令”，随后单独说明无硬件回执
+造成的证明边界，并继续要求吊装、隔离和物理急停，避免用委婉的实现描述代替操作
+人员真正需要回答的安全问题。
+
+### Metadata
+- Source: user_feedback
+- Related Files: docs/LW_BUILD_DEPLOYMENT_CN.md, src/rl_sar/src/lw_config_profiler.cpp
+- Tags: LW, hardware-observe, motor-disable, safety, documentation
+- Pattern-Key: docs.safety_command_guarantee_vs_physical_state
+- Recurrence-Count: 1
+- First-Seen: 2026-08-13
+- Last-Seen: 2026-08-13
+
+### Resolution
+- **Resolved**: 2026-08-13T12:28:00+08:00
+- **Commit/PR**: 本提交
+- **Notes**: 吊装硬件观察步骤已明确测算程序全程不会发送使能或普通控制命令，
+  并将该软件保证与“STM32 已执行失能、电机物理失能”的不可证明状态分开表述。
+
+---
+
 ## [LRN-20260729-001] best_practice
 
 **Logged**: 2026-07-29T13:00:09+08:00

@@ -67,6 +67,27 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 - No robot node or serial device was started and no motor command was sent.
 - The review confirmed the pending issues `LW-023` through `LW-031` below.
 
+## 2026-08-13 Comprehensive Review Addendum
+
+- Reviewed: 2026-08-13
+- Repository HEAD during review: `769b6e8`
+- Review scope: the project-owned FDILink IMU driver, real and Sim2Sim entry
+  points, shared runtime and safety core, policy-output transport, optional
+  actuator models, production bundle and launch integration, dependency
+  bootstrap scripts, configuration, and automated tests.
+- Verification: a fresh strict `-Wall -Wextra -Wpedantic -Werror` build and its
+  full 38/38 CTest suite passed; all tracked Bash and Python files passed syntax
+  checks; all 22 vendored LW description assets passed their SHA-256 manifest;
+  `cppcheck` and `git diff --check` were also run.
+- The existing root build was stale and produced two non-source failures; the
+  fresh strict build established the current source baseline.
+- An ASan/UBSan build completed, but the full sanitizer test run was not usable
+  as a project verdict because the ROS Humble/Conda runtime combination raised
+  an allocator mismatch inside external `librcl`/`rcutils` and a later test
+  stalled. The temporary build was removed.
+- No MuJoCo GUI, ROS real node, serial device, IMU, or motor was started.
+- The review confirmed the new pending issues `LW-032` through `LW-041` below.
+
 ## Ordered Summary
 
 | Order | ID | Priority | Status | Summary |
@@ -78,8 +99,8 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 5 | LW-004 | P0 / critical | resolved | Remove invalid FSM transition targets and validate all transitions |
 | 6 | LW-005 | P0 / critical | resolved | Enforce finite commands and state-aware attitude protection |
 | 7 | LW-006 | P0 / critical | resolved | Latch joystick disconnects, clear commands, and validate indices |
-| 8 | LW-024 | P1 / high | pending | Make the Sim2Sim physics-thread lifecycle bounded and joinable |
-| 9 | LW-025 | P1 / high | pending | Preserve keyboard velocity commands instead of replacing them every control cycle |
+| 8 | LW-024 | P1 / high | resolved | Make the Sim2Sim physics-thread lifecycle bounded and joinable |
+| 9 | LW-025 | P1 / high | resolved | Preserve keyboard velocity commands instead of replacing them every control cycle |
 | 10 | LW-026 | P1 / high | resolved | Bind configuration candidates to one exact deployment and comparable reports |
 | 11 | LW-027 | P1 / high | resolved | Make the ONNX Runtime dependency reproducible and integrity-verified |
 | 12 | LW-007 | P1 / high | resolved | Remove cross-thread data races with coherent snapshots |
@@ -102,6 +123,16 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 29 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
 | 30 | LW-031 | P2 / low | resolved | Restore a warning-clean strict build for maintained LW code and tests |
 | 31 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
+| 32 | LW-032 | P0 / critical | resolved | Require complete, initialized, independently fresh IMU and AHRS data end to end |
+| 33 | LW-033 | P1 / high | pending | Bind policy-output freshness to the robot-state input snapshot |
+| 34 | LW-034 | P1 / high | pending | Verify downloaded inference runtimes against pinned trusted digests |
+| 35 | LW-035 | P2 / medium | pending | Bind the production launch file into deployment integrity verification |
+| 36 | LW-036 | P2 / medium | pending | Validate optional actuator-network outputs on every Sim2Sim inference |
+| 37 | LW-037 | P2 / medium | pending | Make Sim2Sim SIGTERM and normal ROS shutdown stop the render loop |
+| 38 | LW-038 | P2 / medium | pending | Remove repeated configuration decoding and allocation from the real control cycle |
+| 39 | LW-039 | P2 / low | pending | Reject actuator-model symlinks and policy-root escapes |
+| 40 | LW-040 | P2 / low | pending | Make the polymorphic RL base destruction contract safe |
+| 41 | LW-041 | P2 / low | pending | Make high-rate Sim2Sim plot publishing explicitly opt-in |
 
 ---
 
@@ -2504,6 +2535,522 @@ among third-party MuJoCo warning noise.
   `cppcheck`、Python 严格语法、shell 语法和 `git diff --check` 通过。未启动
   MuJoCo GUI、真机节点，未访问串口或电机。
 - **Remaining Follow-ups**: none
+
+---
+
+## [LW-032] End-to-end IMU and AHRS validity and freshness
+
+**Priority**: P0 / critical
+**Status**: resolved
+**Dependencies**: LW-002, LW-003, LW-005, LW-017
+
+### Problem
+
+The project-owned FDILink driver can publish a newly timestamped `/imu` message
+whose orientation is uninitialized or comes from an indefinitely old AHRS
+frame. Its serial timeout and first-sequence flag are not initialized, and
+individual serial reads do not reject short reads before parsing the shared
+frame buffers. The real controller treats receipt of that combined ROS message
+as proof that both angular velocity and orientation are fresh. Its feedback
+validation rejects non-finite quaternion values but accepts a finite
+non-quaternion such as `[0, 0, 0, 0]`, which attitude conversion reports as a
+safe zero roll and pitch.
+
+### Evidence
+
+- `src/fdilink_ahrs_ROS2/include/ahrs_driver.h:63-81`
+- `src/fdilink_ahrs_ROS2/src/ahrs_driver.cpp:8-50`
+- `src/fdilink_ahrs_ROS2/src/ahrs_driver.cpp:74-101`
+- `src/fdilink_ahrs_ROS2/src/ahrs_driver.cpp:110-205`
+- `src/fdilink_ahrs_ROS2/src/ahrs_driver.cpp:303-440`
+- `src/fdilink_ahrs_ROS2/src/ahrs_driver.cpp:444-495`
+- `src/rl_sar/src/rl_real_LW.cpp:614-695`
+- `src/rl_sar/library/core/safety/lw_control_safety.hpp:87-119`
+- `src/rl_sar/library/core/safety/lw_control_safety.hpp:243-280`
+- `scripts/validate_lw_strict_build.sh:25-31`
+- `src/rl_sar/test/test_lw_runtime_dependencies.py:22-34`
+
+### Intended Scope
+
+- Preserve the third-party FDLink package unchanged. Treat its CRC- and
+  frame-end-checked `/euler_angles` publish path as an independent AHRS
+  liveness event, while retaining the documented limitation that the ROS topic
+  does not expose the serial read count, device timestamp, or sequence.
+- Remap FDLink `/imu` and `/euler_angles` into explicitly untrusted internal
+  topics for the normal real launch; do not let raw `/imu` directly satisfy
+  controller readiness.
+- Grant each finite AHRS event one short-lived authorization for exactly one
+  subsequent IMU message. Reject missing, consumed, regressing, or over-age
+  authorization rather than refreshing cached orientation indefinitely.
+- Reject non-finite, zero-norm, implausibly scaled, or otherwise invalid
+  quaternions and non-finite angular velocity before readiness or attitude
+  protection can authorize commands; normalize accepted quaternions.
+- Configure motor-feedback freshness, trusted-IMU freshness, and IMU/AHRS pair
+  age independently. Preserve 100 ms as an explicitly unapproved pre-measurement
+  placeholder instead of inferring a limit from the nominal 400 Hz device or
+  50 Hz policy frequency.
+- Extend suspended hardware profiling to record raw IMU, valid AHRS, trusted
+  IMU, pair-age, and bilateral feedback distributions and require separate
+  operator-supplied safety ceilings before generating review-only candidates.
+
+### Acceptance Criteria
+
+- Raw FDLink `/imu` cannot directly produce a controller-ready sample; a
+  never-seen, invalid, consumed, or stale AHRS authorization blocks it.
+- One AHRS event authorizes at most one subsequent IMU message within the
+  configured inclusive pair-age boundary.
+- A finite invalid quaternion, including the zero quaternion, prevents command
+  activation; non-finite orientation, Euler data, or angular velocity is also
+  rejected before readiness.
+- Startup without a trusted pair remains in the existing disable-only waiting
+  state; loss after Ready expires on `trusted_imu_timeout` and latches the
+  existing hard-disable-and-shutdown action.
+- Hardware reports lacking raw IMU, valid AHRS, trusted IMU, pair samples, or
+  bilateral feedback proof cannot generate a candidate.
+- Automated tests demonstrate the guard, independent timeouts, configuration,
+  launch remapping, profiler schema, and analyzer rejection paths without
+  opening physical serial devices or sending motor commands; the full strict
+  build remains green.
+
+### Resolution
+
+- **Resolved**: 2026-08-13T14:04:40+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 按用户明确选择不修改第三方
+  `src/fdilink_ahrs_ROS2`。完整 LW launch 将 FDLink 的 `/imu`、
+  `/euler_angles` 重映射为 `/fdilink/raw_imu`、`/fdilink/raw_euler`；
+  `rl_sar` 自有 guard 以有限 AHRS 事件一次性授权下一帧原始 IMU，限制配对
+  时效，拒绝未授权、重复使用、时间倒退、非有限数据、零模或异常缩放四元数，
+  并在交给 readiness 前归一化。电机反馈、可信 IMU、IMU/AHRS 配对分别使用
+  `sensor_timeout`、`trusted_imu_timeout`、`imu_ahrs_pair_max_age`。硬件测算器
+  复用同一 guard 并输出三类 IMU/AHRS 分布及配对时延；分析器要求对应的独立
+  操作员安全上限，报告 schema 升级至 v3。
+- **Changed Files**: `policy/LW/base.yaml`、`src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/include/rl_real_LW.hpp`、
+  `src/rl_sar/launch/rl_real_LW.launch.py`、
+  `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp`、
+  `src/rl_sar/library/core/safety/{lw_imu_ahrs_guard.hpp,sensor_readiness.hpp}`、
+  `src/rl_sar/src/{rl_real_LW.cpp,lw_config_profiler.cpp}`、
+  `src/rl_sar/scripts/profile_lw_runtime_config.py`、
+  `src/rl_sar/test/{test_lw_imu_ahrs_guard.cpp,test_sensor_readiness.cpp,`
+  `test_profile_lw_runtime_config.py,test_lw_config_profiler_integration.py,`
+  `test_lw_real_startup_disable_integration.py}`、
+  `docs/LW_BUILD_DEPLOYMENT_CN.md`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 普通 Debug 全构建成功且 39/39 CTest 通过；全新
+  `scripts/validate_lw_strict_build.sh` 在
+  `-Wall -Wextra -Wpedantic -Werror` 下完成所有维护目标并通过 39/39 CTest；
+  profiler/analyzer 定向 18/18 Python 测试、launch Python 语法和加载构造、
+  `git diff --check` 通过。未启动 ROS 节点、IMU、串口、MuJoCo GUI 或电机，
+  `src/fdilink_ahrs_ROS2` 无任何修改。
+- **Accepted Limitation**: 外部 guard 能证明 FDLink 刚经过其 AHRS CRC/帧尾
+  检查并发布事件，但第三方无 Header 的 `/euler_angles` 不暴露设备时间戳、
+  序号或 `serial::read()` 实际长度，因此不能从 ROS 层独立证明每次底层读取均
+  完整。按用户决定，允许少量重复旧姿态，并以一次性授权、配对时限、内容校验
+  和可信输出超时阻止无限续命；若以后要求逐字节串口完整性证明，必须另行批准
+  FDLink 最小接口补丁或 `rl_sar` 串口代理。
+- **Remaining Follow-ups**: 当前两个新增 IMU 时限均为 100 ms 未测量占位值。
+  正式部署前必须在目标机吊装采集 schema v3 硬件报告，由现场安全评审分别给出
+  最大电机反馈时效、最大可信 IMU 时效、最大配对时延和最大控制间断，再审查候选；
+  不得从名义 400 Hz 或 50 Hz 策略频率直接推定。
+
+---
+
+## [LW-033] Policy input provenance and freshness
+
+**Priority**: P1 / high
+**Status**: pending
+**Dependencies**: LW-007, LW-008, LW-011, LW-021, LW-032
+
+### Problem
+
+`LWPolicyInputSnapshot` contains robot state and control values but no capture
+time or sequence. The inference loop assigns the policy output's `source_time`
+from the inference cycle rather than from the input snapshot. If the control
+loop stalls while inference continues, repeated outputs based on the same old
+robot state can therefore appear fresh. When control resumes,
+`EvaluateLWPolicyOutput()` can accept one of those outputs even though its
+source state predates the configured output-age limit.
+
+### Evidence
+
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.hpp:222-237`
+- `src/rl_sar/library/core/safety/lw_runtime_core.hpp:356-399`
+- `src/rl_sar/library/core/safety/lw_runtime_core.hpp:452-459`
+- `src/rl_sar/library/core/safety/lw_runtime_core.hpp:579-587`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:17-43`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:1213-1255`
+- `policy/LW/base.yaml:23-38`
+
+### Intended Scope
+
+- Add a monotonic capture time and sequence/generation identity to every policy
+  input snapshot.
+- Propagate input provenance into the complete policy output frame.
+- Define freshness against the state capture time and reject duplicate,
+  regressing, future-dated, or over-age inputs and outputs.
+- Coordinate stale-input handling with the existing proportional safety policy
+  and control-loop timing degradation behavior.
+- Test a stalled control producer with an active inference consumer, recovery,
+  policy-generation switches, and age-boundary behavior.
+
+### Acceptance Criteria
+
+- A newly computed output based on an old state snapshot is never classified as
+  ready solely because inference ran recently.
+- The control path cannot consume an output whose originating state is older
+  than the approved limit or belongs to another policy generation.
+- Tests reproduce the control-stall scenario deterministically and verify the
+  approved fallback and recovery semantics for both real and Sim2Sim adapters.
+- Existing coherent-frame and runtime-parity tests remain green.
+
+---
+
+## [LW-034] Trusted inference-runtime download integrity
+
+**Priority**: P1 / high
+**Status**: pending
+**Dependencies**: LW-020, LW-027
+
+### Problem
+
+The inference-runtime bootstrap pins version strings and HTTPS URLs but does
+not pin or verify trusted archive digests before extraction. Structural and ELF
+architecture validation can accept a substituted archive with the expected
+layout. The deployment manifest then hashes the bytes that happened to be
+downloaded, which detects later mutation but does not establish that they were
+the approved upstream release.
+
+### Evidence
+
+- `scripts/download_inference_runtime.sh:62-69`
+- `scripts/download_inference_runtime.sh:112-157`
+- `scripts/download_inference_runtime.sh:202-259`
+- `scripts/validate_inference_runtime.sh:15-100`
+- `src/rl_sar/scripts/generate_lw_deployment_manifest.py:38-41`
+- `src/rl_sar/scripts/generate_lw_deployment_manifest.py:194-208`
+
+### Intended Scope
+
+- Pin a reviewed SHA-256 digest for every supported OS/architecture archive used
+  by the bootstrap.
+- Verify the complete downloaded archive before extraction or replacement of an
+  existing runtime.
+- Fail closed on missing, malformed, or mismatched digest data and remove
+  incomplete temporary artifacts safely.
+- Keep version, architecture, URL, expected digest, and deployed library hashes
+  reviewably connected.
+- Add offline tests using synthetic valid and tampered archives; do not require
+  network downloads in the normal test suite.
+
+### Acceptance Criteria
+
+- No downloaded inference archive is extracted or installed until its digest
+  matches the pinned value for the selected platform.
+- A one-byte archive change is rejected before any approved runtime directory
+  is replaced.
+- Unsupported platform/version combinations fail explicitly rather than using
+  an unverified fallback.
+- Deployment generation continues to bind the installed runtime libraries and
+  all bootstrap tests pass without network access.
+
+---
+
+## [LW-035] Production launch-file integrity
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-010, LW-017, LW-019, LW-023, LW-027, LW-034
+
+### Problem
+
+The production instructions start the robot through
+`rl_real_LW.launch.py`, and that file controls whether the FDILink node starts
+and whether keyboard/debug channels are enabled. The production manifest's
+exact runtime file set does not include the installed `rl_sar` launch file.
+Changing or replacing it after bundle generation therefore does not make
+`--verify-deployment-only` fail even though the verified executable may be
+started with materially different dependencies or parameters.
+
+### Evidence
+
+- `src/rl_sar/launch/rl_real_LW.launch.py:10-45`
+- `src/rl_sar/CMakeLists.txt:1144-1149`
+- `src/rl_sar/scripts/build_lw_deployment.sh:64-80`
+- `src/rl_sar/scripts/build_lw_deployment.sh:145-149`
+- `src/rl_sar/scripts/generate_lw_deployment_manifest.py:25-36`
+- `src/rl_sar/library/core/deployment/lw_deployment_bundle.cpp:39-53`
+- `src/rl_sar/test/test_lw_deployment_bundle.cpp:33-44`
+
+### Intended Scope
+
+- Add the exact installed real-robot launch file and any project-owned launch
+  child it relies on to the production manifest's approved runtime set.
+- Preserve symlink, containment, exact-set, and SHA-256 checks for those files.
+- Add generator and runtime-verifier tests for missing, changed, extra, and
+  symlinked launch assets.
+- Keep development-only and Sim2Sim launch assets outside the production set
+  unless separately justified.
+
+### Acceptance Criteria
+
+- The documented production launch path is cryptographically bound to the same
+  source commit and bundle as `rl_real_LW`.
+- Missing, modified, escaping, or symlinked required launch files make offline
+  deployment verification fail before hardware access.
+- A clean relocated production prefix still passes verification and resolves
+  all required ROS packages within that prefix.
+
+---
+
+## [LW-036] Runtime actuator-network output validation
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-005, LW-013, LW-016, LW-021, LW-029
+
+### Problem
+
+Optional Sim2Sim actuator models are checked once at startup with a zero input,
+but every later inference result is indexed as `output[0]` without validating
+its size or finiteness. An empty dynamic result can cause out-of-bounds access;
+a NaN or infinity can enter `actuator_net_tau_` and then MuJoCo control. This
+hook runs after the shared robot-command validation, so the auxiliary torque is
+outside the existing final finite-command boundary.
+
+### Evidence
+
+- `src/rl_sar/library/core/simulation/lw_actuator_models.cpp:63-103`
+- `src/rl_sar/src/rl_sim_LW.cpp:666-749`
+- `src/rl_sar/library/core/safety/lw_runtime_core.hpp:317-331`
+- `src/rl_sar/src/rl_sim_LW.cpp:910-935`
+- `src/rl_sar/test/test_lw_actuator_models.cpp:89-155`
+- `src/rl_sar/test/test_lw_actuator_models.cpp:214-251`
+
+### Intended Scope
+
+- Validate the output count and every output value on every actuator-model
+  invocation, not only during warmup.
+- Route inference exceptions and invalid dynamic outputs through one explicit
+  proportional Sim2Sim safety event and prevent any invalid torque write.
+- Validate the final combined actuator torque after all adapter hooks and before
+  writing MuJoCo control.
+- Add a stateful fake model that passes warmup and later returns empty,
+  oversized, non-finite, and throwing results.
+
+### Acceptance Criteria
+
+- No actuator-model result is indexed or applied before its shape and values are
+  validated.
+- Empty, wrong-sized, non-finite, or throwing runtime results produce the
+  approved safe action without undefined behavior or invalid MuJoCo controls.
+- Valid optional actuator models retain their current behavior and real-robot
+  command paths are unchanged.
+
+---
+
+## [LW-037] Complete Sim2Sim SIGTERM and ROS shutdown
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-024, LW-028
+
+### Problem
+
+Sim2Sim blocks SIGINT and handles it through `LWSigintWaiter`, but delegates
+SIGTERM to the ROS signal handler. If SIGTERM causes `rclcpp::spin()` to return
+normally, the ROS worker performs no simulation-stop request; only its
+exception path calls `RequestSimulationStop()`. The main thread can remain
+blocked in MuJoCo `RenderLoop()` until the window is closed manually.
+
+### Evidence
+
+- `src/rl_sar/library/core/simulation/lw_signal_shutdown.hpp:76-212`
+- `src/rl_sar/src/rl_sim_LW.cpp:1265-1305`
+- `src/rl_sar/src/rl_sim_LW.cpp:1319-1346`
+- `src/rl_sar/test/test_lw_sim_lifecycle_integration.py:77-110`
+- `src/rl_sar/test/test_lw_signal_shutdown.cpp:53-153`
+
+### Intended Scope
+
+- Make every normal ROS-spin exit, SIGTERM, SIGINT, ROS shutdown request, and
+  ROS-thread exception request the same idempotent simulation stop.
+- Preserve signal-safe handling and the established join order for ROS,
+  rendering, physics, and business workers.
+- Add a headless lifecycle test that exercises SIGTERM/normal ROS exit without
+  requiring a GUI.
+
+### Acceptance Criteria
+
+- SIGTERM causes bounded, normal Sim2Sim termination without window interaction.
+- Normal return from the ROS executor cannot leave `RenderLoop()` running.
+- Repeated and concurrent shutdown requests remain idempotent, all workers are
+  joined, and stored worker errors are still propagated.
+
+---
+
+## [LW-038] Allocation-bounded real control cycle
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-007, LW-011, LW-013, LW-031, LW-033
+
+### Problem
+
+The 200 Hz real control path repeatedly decodes YAML values into new vectors.
+`GetState()` requests `joint_mapping` three times for every degree of freedom,
+while command delivery and FSM interpolation also request container-valued
+configuration inside control cycles. Snapshot publication additionally copies
+vector-backed robot states under a mutex. These operations introduce allocator
+and lock latency into the deterministic loop despite the existing timing
+monitor and strict build gate.
+
+### Evidence
+
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.hpp:160-176`
+- `src/rl_sar/src/rl_real_LW.cpp:699-703`
+- `src/rl_sar/src/rl_real_LW.cpp:717-758`
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:86-98`
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:160-171`
+- `src/rl_sar/library/core/safety/lw_runtime_sync.hpp:10-42`
+- `src/rl_sar/library/core/safety/lw_runtime_core.hpp:579-587`
+
+### Intended Scope
+
+- Decode and validate immutable base/policy configuration into typed retained
+  storage before worker threads start.
+- Remove repeated YAML lookups and container construction from real control and
+  FSM execution paths.
+- Reuse bounded storage for cross-thread state transport or document and test a
+  provably bounded alternative.
+- Add an allocation-count or equivalent deterministic regression test and use
+  the existing suspended profiler to measure the target-host effect before
+  changing deployed timing thresholds.
+
+### Acceptance Criteria
+
+- After startup and policy activation, steady-state real control iterations do
+  not allocate because of configuration reads or state transport.
+- No unbounded lock wait is introduced into the command deadline path.
+- Cached values remain bound to the active validated policy generation and are
+  refreshed atomically on an approved policy switch.
+- Runtime parity, safety behavior, and full strict tests remain green; target-
+  host timing evidence is recorded before any threshold recommendation.
+
+---
+
+## [LW-039] Actuator-model policy-root containment
+
+**Priority**: P2 / low
+**Status**: pending
+**Dependencies**: LW-010, LW-029
+
+### Problem
+
+`ResolveLWActuatorModelPaths()` canonicalizes the selected policy root but only
+lexically joins model paths and checks `is_regular_file()`, which follows
+symbolic links. A symlinked leg or foot model can therefore resolve outside the
+selected policy root while diagnostics still display the in-root lexical path.
+
+### Evidence
+
+- `src/rl_sar/library/core/simulation/lw_actuator_models.cpp:13-29`
+- `src/rl_sar/library/core/simulation/lw_actuator_models.cpp:32-60`
+- `src/rl_sar/test/test_lw_actuator_models.cpp:157-212`
+
+### Intended Scope
+
+- Reject symbolic links in every component of an optional actuator-model path.
+- Canonicalize each model and prove containment within the selected canonical
+  policy root before loading it.
+- Test direct file symlinks, symlinked intermediate directories, and escapes to
+  otherwise valid external TorchScript files.
+
+### Acceptance Criteria
+
+- No optional actuator model outside the selected policy root can be loaded
+  through a symlink or path alias.
+- Failure diagnostics identify the rejected lexical and resolved path without
+  silently falling back to the compile-time policy directory.
+- Normal relocated real directories continue to load both current models.
+
+---
+
+## [LW-040] Safe polymorphic RL destruction contract
+
+**Priority**: P2 / low
+**Status**: pending
+**Dependencies**: LW-015, LW-024, LW-031
+
+### Problem
+
+`RL` is a polymorphic base with virtual runtime methods but has a non-virtual
+destructor. No current deletion through `RL*` was found, so this is not an
+active lifetime failure, but the documented extension boundary permits a future
+owner to destroy a derived real or Sim2Sim object through the base and skip its
+thread, serial, or simulation cleanup.
+
+### Evidence
+
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.hpp:298-302`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.hpp:320-365`
+- `src/rl_sar/include/rl_real_LW.hpp`
+- `src/rl_sar/include/rl_sim_LW.hpp:38-47`
+
+### Intended Scope
+
+- Make the ownership/destruction contract explicit and safe, normally with a
+  virtual noexcept destructor unless a stronger non-polymorphic ownership
+  restriction is selected and enforced.
+- Verify derived destructors still perform their existing bounded shutdown in
+  the required order.
+- Add a focused compile/runtime regression test for the chosen contract.
+
+### Acceptance Criteria
+
+- It is impossible to invoke undefined or incomplete cleanup by deleting an LW
+  runtime object through its supported base ownership type.
+- The change does not alter runtime behavior, object ownership, or extension
+  registration beyond the approved destruction contract.
+- Strict warning, lifecycle, and full CTest suites remain green.
+
+---
+
+## [LW-041] Opt-in Sim2Sim plot publishing
+
+**Priority**: P2 / low
+**Status**: pending
+**Dependencies**: LW-014, LW-021, LW-031
+
+### Problem
+
+The Sim2Sim header unconditionally defines `PLOT`, so every maintained
+`rl_sim_LW` build creates a `/joint_states` publisher and a 2 ms wall timer.
+This makes high-rate diagnostic work part of the default simulation runtime and
+can distort parity, timing, and profiling runs even when no consumer needs the
+topic.
+
+### Evidence
+
+- `src/rl_sar/include/rl_sim_LW.hpp:4-10`
+- `src/rl_sar/include/rl_sim_LW.hpp:119-124`
+- `src/rl_sar/src/rl_sim_LW.cpp:223-232`
+- `src/rl_sar/src/rl_sim_LW.cpp:278-432`
+
+### Intended Scope
+
+- Replace the header-level always-on macro with an explicit Sim2Sim runtime or
+  build option that defaults off.
+- Avoid creating the publisher, timer, message buffers, or callbacks when the
+  option is disabled.
+- Keep operator-status reporting separate from high-rate plot telemetry.
+- Add configuration and lifecycle tests for both disabled and enabled modes.
+
+### Acceptance Criteria
+
+- Default Sim2Sim startup performs no 500 Hz plot publication work.
+- An explicit documented opt-in restores the existing plot topic and payload.
+- Real-robot debug publishing and shared control/safety parity remain unchanged.
 
 ---
 

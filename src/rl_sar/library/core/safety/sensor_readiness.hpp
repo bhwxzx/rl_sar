@@ -71,7 +71,20 @@ public:
         {
             throw std::invalid_argument("sensor freshness timeout must be positive");
         }
-        timeout_ = timeout;
+        imu_timeout_ = timeout;
+        motor_feedback_timeout_ = timeout;
+    }
+
+    void setImuTimeout(Duration timeout)
+    {
+        requirePositiveTimeout(timeout);
+        imu_timeout_ = timeout;
+    }
+
+    void setMotorFeedbackTimeout(Duration timeout)
+    {
+        requirePositiveTimeout(timeout);
+        motor_feedback_timeout_ = timeout;
     }
 
     void markImuReceived(TimePoint received_at) noexcept
@@ -92,9 +105,11 @@ public:
     SensorReadinessStatus evaluate(TimePoint now) noexcept
     {
         SensorReadinessStatus status;
-        status.imu_fresh = isFresh(last_imu_, now);
-        status.right_feedback_fresh = isFresh(last_right_feedback_, now);
-        status.left_feedback_fresh = isFresh(last_left_feedback_, now);
+        status.imu_fresh = isFresh(last_imu_, now, imu_timeout_);
+        status.right_feedback_fresh =
+            isFresh(last_right_feedback_, now, motor_feedback_timeout_);
+        status.left_feedback_fresh =
+            isFresh(last_left_feedback_, now, motor_feedback_timeout_);
 
         if (fault_latched_)
         {
@@ -129,7 +144,19 @@ public:
     }
 
 private:
-    bool isFresh(const std::optional<TimePoint>& timestamp, TimePoint now) const noexcept
+    static void requirePositiveTimeout(Duration timeout)
+    {
+        if (timeout <= Duration::zero())
+        {
+            throw std::invalid_argument(
+                "sensor freshness timeout must be positive");
+        }
+    }
+
+    bool isFresh(
+        const std::optional<TimePoint>& timestamp,
+        TimePoint now,
+        Duration timeout) const noexcept
     {
         if (!timestamp)
         {
@@ -139,10 +166,11 @@ private:
         {
             return true;
         }
-        return now - *timestamp <= timeout_;
+        return now - *timestamp <= timeout;
     }
 
-    Duration timeout_{};
+    Duration imu_timeout_{};
+    Duration motor_feedback_timeout_{};
     std::optional<TimePoint> last_imu_;
     std::optional<TimePoint> last_right_feedback_;
     std::optional<TimePoint> last_left_feedback_;

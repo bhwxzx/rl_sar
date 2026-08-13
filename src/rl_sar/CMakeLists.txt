@@ -453,6 +453,14 @@ if(BUILD_TESTING)
     )
     add_test(NAME sensor_readiness COMMAND test_sensor_readiness)
 
+    add_executable(test_lw_imu_ahrs_guard
+        test/test_lw_imu_ahrs_guard.cpp
+    )
+    target_include_directories(test_lw_imu_ahrs_guard PRIVATE
+        library/core/safety
+    )
+    add_test(NAME lw_imu_ahrs_guard COMMAND test_lw_imu_ahrs_guard)
+
     if(SYSTEM_TYPE STREQUAL "Linux")
         add_executable(test_lw_serial_sdk
             test/test_lw_serial_sdk.cpp

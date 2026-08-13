@@ -86,6 +86,8 @@ class ProfileAnalyzerTests(unittest.TestCase):
             "LW:\n"
             "  dt: 0.005\n"
             "  sensor_timeout: 0.1\n"
+            "  trusted_imu_timeout: 0.1\n"
+            "  imu_ahrs_pair_max_age: 0.1\n"
             "  serial_write_timeout: 0.002\n"
             "  control_loop_degraded_consecutive_misses: 3\n"
             "  control_loop_degraded_lateness: 0.02\n",
@@ -124,7 +126,7 @@ class ProfileAnalyzerTests(unittest.TestCase):
     ) -> Path:
         selected_root = self.policy_root if policy_root is None else policy_root
         report = {
-            "schema_version": 2,
+            "schema_version": 3,
             "source_commit": source_commit,
             "mode": mode,
             "host": host or {
@@ -152,6 +154,15 @@ class ProfileAnalyzerTests(unittest.TestCase):
                 "imu_first_sample_delay_us": 5000,
                 "imu_final_age_us": 4000,
                 "imu_gap": distribution(2000, 5000, 6000, 7000),
+                "ahrs_seen": mode == "hardware-observe",
+                "ahrs_first_sample_delay_us": 5200,
+                "ahrs_final_age_us": 4100,
+                "ahrs_gap": distribution(2000, 5000, 6100, 7100),
+                "trusted_imu_seen": mode == "hardware-observe",
+                "trusted_imu_first_sample_delay_us": 5300,
+                "trusted_imu_final_age_us": 4200,
+                "trusted_imu_gap": distribution(2000, 5000, 6200, 7200),
+                "imu_ahrs_pair_age": distribution(2000, 1000, 1800, 2000),
                 "right_feedback_seen": mode == "hardware-observe",
                 "right_feedback_first_sample_delay_us": 6000,
                 "right_feedback_final_age_us": 4500,
@@ -193,7 +204,14 @@ class ProfileAnalyzerTests(unittest.TestCase):
         ]
         if sensor_bound is not None:
             arguments.extend(
-                ["--max-safe-sensor-timeout-ms", str(sensor_bound)]
+                [
+                    "--max-safe-sensor-timeout-ms",
+                    str(sensor_bound),
+                    "--max-safe-trusted-imu-timeout-ms",
+                    str(sensor_bound),
+                    "--max-safe-imu-ahrs-pair-age-ms",
+                    str(sensor_bound),
+                ]
             )
         return MODULE.main(arguments)
 
@@ -205,7 +223,7 @@ class ProfileAnalyzerTests(unittest.TestCase):
         before = self.base.read_bytes()
         self.assertEqual(self.analyze([slower, faster, hardware], output), 0)
         result = json.loads(output.read_text(encoding="utf-8"))
-        self.assertEqual(result["schema_version"], 2)
+        self.assertEqual(result["schema_version"], 3)
         self.assertEqual(result["deployment_identity"]["source_commit"], "a" * 40)
         self.assertEqual(
             result["base_configuration"]["sha256"],
@@ -214,6 +232,8 @@ class ProfileAnalyzerTests(unittest.TestCase):
         self.assertEqual(len(result["input_reports"]), 3)
         overlay = result["candidate_overlay"]["LW"]
         self.assertEqual(overlay["control_loop_cpu"], 3)
+        self.assertLess(overlay["trusted_imu_timeout"], 0.1)
+        self.assertLess(overlay["imu_ahrs_pair_max_age"], 0.1)
         self.assertFalse(overlay["control_loop_require_realtime"])
         self.assertEqual(overlay["control_loop_fatal_consecutive_misses"], 0)
         self.assertEqual(overlay["control_loop_fatal_lateness"], 0.0)
@@ -226,6 +246,8 @@ class ProfileAnalyzerTests(unittest.TestCase):
         result = json.loads(output.read_text(encoding="utf-8"))
         overlay = result["candidate_overlay"]["LW"]
         self.assertEqual(overlay["sensor_timeout"], 0.1)
+        self.assertEqual(overlay["trusted_imu_timeout"], 0.1)
+        self.assertEqual(overlay["imu_ahrs_pair_max_age"], 0.1)
         self.assertEqual(overlay["serial_write_timeout"], 0.002)
         self.assertEqual(
             result["decisions"]["sensor_timeout"]["status"],
@@ -237,6 +259,18 @@ class ProfileAnalyzerTests(unittest.TestCase):
         hardware = self.write_report("hardware.yaml", "hardware-observe", 1, 400)
         output = self.root / "candidate.yaml"
         self.assertEqual(self.analyze([host, hardware], output, sensor_bound=5.0), 1)
+        self.assertFalse(output.exists())
+
+    def test_rejects_hardware_without_trusted_imu_proof(self) -> None:
+        host = self.write_report("host.json", "host-only", 1, 400)
+        hardware = self.write_report(
+            "hardware.json", "hardware-observe", 1, 400
+        )
+        report = json.loads(hardware.read_text(encoding="utf-8"))
+        report["hardware"]["trusted_imu_seen"] = False
+        hardware.write_text(json.dumps(report), encoding="utf-8")
+        output = self.root / "candidate.json"
+        self.assertEqual(self.analyze([host, hardware], output), 1)
         self.assertFalse(output.exists())
 
     def test_hardware_collection_requires_exact_confirmation(self) -> None:

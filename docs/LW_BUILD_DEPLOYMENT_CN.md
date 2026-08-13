@@ -586,11 +586,20 @@ ros2 launch fdilink_ahrs ahrs_driver.launch.py
 ```bash
 ros2 topic echo --once /imu
 ros2 topic hz /imu
+ros2 topic echo --once /euler_angles
+ros2 topic hz /euler_angles
 ```
 
-确认时间戳持续更新、姿态/角速度/加速度为有限值且发布频率稳定后，用
+确认 `/imu` 时间戳持续更新、姿态/角速度/加速度为有限值，并确认
+`/euler_angles` 独立持续发布且两者频率稳定后，用
 `Ctrl-C` 停止独立 AHRS 驱动。不要让独立 AHRS 驱动与完整 LW launch 同时
 争用同一串口。
+
+完整 LW launch 会在不修改 FDLink 包的前提下，将这两个第三方话题分别重映射为
+`/fdilink/raw_imu` 和 `/fdilink/raw_euler`。实机进程内的 guard 只把一次有限的
+AHRS 事件作为一次性授权，并只接受授权时效内紧随其后、角速度有限且四元数模长
+合理的下一帧原始 IMU；通过后四元数会归一化。启动以来从未出现有效配对时，控制
+保持硬失能等待；已经进入 Ready 后可信 IMU 过期，则锁存硬失能并关闭程序。
 
 ### 可选调试话题
 
@@ -641,7 +650,9 @@ control_loop_fatal_lateness: 0.0
 
 - `control_loop_cpu`、显式试验过的 `control_loop_realtime_priority`；
 - 控制循环降级的连续丢周期数和单次晚到阈值；
-- IMU/左右反馈的 `sensor_timeout`；
+- 左右电机板反馈的 `sensor_timeout`；
+- guard 输出中断的 `trusted_imu_timeout`；
+- AHRS 一次性授权到下一帧 IMU 的 `imu_ahrs_pair_max_age`；
 - 两个串口组成的完整命令包写入截止时间 `serial_write_timeout`。
 
 吊装静态测量不能验证运动负载、接地冲击、电源压降、电机板看门狗和硬失能后的
@@ -705,22 +716,32 @@ python3 "$LW_PROFILE_TOOL" collect-hardware \
     --confirmation I_CONFIRM_LW_IS_SUSPENDED_AND_MOTORS_MUST_REMAIN_DISABLED
 ```
 
+**明确结论：执行上述 `collect-hardware` 命令的整个测算过程中，测算程序不会使能
+电机。** 它不会向左右电机板串口发送电机使能包或普通控制包；四个策略只用于
+shadow 推理和耗时测量，其生成的 Passive/策略命令会被丢弃，不会进入串口。测算
+程序在初始化、测算、退出三个阶段唯一允许写入电机板串口的命令均为
+`motors_disable=true`，其中测算期间由独立的 5 ms 线程持续发送失能保活。
+
 该模式不会创建手柄或键盘输入，也不会允许 Passive/shadow policy 命令进入串口。
 它会先打开左右电机板串口并确认 20 个 `motors_disable=true` 包均完整写入，随后
 启动独立的 5 ms 失能保活线程；只有失能写入和保活启动成功后才会预加载四个模型、
 启动 ROS 观察和参数测算。初始化、测算和退出阶段不存在非失能命令发送路径；
 任一失能包写入不完整都会终止测算，退出前仍尝试最终 20 个失能包。报告记录
-初始失能写入与保活证明、IMU、左右电机板首帧等待、相邻有效帧间隔、结束时帧龄、
-串口写耗时与失败次数。任何失能证明缺失、来源未出现、采样不足、串口写失败或
-四个策略未完整运行，都会使候选分析失败。命令结束后停止独立 AHRS 驱动。
+初始失能写入与保活证明、原始 IMU、有效 AHRS、guard 接受的可信 IMU、配对时延、
+左右电机板首帧等待、相邻有效帧间隔、结束时帧龄、串口写耗时与失败次数。任何
+失能证明缺失、来源未出现、配对或采样不足、串口写失败或四个策略未完整运行，
+都会使候选分析失败。命令结束后停止独立 AHRS 驱动。
 
 当前电机板反馈协议没有单独的“失能已执行”回执位，因此上述证明只表示上层失能
 包已完整写入两个串口且程序没有发送非失能命令，不能替代 STM32 侧状态确认或
-物理急停。底层是否实际进入失能状态仍应由固件行为和现场安全措施保证。
+物理急停。换言之，可以确认“测算程序不会发出使能命令”，但不能仅凭该报告确认
+“STM32 已经执行失能且电机物理上处于失能状态”。底层是否实际进入失能状态仍应
+由固件行为和现场安全措施保证，整个测算期间必须保持可靠吊装、运动范围隔离和
+物理急停就位。
 
 #### 生成仅供评审的候选
 
-下面两个 `max-safe` 值不是脚本测出来的性能值，而是风险评估预先确定的硬上限；
+下面四个 `max-safe` 值不是脚本测出来的性能值，而是风险评估预先确定的硬上限；
 必须由负责机械与控制安全的人员给出。示例中的占位符不能原样执行：
 
 ```bash
@@ -728,22 +749,27 @@ python3 "$LW_PROFILE_TOOL" analyze \
     --base-yaml "$LW_POLICY_ROOT/LW/base.yaml" \
     --reports "$LW_PROFILE_DIR"/host/*.json "$LW_PROFILE_DIR/hardware.json" \
     --output "$LW_PROFILE_DIR/candidate-review.json" \
-    --max-safe-sensor-timeout-ms <评审确定的最大传感器时效毫秒> \
+    --max-safe-sensor-timeout-ms <评审确定的最大电机反馈时效毫秒> \
+    --max-safe-trusted-imu-timeout-ms <评审确定的最大可信IMU时效毫秒> \
+    --max-safe-imu-ahrs-pair-age-ms <评审确定的最大IMU-AHRS配对时延毫秒> \
     --max-safe-control-gap-ms <评审确定的最大控制间断毫秒> \
     --minimum-hardware-samples 1000
 ```
 
-分析器按截止时间丢失、最大晚到、最大执行时间和推理尾延迟排序 host 报告；传感器
-候选同时覆盖首帧等待、P50/P99.9/最大帧间隔和结束帧龄；串口候选覆盖
-P99.9/最大写耗时，并且必须小于一个 5 ms 控制周期。若不提供某个安全上限，
-对应的现有值会保持不变并标记为需要人工测量或评审。
+分析器按截止时间丢失、最大晚到、最大执行时间和推理尾延迟排序 host 报告；电机
+反馈和可信 IMU 候选覆盖相应的 P50/P99.9/最大帧间隔及结束帧龄，配对候选覆盖
+P99.9/最大 AHRS 到后续 IMU 的时延；串口候选覆盖 P99.9/最大写耗时，并且必须
+小于一个 5 ms 控制周期。`policy/LW/base.yaml` 中新增的两个 IMU 参数暂时保留
+原 100 ms 行为作为未测量占位值，不代表已批准的实机安全窗口。若不提供某个
+安全上限，对应现有值会保持不变并标记为需要人工测量或评审。
 
-每份 profiler 报告使用 schema v2，记录完整源码提交、主机节点/系统/内核/架构、
+每份 profiler 报告使用 schema v3，记录完整源码提交、主机节点/系统/内核/架构、
 规范化策略根、每策略测量时长，以及固定顺序的 11 个获批策略资产及 SHA-256。
 四个策略记录也必须各出现一次并保持批准顺序。分析器只接受同一提交、同一主机、
 同一策略根和同一资产摘要的报告；host 报告时长必须完全相同，hardware 报告可
 使用独立时长但不会参与 host 排名。schema v1、重复或乱序策略、混合部署、混合
 host 时长以及模式与硬件证明矛盾的报告都会被拒绝，必须从当前部署重新采集。
+schema v2 报告不含独立 AHRS、可信 IMU 和配对时延证据，不能用于本版本候选分析。
 
 `--base-yaml` 必须正好是报告中策略根下的 `LW/base.yaml`，且摘要与报告一致。
 分析器在读取和写出前后都会复核 base、11 个策略资产和输入报告未发生变化；不能

@@ -2,6 +2,7 @@
 #include "lw_config_profile.hpp"
 #include "lw_deployment_bundle.hpp"
 #include "lw_loop_config.hpp"
+#include "lw_imu_ahrs_guard.hpp"
 #include "lw_runtime_core.hpp"
 #include "motion_loader_lw.hpp"
 #include "rl_sdk.hpp"
@@ -28,6 +29,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <geometry_msgs/msg/vector3.hpp>
 #include <sys/utsname.h>
 #include <unistd.h>
 
@@ -62,6 +64,7 @@ struct ProfileOptions
     std::string right_port = "/dev/ttyLegRight";
     std::string left_port = "/dev/ttyLegLeft";
     std::string imu_topic = "/imu";
+    std::string ahrs_topic = "/euler_angles";
 };
 
 struct ProfilePolicyResult
@@ -77,6 +80,9 @@ struct ProfilePolicyResult
 struct HardwareProfileResult
 {
     LWProfileTimedSourceSnapshot imu;
+    LWProfileTimedSourceSnapshot ahrs;
+    LWProfileTimedSourceSnapshot trusted_imu;
+    LWProfileDistributionSnapshot imu_ahrs_pair_age;
     LWProfileTimedSourceSnapshot right_feedback;
     LWProfileTimedSourceSnapshot left_feedback;
     LWProfileDistributionSnapshot serial_writes;
@@ -139,7 +145,8 @@ void printUsage()
         << "  --cpu N\n"
         << "  --realtime-priority N\n"
         << "  --require-realtime\n"
-        << "  --right-port PATH --left-port PATH --imu-topic NAME\n"
+        << "  --right-port PATH --left-port PATH\n"
+        << "  --imu-topic NAME --ahrs-topic NAME\n"
         << "  --hardware-confirmation " << kHardwareConfirmation << "\n"
         << "\n"
         << "The output path must not already exist. This tool never modifies base.yaml.\n";
@@ -210,6 +217,10 @@ ProfileOptions parseOptions(int argc, char** argv)
         else if (argument == "--imu-topic")
         {
             options.imu_topic = requireValue(index, argc, argv);
+        }
+        else if (argument == "--ahrs-topic")
+        {
+            options.ahrs_topic = requireValue(index, argc, argv);
         }
         else if (argument == "--hardware-confirmation")
         {
@@ -410,6 +421,12 @@ public:
         ValidateLWBaseConfiguration(
             params.config_node,
             ResolvePolicyPath("LW/base.yaml"));
+        const float imu_ahrs_pair_max_age_seconds =
+            params.Get<float>("imu_ahrs_pair_max_age");
+        imu_ahrs_guard_.setPairMaxAge(
+            std::chrono::duration_cast<LWImuAhrsGuard::Duration>(
+                std::chrono::duration<float>(
+                    imu_ahrs_pair_max_age_seconds)));
         const float serial_write_timeout_seconds =
             params.Get<float>("serial_write_timeout");
         lw_sdk_.SetWriteTimeout(
@@ -730,10 +747,50 @@ private:
             qos,
             [this](sensor_msgs::msg::Imu::SharedPtr message)
             {
-                imu_gaps_.mark(std::chrono::steady_clock::now());
+                const auto now = std::chrono::steady_clock::now();
+                imu_gaps_.mark(now);
+                const LWImuAhrsGuardDecision decision =
+                    imu_ahrs_guard_.observeImu(
+                        now,
+                        {message->orientation.w,
+                         message->orientation.x,
+                         message->orientation.y,
+                         message->orientation.z},
+                        {message->angular_velocity.x,
+                         message->angular_velocity.y,
+                         message->angular_velocity.z});
+                if (decision.pair_age_observed)
+                {
+                    imu_ahrs_pair_age_.record(decision.pair_age);
+                }
+                if (!decision.accepted())
+                {
+                    return;
+                }
+                trusted_imu_gaps_.mark(now);
+                auto trusted =
+                    std::make_shared<sensor_msgs::msg::Imu>(*message);
+                trusted->orientation.w /= decision.quaternion_norm;
+                trusted->orientation.x /= decision.quaternion_norm;
+                trusted->orientation.y /= decision.quaternion_norm;
+                trusted->orientation.z /= decision.quaternion_norm;
                 std::lock_guard<std::mutex> lock(imu_mutex_);
-                latest_imu_ = std::move(message);
+                latest_imu_ = std::move(trusted);
             });
+        ahrs_subscription_ =
+            node_->create_subscription<geometry_msgs::msg::Vector3>(
+                options_.ahrs_topic,
+                qos,
+                [this](geometry_msgs::msg::Vector3::SharedPtr message)
+                {
+                    const auto now = std::chrono::steady_clock::now();
+                    if (imu_ahrs_guard_.observeAhrs(
+                            now,
+                            {message->x, message->y, message->z}))
+                    {
+                        ahrs_gaps_.mark(now);
+                    }
+                });
         executor_thread_ = std::thread([this]() { rclcpp::spin(node_); });
     }
 
@@ -997,6 +1054,10 @@ private:
     {
         HardwareProfileResult result;
         result.imu = imu_gaps_.snapshotSince(hardware_started_at_);
+        result.ahrs = ahrs_gaps_.snapshotSince(hardware_started_at_);
+        result.trusted_imu =
+            trusted_imu_gaps_.snapshotSince(hardware_started_at_);
+        result.imu_ahrs_pair_age = imu_ahrs_pair_age_.snapshot();
         result.right_feedback =
             right_feedback_.snapshotSince(hardware_started_at_);
         result.left_feedback =
@@ -1023,7 +1084,7 @@ private:
                 + options_.output.string());
         }
         output << std::setprecision(17)
-               << "{\n\"schema_version\":2,\n\"source_commit\":";
+               << "{\n\"schema_version\":3,\n\"source_commit\":";
         emitJsonString(output, RL_SAR_SOURCE_COMMIT);
         output << ",\n\"mode\":";
         emitJsonString(
@@ -1109,6 +1170,24 @@ private:
                << hardware_result_.imu.final_age_us
                << ",\"imu_gap\":";
         emitDistribution(output, hardware_result_.imu.gaps);
+        output << ",\"ahrs_seen\":"
+               << (hardware_result_.ahrs.seen ? "true" : "false")
+               << ",\"ahrs_first_sample_delay_us\":"
+               << hardware_result_.ahrs.first_sample_delay_us
+               << ",\"ahrs_final_age_us\":"
+               << hardware_result_.ahrs.final_age_us
+               << ",\"ahrs_gap\":";
+        emitDistribution(output, hardware_result_.ahrs.gaps);
+        output << ",\"trusted_imu_seen\":"
+               << (hardware_result_.trusted_imu.seen ? "true" : "false")
+               << ",\"trusted_imu_first_sample_delay_us\":"
+               << hardware_result_.trusted_imu.first_sample_delay_us
+               << ",\"trusted_imu_final_age_us\":"
+               << hardware_result_.trusted_imu.final_age_us
+               << ",\"trusted_imu_gap\":";
+        emitDistribution(output, hardware_result_.trusted_imu.gaps);
+        output << ",\"imu_ahrs_pair_age\":";
+        emitDistribution(output, hardware_result_.imu_ahrs_pair_age);
         output << ",\"right_feedback_seen\":"
                << (hardware_result_.right_feedback.seen ? "true" : "false")
                << ",\"right_feedback_first_sample_delay_us\":"
@@ -1161,6 +1240,9 @@ private:
     LowState lw_low_state_{};
     LowCmd disable_command_{};
     LWProfileTimedSource imu_gaps_;
+    LWProfileTimedSource ahrs_gaps_;
+    LWProfileTimedSource trusted_imu_gaps_;
+    LWProfileDistribution imu_ahrs_pair_age_;
     LWProfileTimedSource right_feedback_;
     LWProfileTimedSource left_feedback_;
     LWProfileDistribution serial_writes_;
@@ -1178,8 +1260,10 @@ private:
 
     std::shared_ptr<rclcpp::Node> node_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_subscription_;
+    rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr ahrs_subscription_;
     sensor_msgs::msg::Imu::SharedPtr latest_imu_;
     std::mutex imu_mutex_;
+    LWImuAhrsGuard imu_ahrs_guard_{std::chrono::milliseconds(100)};
     std::thread executor_thread_;
     bool ros_initialized_ = false;
 

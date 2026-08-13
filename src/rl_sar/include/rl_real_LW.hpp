@@ -12,6 +12,7 @@
 #include "command_gate.hpp"
 #include "loop.hpp"
 #include "sensor_readiness.hpp"
+#include "lw_imu_ahrs_guard.hpp"
 #include "lw_control_safety.hpp"
 #include "lw_joystick_safety.hpp"
 #include "lw_loop_config.hpp"
@@ -32,6 +33,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <geometry_msgs/msg/vector3.hpp>
 #include <realtime_tools/realtime_box.hpp>
 #include <realtime_tools/realtime_buffer.hpp>
 
@@ -121,6 +123,8 @@ private:
     };
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_subscriber_ = nullptr;
+    rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr ahrs_subscriber_ = nullptr;
+    LWImuAhrsGuard imu_ahrs_guard_{std::chrono::milliseconds(100)};
     realtime_tools::RealtimeBox<std::shared_ptr<TimedImuSample>> received_imu_sample_{nullptr};
     SensorReadinessMonitor sensor_readiness_monitor_{std::chrono::milliseconds(100)};
     SensorReadinessStatus sensor_readiness_status_;
@@ -129,6 +133,7 @@ private:
     std::string last_missing_sources_;
     bool sensor_ready_logged_ = false;
     void ImuCallback(const sensor_msgs::msg::Imu::SharedPtr imu_msg);
+    void AhrsCallback(const geometry_msgs::msg::Vector3::SharedPtr ahrs_msg);
 #ifdef ENABLE_IMU_GYRO_FILTER
     // 滤波系数 alpha 取值范围 (0, 1]。
     // 越接近 1 则越信任当前真实值（滤波效果弱，延迟小）；

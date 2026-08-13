@@ -71,7 +71,7 @@ def main() -> int:
         if completed.returncode != 0:
             raise RuntimeError(f"host-only profiler failed: {completed.returncode}")
         report = json.loads(report_path.read_text(encoding="utf-8"))
-        if report.get("schema_version") != 2:
+        if report.get("schema_version") != 3:
             raise RuntimeError("host-only report schema differs")
         source_commit = report.get("source_commit")
         if source_commit != "unverified" and re.fullmatch(
