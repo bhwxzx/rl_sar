@@ -221,6 +221,9 @@ struct LWControlSnapshot
 
 struct LWPolicyInputSnapshot
 {
+    std::uint64_t generation = 0;
+    std::uint64_t sequence = 0;
+    std::chrono::steady_clock::time_point state_capture_time{};
     RobotState<float> robot_state;
     LWControlSnapshot control;
 };
@@ -230,11 +233,43 @@ struct LWPolicyOutputFrame
     std::uint64_t generation = 0;
     std::uint64_t sequence = 0;
     std::uint64_t frame = 0;
-    std::chrono::steady_clock::time_point source_time{};
+    std::uint64_t source_input_sequence = 0;
+    std::chrono::steady_clock::time_point source_state_time{};
     std::vector<float> dof_pos;
     std::vector<float> dof_vel;
     std::vector<float> dof_tau;
 };
+
+enum class LWPolicyInputStatus
+{
+    Ready,
+    Missing,
+    GenerationMismatch,
+    Incomplete,
+    Duplicate,
+    Regressing,
+    Future,
+    Stale
+};
+
+inline bool LWPolicyInputRequiresFallback(
+    LWPolicyInputStatus status) noexcept
+{
+    return status == LWPolicyInputStatus::Incomplete
+        || status == LWPolicyInputStatus::Regressing
+        || status == LWPolicyInputStatus::Future
+        || status == LWPolicyInputStatus::Stale;
+}
+
+const char* LWPolicyInputStatusName(LWPolicyInputStatus status) noexcept;
+LWPolicyInputStatus EvaluateLWPolicyInput(
+    const LWPolicyInputSnapshot* input,
+    std::uint64_t active_generation,
+    std::chrono::steady_clock::time_point now,
+    std::chrono::steady_clock::duration max_age,
+    std::uint64_t last_generation,
+    std::uint64_t last_sequence,
+    std::chrono::steady_clock::time_point last_state_capture_time) noexcept;
 
 enum class LWPolicyOutputStatus
 {
@@ -474,6 +509,8 @@ public:
 private:
     std::uint64_t last_lw_output_generation_ = 0;
     std::uint64_t last_lw_output_sequence_ = 0;
+    std::uint64_t last_lw_source_input_sequence_ = 0;
+    std::chrono::steady_clock::time_point last_lw_source_state_time_{};
     bool lw_output_stale_ = false;
 };
 

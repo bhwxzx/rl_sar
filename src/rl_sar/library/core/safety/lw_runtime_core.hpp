@@ -30,6 +30,8 @@ struct LWInferenceTraceSnapshot
 {
     std::uint64_t generation = 0;
     std::uint64_t frame = 0;
+    std::uint64_t source_input_sequence = 0;
+    std::chrono::steady_clock::time_point source_state_time{};
     Observations<float> observations;
     std::vector<float> output_dof_pos;
     std::vector<float> output_dof_vel;
@@ -113,6 +115,14 @@ public:
         reportSafetyEvent(
             LWSafetyEvent::PolicyOutputUnavailable,
             "[Safety] LW policy output became stale or incomplete");
+    }
+
+    void handlePolicyInputFault(LWPolicyInputStatus status) noexcept
+    {
+        reportSafetyEvent(
+            LWSafetyEvent::PolicyInputUnavailable,
+            std::string("[Safety] LW policy input provenance is ")
+                + LWPolicyInputStatusName(status));
     }
 
     void handleLoopError(
@@ -258,7 +268,7 @@ public:
     void publishInitialPolicyInput()
     {
         requireBound();
-        publishPolicyInput();
+        publishPolicyInput(std::chrono::steady_clock::now());
     }
 
     void runControlCycle(const LWControlCycleHooks& hooks)
@@ -269,6 +279,7 @@ public:
         inhibitVelocityIfRequired();
 
         rl_->GetState(&rl_->robot_state);
+        const auto state_capture_time = std::chrono::steady_clock::now();
         if (terminalLatched())
         {
             return;
@@ -312,7 +323,7 @@ public:
             applyControlledFallbackCommand();
         }
         inhibitVelocityIfRequired();
-        publishPolicyInput();
+        publishPolicyInput(state_capture_time);
 
         call(hooks.adapter_controls);
         if (!validateFeedbackAndAttitude()
@@ -358,6 +369,25 @@ public:
         {
             return;
         }
+        const auto policy_data_max_age =
+            rl_->GetLWPolicyOutputMaxAge(*activation);
+        const auto input_now = std::chrono::steady_clock::now();
+        const LWPolicyInputStatus input_status = EvaluateLWPolicyInput(
+            &policy_input,
+            activation->generation,
+            input_now,
+            policy_data_max_age,
+            last_inference_input_generation_,
+            last_inference_input_sequence_,
+            last_inference_state_capture_time_);
+        if (input_status != LWPolicyInputStatus::Ready)
+        {
+            if (LWPolicyInputRequiresFallback(input_status))
+            {
+                handlePolicyInputFault(input_status);
+            }
+            return;
+        }
         const RobotState<float>& local_state = policy_input.robot_state;
         const LWControlSnapshot& local_control = policy_input.control;
         LWControlSnapshot effective_control = local_control;
@@ -385,8 +415,10 @@ public:
         {
             return;
         }
-        const auto output_source_time = std::chrono::steady_clock::now();
-
+        last_inference_input_generation_ = policy_input.generation;
+        last_inference_input_sequence_ = policy_input.sequence;
+        last_inference_state_capture_time_ =
+            policy_input.state_capture_time;
         ++inference_frame_;
         inference_obs_.ang_vel = local_state.imu.gyroscope;
         inference_obs_.commands = {
@@ -449,20 +481,38 @@ public:
         {
             reportSafetyEvent(LWSafetyEvent::TorqueLimitWarning);
         }
-        rl_->PublishLWPolicyOutput(
-            {activation->generation,
+        const auto inference_completed_at =
+            std::chrono::steady_clock::now();
+        if (inference_completed_at < policy_input.state_capture_time
+            || inference_completed_at - policy_input.state_capture_time
+                > policy_data_max_age)
+        {
+            handlePolicyInputFault(
+                inference_completed_at < policy_input.state_capture_time
+                    ? LWPolicyInputStatus::Future
+                    : LWPolicyInputStatus::Stale);
+            return;
+        }
+        if (!rl_->PublishLWPolicyOutput(
+            {policy_input.generation,
              0,
              inference_frame_,
-             output_source_time,
+             policy_input.sequence,
+             policy_input.state_capture_time,
              inference_output_dof_pos_,
              inference_output_dof_vel_,
-             inference_output_dof_tau_});
+             inference_output_dof_tau_}))
+        {
+            return;
+        }
         rl_->PublishLWPolicyProgress(
             activation->generation,
             inference_frame_);
         inference_trace_.publish(
             {activation->generation,
              inference_frame_,
+             policy_input.sequence,
+             policy_input.state_capture_time,
              inference_obs_,
              inference_output_dof_pos_,
              inference_output_dof_vel_,
@@ -576,10 +626,15 @@ private:
         rl_->control.yaw = 0.0f;
     }
 
-    void publishPolicyInput()
+    void publishPolicyInput(
+        std::chrono::steady_clock::time_point state_capture_time)
     {
+        const auto activation = rl_->LoadLWPolicyActivation();
         policy_input_snapshot_.publish(
-            {rl_->robot_state,
+            {activation ? activation->generation : 0,
+             next_policy_input_sequence_++,
+             state_capture_time,
+             rl_->robot_state,
              {rl_->control.x,
               rl_->control.y,
               rl_->control.yaw,
@@ -673,6 +728,9 @@ private:
         const size_t num_dofs = static_cast<size_t>(
             policy_params.Get<int>("num_of_dofs"));
         inference_frame_ = 0;
+        last_inference_input_generation_ = 0;
+        last_inference_input_sequence_ = 0;
+        last_inference_state_capture_time_ = {};
         inference_gait_phase_time_ = 0.0f;
         inference_motion_reference_.reset();
         inference_obs_ = {};
@@ -735,6 +793,11 @@ private:
     std::vector<float> inference_output_dof_vel_;
     std::vector<float> inference_output_dof_tau_;
     std::uint64_t inference_frame_ = 0;
+    std::uint64_t next_policy_input_sequence_ = 1;
+    std::uint64_t last_inference_input_generation_ = 0;
+    std::uint64_t last_inference_input_sequence_ = 0;
+    std::chrono::steady_clock::time_point
+        last_inference_state_capture_time_{};
     float inference_gait_phase_time_ = 0.0f;
 };
 

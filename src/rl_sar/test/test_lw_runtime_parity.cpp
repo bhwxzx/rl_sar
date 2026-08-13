@@ -1,6 +1,7 @@
 #include "lw_runtime_core.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -8,6 +9,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -321,6 +323,7 @@ void testTemporaryInhibitionPreservesPhaseClock()
     prepareInferenceHarness(harness);
 
     harness.core.runInferenceCycle(false);
+    harness.cycle(0.4f);
     harness.core.runInferenceCycle(true);
     LWInferenceTraceSnapshot inhibited;
     require(
@@ -328,6 +331,7 @@ void testTemporaryInhibitionPreservesPhaseClock()
         "temporary inhibition did not publish a trace");
     requireStationaryCommandObservation(inhibited, "temporary inhibition");
 
+    harness.cycle(0.4f);
     harness.core.runInferenceCycle(false);
     LWInferenceTraceSnapshot recovered;
     require(
@@ -340,6 +344,123 @@ void testTemporaryInhibitionPreservesPhaseClock()
         {std::sin(2.0f * pi * expected_phase_time),
          std::cos(2.0f * pi * expected_phase_time)},
         "temporary inhibition recovery gait phase");
+}
+
+void testInputIsConsumedOnceAndHeldOutputRemainsUsable()
+{
+    Harness harness;
+    prepareInferenceHarness(harness);
+
+    harness.core.runInferenceCycle(false);
+    LWInferenceTraceSnapshot first_trace;
+    require(
+        harness.core.readInferenceTrace(first_trace),
+        "first input did not publish an inference trace");
+    const auto first_output = harness.rl.LoadLWPolicyOutput();
+    require(
+        static_cast<bool>(first_output),
+        "first input did not publish policy output");
+
+    harness.core.runInferenceCycle(false);
+    LWInferenceTraceSnapshot duplicate_trace;
+    require(
+        harness.core.readInferenceTrace(duplicate_trace),
+        "duplicate input unexpectedly cleared the last trace");
+    const auto duplicate_output = harness.rl.LoadLWPolicyOutput();
+    require(
+        duplicate_trace.frame == first_trace.frame
+            && duplicate_trace.source_input_sequence
+                == first_trace.source_input_sequence
+            && duplicate_output
+            && duplicate_output->sequence == first_output->sequence,
+        "duplicate input advanced inference output");
+
+    harness.rl.nominal->RLControlLW();
+    const auto first_command = harness.rl.robot_command;
+    std::fill(
+        harness.rl.robot_command.motor_command.q.begin(),
+        harness.rl.robot_command.motor_command.q.end(),
+        -999.0f);
+    harness.rl.nominal->RLControlLW();
+    requireCommandEqual(first_command, harness.rl.robot_command);
+
+    harness.cycle(0.4f);
+    harness.core.runInferenceCycle(false);
+    LWInferenceTraceSnapshot recovered_trace;
+    require(
+        harness.core.readInferenceTrace(recovered_trace)
+            && recovered_trace.frame == first_trace.frame + 1
+            && recovered_trace.source_input_sequence
+                > first_trace.source_input_sequence
+            && recovered_trace.source_state_time
+                > first_trace.source_state_time,
+        "fresh control input did not recover inference progress");
+    require(
+        !harness.core.safetySnapshot().decision.controlled_fallback_latched,
+        "duplicate input incorrectly latched controlled fallback");
+}
+
+void testStalledControlInputTriggersS2Parity()
+{
+    Harness real;
+    Harness sim;
+    prepareInferenceHarness(real);
+    prepareInferenceHarness(sim);
+    real.core.runInferenceCycle(false);
+    sim.core.runInferenceCycle(false);
+    const auto real_output = real.rl.LoadLWPolicyOutput();
+    const auto sim_output = sim.rl.LoadLWPolicyOutput();
+    require(
+        real_output && sim_output,
+        "active inference consumer did not publish its first output");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(70));
+    real.core.runInferenceCycle(false);
+    sim.core.runInferenceCycle(false);
+
+    requireSafetyEqual(real, sim);
+    const auto snapshot = real.core.safetySnapshot();
+    require(
+        snapshot.decision.latest_event
+            == LWSafetyEvent::PolicyInputUnavailable
+            && snapshot.decision.highest_severity
+                == LWSafetySeverity::ControlledFallback
+            && snapshot.decision.controlled_fallback_latched,
+        "stalled control input did not latch S2 policy-input fallback");
+    require(
+        real.rl.LoadLWPolicyOutput()->sequence == real_output->sequence
+            && sim.rl.LoadLWPolicyOutput()->sequence
+                == sim_output->sequence,
+        "stalled control producer allowed repeated output publication");
+}
+
+void testPolicyGenerationSwitchWaitsForMatchingInput()
+{
+    Harness harness;
+    prepareInferenceHarness(harness);
+    const std::uint64_t old_generation =
+        harness.rl.LoadLWPolicyActivation()->generation;
+    const std::uint64_t new_generation = harness.rl.ActivateLWPolicy(
+        "LW/robot_lab/leg_loco");
+    require(new_generation != old_generation, "policy generation did not change");
+
+    harness.core.runInferenceCycle(false);
+    LWInferenceTraceSnapshot trace;
+    require(
+        !harness.core.readInferenceTrace(trace)
+            && !harness.rl.LoadLWPolicyOutput(),
+        "new policy generation consumed an old-generation input");
+    require(
+        !harness.core.safetySnapshot().decision.controlled_fallback_latched,
+        "expected generation transition latched fallback");
+
+    harness.cycle(0.4f);
+    harness.core.runInferenceCycle(false);
+    require(
+        harness.core.readInferenceTrace(trace)
+            && trace.generation == new_generation
+            && trace.frame == 1,
+        "matching input did not start the new policy generation");
 }
 
 void testNominalReplayParity()
@@ -384,6 +505,10 @@ void testExactPolicyInferenceReplayParity()
     require(real_trace.generation == sim_trace.generation,
             "policy generation differs");
     require(real_trace.frame == sim_trace.frame, "policy frame differs");
+    require(
+        real_trace.source_input_sequence
+            == sim_trace.source_input_sequence,
+        "policy input sequence differs");
     requireObservationEqual(real_trace.observations, sim_trace.observations);
     requireVectorEqual(
         real_trace.output_dof_pos,
@@ -538,6 +663,7 @@ void testInjectedFaultDecisionParity()
     };
 
     compare_event(LWSafetyEvent::PolicyOutputUnavailable);
+    compare_event(LWSafetyEvent::PolicyInputUnavailable);
 
     {
         Harness real;
@@ -639,6 +765,9 @@ int main()
         testExactPolicyInferenceReplayParity();
         testEffectiveCommandKeepsGaitObservationCoherent();
         testTemporaryInhibitionPreservesPhaseClock();
+        testInputIsConsumedOnceAndHeldOutputRemainsUsable();
+        testStalledControlInputTriggersS2Parity();
+        testPolicyGenerationSwitchWaitsForMatchingInput();
         testS1PreservesRecoveryInputAndZerosVelocity();
         testLWKeyboardVelocityCommandsAreIgnored();
         testNonLWStateControllerRetainsLegacyKeyboardVelocity();

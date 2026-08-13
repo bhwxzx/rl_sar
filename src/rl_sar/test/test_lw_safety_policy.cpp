@@ -55,6 +55,7 @@ void testSourceSpecificActions()
              LWSafetyEvent::PolicyActionInvalid,
              LWSafetyEvent::PolicyOutputInvalid,
              LWSafetyEvent::PolicyConfigurationInvalid,
+             LWSafetyEvent::PolicyInputUnavailable,
              LWSafetyEvent::PolicyOutputUnavailable})
     {
         require_action(event, LWSafetyAction::PassiveDamping);

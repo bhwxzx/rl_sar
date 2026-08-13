@@ -2659,7 +2659,7 @@ safe zero roll and pitch.
 ## [LW-033] Policy input provenance and freshness
 
 **Priority**: P1 / high
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-007, LW-008, LW-011, LW-021, LW-032
 
 ### Problem
@@ -2703,6 +2703,39 @@ source state predates the configured output-age limit.
 - Tests reproduce the control-stall scenario deterministically and verify the
   approved fallback and recovery semantics for both real and Sim2Sim adapters.
 - Existing coherent-frame and runtime-parity tests remain green.
+
+### Resolution
+
+- **Resolved**: 2026-08-13T14:41:44+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 每个 `LWPolicyInputSnapshot` 现在携带活动策略代际、全局
+  单调序号以及 `GetState()` 完成时的单调时钟采集时间；推理线程按代际验证输入，
+  对每个输入最多消费一次，重复输入不会推进策略帧、相位、历史、输出或进度。
+  策略输出携带源输入序号与源状态采集时间，输入检查和推理完成后的二次检查均
+  使用既有 `3 * dt * decimation` 数据年龄上限（当前配置为 60 ms），而不是以
+  推理完成时间刷新年龄。输出传输和控制消费者拒绝缺失、回退或重复的新来源；
+  200 Hz 控制循环仍允许在年龄窗口内保持同一个完整 50 Hz 输出。策略切换期间的
+  旧代际输入和暂时重复输入只跳过；不完整、来源回退、未来时间或过期输入触发
+  新的 `PolicyInputUnavailable` S2 Passive 阻尼锁存，必须重启，不改变既有硬失能
+  分级或配置阈值。
+- **Changed Files**: `src/rl_sar/library/core/rl_sdk/rl_sdk.hpp`、
+  `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp`、
+  `src/rl_sar/library/core/safety/lw_runtime_core.hpp`、
+  `src/rl_sar/library/core/safety/lw_safety_policy.hpp`、
+  `src/rl_sar/test/test_lw_policy_output_transport.cpp`、
+  `src/rl_sar/test/test_lw_runtime_parity.cpp`、
+  `src/rl_sar/test/test_lw_safety_policy.cpp`、
+  `docs/LW_BUILD_DEPLOYMENT_CN.md`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 普通 Debug 完整构建成功且 39/39 CTest 通过；全新
+  `scripts/validate_lw_strict_build.sh` 在
+  `-Wall -Wextra -Wpedantic -Werror` 下完成所有维护目标并通过 39/39 CTest；
+  `git diff --check` 通过。定向测试覆盖 60 ms 年龄边界、未来/过期/重复/回退
+  输入、重复和回退输出来源、控制生产者停滞而推理消费者继续运行、停滞后的 S2
+  real/Sim2Sim 一致性、重复输入后新输入恢复、策略代际切换，以及同一有效输出被
+  多个控制调用保持使用。未启动 ROS 节点、IMU、串口、MuJoCo GUI 或电机，
+  `src/fdilink_ahrs_ROS2` 无任何修改。
+- **Remaining Follow-ups**: none
 
 ---
 

@@ -5,6 +5,74 @@
 
 #include "rl_sdk.hpp"
 
+const char* LWPolicyInputStatusName(LWPolicyInputStatus status) noexcept
+{
+    switch (status)
+    {
+    case LWPolicyInputStatus::Ready: return "ready";
+    case LWPolicyInputStatus::Missing: return "missing";
+    case LWPolicyInputStatus::GenerationMismatch:
+        return "generation-mismatch";
+    case LWPolicyInputStatus::Incomplete: return "incomplete";
+    case LWPolicyInputStatus::Duplicate: return "duplicate";
+    case LWPolicyInputStatus::Regressing: return "regressing";
+    case LWPolicyInputStatus::Future: return "future";
+    case LWPolicyInputStatus::Stale: return "stale";
+    }
+    return "unknown";
+}
+
+LWPolicyInputStatus EvaluateLWPolicyInput(
+    const LWPolicyInputSnapshot* input,
+    std::uint64_t active_generation,
+    std::chrono::steady_clock::time_point now,
+    std::chrono::steady_clock::duration max_age,
+    std::uint64_t last_generation,
+    std::uint64_t last_sequence,
+    std::chrono::steady_clock::time_point last_state_capture_time) noexcept
+{
+    if (input == nullptr)
+    {
+        return LWPolicyInputStatus::Missing;
+    }
+    if (input->generation != active_generation)
+    {
+        return LWPolicyInputStatus::GenerationMismatch;
+    }
+    if (input->sequence == 0
+        || input->state_capture_time.time_since_epoch().count() == 0)
+    {
+        return LWPolicyInputStatus::Incomplete;
+    }
+    if (now < input->state_capture_time)
+    {
+        return LWPolicyInputStatus::Future;
+    }
+    if (now - input->state_capture_time > max_age)
+    {
+        return LWPolicyInputStatus::Stale;
+    }
+    if (last_generation == active_generation)
+    {
+        if (input->sequence < last_sequence
+            || (last_state_capture_time.time_since_epoch().count() != 0
+                && input->state_capture_time < last_state_capture_time))
+        {
+            return LWPolicyInputStatus::Regressing;
+        }
+        if (input->sequence == last_sequence)
+        {
+            return LWPolicyInputStatus::Duplicate;
+        }
+        if (last_state_capture_time.time_since_epoch().count() != 0
+            && input->state_capture_time == last_state_capture_time)
+        {
+            return LWPolicyInputStatus::Regressing;
+        }
+    }
+    return LWPolicyInputStatus::Ready;
+}
+
 bool LWPolicyOutputPayloadComplete(
     const LWPolicyOutputFrame& output,
     size_t expected_dofs) noexcept
@@ -30,13 +98,14 @@ LWPolicyOutputStatus EvaluateLWPolicyOutput(
         return LWPolicyOutputStatus::GenerationMismatch;
     }
     if (output->sequence == 0
-        || output->source_time.time_since_epoch().count() == 0
+        || output->source_input_sequence == 0
+        || output->source_state_time.time_since_epoch().count() == 0
         || !LWPolicyOutputPayloadComplete(*output, expected_dofs))
     {
         return LWPolicyOutputStatus::Incomplete;
     }
-    if (now < output->source_time
-        || now - output->source_time > max_age)
+    if (now < output->source_state_time
+        || now - output->source_state_time > max_age)
     {
         return LWPolicyOutputStatus::Stale;
     }
@@ -49,8 +118,16 @@ bool LWPolicyOutputTransport::publish(
     size_t expected_dofs)
 {
     if (output.generation != active_generation
-        || output.source_time.time_since_epoch().count() == 0
+        || output.source_input_sequence == 0
+        || output.source_state_time.time_since_epoch().count() == 0
         || !LWPolicyOutputPayloadComplete(output, expected_dofs))
+    {
+        return false;
+    }
+    const auto latest = latest_.load();
+    if (latest && latest->generation == output.generation
+        && (output.source_input_sequence <= latest->source_input_sequence
+            || output.source_state_time <= latest->source_state_time))
     {
         return false;
     }
@@ -1232,11 +1309,20 @@ void RLFSMState::RLControlLW()
         max_age);
 
     if (status == LWPolicyOutputStatus::Ready
-        && last_lw_output_generation_
-            == activation->generation
-        && output->sequence < last_lw_output_sequence_)
+        && last_lw_output_generation_ == activation->generation)
     {
-        status = LWPolicyOutputStatus::Stale;
+        if (output->sequence < last_lw_output_sequence_)
+        {
+            status = LWPolicyOutputStatus::Stale;
+        }
+        else if (output->sequence > last_lw_output_sequence_
+                 && (output->source_input_sequence
+                         <= last_lw_source_input_sequence_
+                     || output->source_state_time
+                         <= last_lw_source_state_time_))
+        {
+            status = LWPolicyOutputStatus::Stale;
+        }
     }
 
     if (status != LWPolicyOutputStatus::Ready)
@@ -1267,8 +1353,17 @@ void RLFSMState::RLControlLW()
         last_lw_output_generation_ =
             activation->generation;
         last_lw_output_sequence_ = 0;
+        last_lw_source_input_sequence_ = 0;
+        last_lw_source_state_time_ = {};
     }
-    last_lw_output_sequence_ = output->sequence;
+    if (output->sequence > last_lw_output_sequence_)
+    {
+        last_lw_output_sequence_ = output->sequence;
+        last_lw_source_input_sequence_ =
+            output->source_input_sequence;
+        last_lw_source_state_time_ =
+            output->source_state_time;
+    }
 
     const YamlParams& policy_params =
         activation->definition->params;

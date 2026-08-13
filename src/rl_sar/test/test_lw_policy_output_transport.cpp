@@ -55,14 +55,15 @@ LWPolicyOutputFrame makeFrame(
     std::uint64_t generation,
     std::uint64_t frame,
     size_t dofs,
-    Clock::time_point source_time)
+    Clock::time_point source_state_time)
 {
     const float tag = static_cast<float>(frame);
     return {
         generation,
         0,
         frame,
-        source_time,
+        frame,
+        source_state_time,
         std::vector<float>(dofs, tag),
         std::vector<float>(dofs, 2.0f * tag),
         std::vector<float>(dofs, 3.0f * tag)};
@@ -90,6 +91,16 @@ void testRejectsPartialAndWrongGenerationFrames()
             generation,
             dofs),
         "transport accepted a frame without a source timestamp");
+
+    auto missing_input_sequence =
+        makeFrame(generation, 1, dofs, now);
+    missing_input_sequence.source_input_sequence = 0;
+    require(
+        !transport.publish(
+            std::move(missing_input_sequence),
+            generation,
+            dofs),
+        "transport accepted a frame without an input sequence");
 
     auto missing_position =
         makeFrame(generation, 1, dofs, now);
@@ -143,7 +154,11 @@ void testLatestFrameAndGenerationSwitchSemantics()
 
     require(
         transport.publish(
-            makeFrame(1, 11, dofs, now),
+            makeFrame(
+                1,
+                11,
+                dofs,
+                now + std::chrono::nanoseconds(1)),
             1,
             dofs),
         "second complete frame was rejected");
@@ -152,10 +167,32 @@ void testLatestFrameAndGenerationSwitchSemantics()
         latest
             && latest->sequence == 2
             && latest->frame == 11
+            && latest->source_input_sequence == 11
             && latest->dof_pos[0] == 11.0f
             && latest->dof_vel[0] == 22.0f
             && latest->dof_tau[0] == 33.0f,
         "latest-frame slot retained or mixed an older frame");
+
+    require(
+        !transport.publish(
+            makeFrame(
+                1,
+                11,
+                dofs,
+                now + std::chrono::nanoseconds(2)),
+            1,
+            dofs),
+        "transport accepted duplicate input provenance");
+    require(
+        !transport.publish(
+            makeFrame(
+                1,
+                12,
+                dofs,
+                now + std::chrono::nanoseconds(1)),
+            1,
+            dofs),
+        "transport accepted regressing state provenance");
 
     transport.clear();
     require(
@@ -176,6 +213,111 @@ void testLatestFrameAndGenerationSwitchSemantics()
     require(
         transport.load()->generation == 2,
         "new generation did not replace the cleared slot");
+}
+
+void testInputFreshnessAndProvenanceClassification()
+{
+    constexpr std::uint64_t generation = 5;
+    const auto capture_time = Clock::now();
+    const auto max_age = std::chrono::milliseconds(60);
+    LWPolicyInputSnapshot input{
+        generation,
+        10,
+        capture_time,
+        {},
+        {}};
+
+    const auto evaluate = [&](const LWPolicyInputSnapshot* candidate,
+                              Clock::time_point now,
+                              std::uint64_t last_generation = 0,
+                              std::uint64_t last_sequence = 0,
+                              Clock::time_point last_time = {})
+    {
+        return EvaluateLWPolicyInput(
+            candidate,
+            generation,
+            now,
+            max_age,
+            last_generation,
+            last_sequence,
+            last_time);
+    };
+
+    require(
+        evaluate(nullptr, capture_time) == LWPolicyInputStatus::Missing,
+        "missing input was not classified");
+    auto wrong_generation = input;
+    wrong_generation.generation = generation - 1;
+    require(
+        evaluate(&wrong_generation, capture_time)
+            == LWPolicyInputStatus::GenerationMismatch,
+        "input generation mismatch was not classified");
+    auto incomplete = input;
+    incomplete.sequence = 0;
+    require(
+        evaluate(&incomplete, capture_time)
+            == LWPolicyInputStatus::Incomplete,
+        "input without a sequence was not classified");
+    require(
+        evaluate(&input, capture_time + max_age)
+            == LWPolicyInputStatus::Ready,
+        "input at the age boundary was rejected");
+    require(
+        evaluate(
+            &input,
+            capture_time + max_age + std::chrono::nanoseconds(1))
+            == LWPolicyInputStatus::Stale,
+        "over-age input was accepted");
+    require(
+        evaluate(&input, capture_time - std::chrono::nanoseconds(1))
+            == LWPolicyInputStatus::Future,
+        "future-dated input was accepted");
+    require(
+        evaluate(&input, capture_time, generation, 10, capture_time)
+            == LWPolicyInputStatus::Duplicate,
+        "duplicate input was not classified");
+
+    auto regressing_sequence = input;
+    regressing_sequence.sequence = 9;
+    require(
+        evaluate(
+            &regressing_sequence,
+            capture_time,
+            generation,
+            10,
+            capture_time)
+            == LWPolicyInputStatus::Regressing,
+        "regressing input sequence was accepted");
+    auto repeated_time = input;
+    repeated_time.sequence = 11;
+    require(
+        evaluate(
+            &repeated_time,
+            capture_time,
+            generation,
+            10,
+            capture_time)
+            == LWPolicyInputStatus::Regressing,
+        "new sequence with repeated state time was accepted");
+
+    require(
+        !LWPolicyInputRequiresFallback(LWPolicyInputStatus::Duplicate),
+        "duplicate input incorrectly required fallback");
+    require(
+        !LWPolicyInputRequiresFallback(
+            LWPolicyInputStatus::GenerationMismatch),
+        "generation switch incorrectly required fallback");
+    for (const auto status : {
+             LWPolicyInputStatus::Incomplete,
+             LWPolicyInputStatus::Regressing,
+             LWPolicyInputStatus::Future,
+             LWPolicyInputStatus::Stale})
+    {
+        require(
+            LWPolicyInputRequiresFallback(status),
+            std::string("unsafe input did not require fallback: ")
+                + LWPolicyInputStatusName(status));
+    }
 }
 
 void testFrameFreshnessClassification()
@@ -270,6 +412,7 @@ void testConcurrentReadersNeverObservePartialFrames()
     constexpr std::uint64_t generation = 9;
     constexpr std::uint64_t iterations = 50000;
     LWPolicyOutputTransport transport;
+    const auto source_epoch = Clock::now();
     std::atomic<bool> start{false};
     std::atomic<bool> failed{false};
 
@@ -287,7 +430,8 @@ void testConcurrentReadersNeverObservePartialFrames()
                         generation,
                         frame,
                         dofs,
-                        Clock::now()),
+                        source_epoch
+                            + std::chrono::nanoseconds(frame)),
                     generation,
                     dofs))
             {
@@ -318,6 +462,8 @@ void testConcurrentReadersNeverObservePartialFrames()
                     static_cast<float>(output->frame);
                 if (output->generation != generation
                     || output->sequence == 0
+                    || output->source_input_sequence != output->frame
+                    || output->source_state_time.time_since_epoch().count() == 0
                     || output->dof_pos.size() != dofs
                     || output->dof_vel.size() != dofs
                     || output->dof_tau.size() != dofs)
@@ -398,6 +544,7 @@ int main()
     {
         testRejectsPartialAndWrongGenerationFrames();
         testLatestFrameAndGenerationSwitchSemantics();
+        testInputFreshnessAndProvenanceClassification();
         testFrameFreshnessClassification();
         testConcurrentReadersNeverObservePartialFrames();
         testGenericControlRetainsNonLWQueueCompatibility();
