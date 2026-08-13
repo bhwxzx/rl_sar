@@ -1,10 +1,7 @@
 #ifndef RL_REAL_LW_HPP
 #define RL_REAL_LW_HPP
 
-// #define ENABLE_IMU_GYRO_FILTER 
 // #define CSV_LOGGER
-// #define CONTROL_TIME_PRINT
-// #define FOWARD_TIME_PRINT
 
 #include "rl_sdk.hpp"
 #include "observation_buffer.hpp"
@@ -134,18 +131,6 @@ private:
     bool sensor_ready_logged_ = false;
     void ImuCallback(const sensor_msgs::msg::Imu::SharedPtr imu_msg);
     void AhrsCallback(const geometry_msgs::msg::Vector3::SharedPtr ahrs_msg);
-#ifdef ENABLE_IMU_GYRO_FILTER
-    // 滤波系数 alpha 取值范围 (0, 1]。
-    // 越接近 1 则越信任当前真实值（滤波效果弱，延迟小）；
-    // 越接近 0 则越信任历史值（滤波效果强，延迟大）。建议根据实际震动情况调节（如 0.2 ~ 0.5）。
-    float gyro_filter_alpha_ = 0.3f; 
-    
-    // 记录上一时刻的滤波结果
-    std::vector<float> filtered_gyro_ = {0.0f, 0.0f, 0.0f};
-    
-    // 标记是否是第一次接收到 IMU 数据，防止从 0 开始产生初始跳变
-    bool is_first_imu_ = true; 
-#endif
 
     // Optional debug publication. A null component means no snapshot copies,
     // publisher, or 250 Hz timer exist in the production control path.
