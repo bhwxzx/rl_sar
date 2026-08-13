@@ -23,6 +23,10 @@ struct LWDeploymentBundleInfo
     std::string executable_sha256;
     std::string onnx_runtime_version;
     std::string onnx_runtime_architecture;
+    std::string onnx_runtime_archive_name;
+    std::string onnx_runtime_archive_url;
+    std::string onnx_runtime_archive_sha256;
+    LWDeploymentFileRecord onnx_runtime_provenance;
     std::vector<LWDeploymentFileRecord> onnx_runtime_libraries;
     std::vector<LWDeploymentFileRecord> files;
     std::vector<LWDeploymentFileRecord> runtime_files;

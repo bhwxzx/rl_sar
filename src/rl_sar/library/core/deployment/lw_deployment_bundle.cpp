@@ -18,6 +18,8 @@ namespace
 {
 namespace fs = std::filesystem;
 
+[[noreturn]] void fail(const std::string& message);
+
 const std::set<std::string>& requiredPolicyFiles()
 {
     static const std::set<std::string> files = {
@@ -60,6 +62,44 @@ const std::set<std::string>& requiredOnnxRuntimeFiles()
         "lib/rl_sar/onnxruntime/libonnxruntime_providers_shared.so",
     };
     return files;
+}
+
+const std::set<std::string>& requiredOnnxRuntimeDirectoryFiles()
+{
+    static const std::set<std::string> files = {
+        "lib/rl_sar/onnxruntime/libonnxruntime.so.1",
+        "lib/rl_sar/onnxruntime/libonnxruntime_providers_shared.so",
+        "lib/rl_sar/onnxruntime/origin.json",
+    };
+    return files;
+}
+
+struct ApprovedOnnxArchive
+{
+    const char* version;
+    const char* name;
+    const char* url;
+    const char* sha256;
+};
+
+const ApprovedOnnxArchive& approvedOnnxArchive()
+{
+#if defined(__x86_64__) || defined(_M_X64)
+    static const ApprovedOnnxArchive archive{
+        "1.22.0",
+        "onnxruntime-linux-x64-1.22.0.tgz",
+        "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz",
+        "8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3"};
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    static const ApprovedOnnxArchive archive{
+        "1.22.0",
+        "onnxruntime-linux-aarch64-1.22.0.tgz",
+        "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-aarch64-1.22.0.tgz",
+        "bb76395092d150b52c7092dc6b8f2fe4d80f0f3bf0416d2f269193e347e24702"};
+#else
+    fail("unsupported compiled architecture");
+#endif
+    return archive;
 }
 
 [[noreturn]] void fail(const std::string& message)
@@ -375,7 +415,7 @@ LWDeploymentBundleInfo LWDeploymentBundle::Verify(
         fail("manifest root must be a mapping");
     }
     const YAML::Node schema = manifest["schema_version"];
-    if (!schema || !schema.IsScalar() || schema.as<int>() != 3)
+    if (!schema || !schema.IsScalar() || schema.as<int>() != 4)
     {
         fail("unsupported manifest schema_version");
     }
@@ -442,6 +482,51 @@ LWDeploymentBundleInfo LWDeploymentBundle::Verify(
     {
         fail("manifest ONNX Runtime architecture does not match the binary");
     }
+    const ApprovedOnnxArchive& approved_archive = approvedOnnxArchive();
+    if (onnx_runtime_version != approved_archive.version)
+    {
+        fail("manifest ONNX Runtime version is not approved");
+    }
+    const YAML::Node onnx_archive = onnx_runtime["archive"];
+    if (!onnx_archive || !onnx_archive.IsMap())
+    {
+        fail("manifest ONNX Runtime archive field must be a mapping");
+    }
+    const std::string onnx_archive_name =
+        requiredScalar(onnx_archive, "name");
+    const std::string onnx_archive_url =
+        requiredScalar(onnx_archive, "url");
+    const std::string onnx_archive_sha256 =
+        requiredScalar(onnx_archive, "sha256");
+    if (onnx_archive_name != approved_archive.name
+        || onnx_archive_url != approved_archive.url
+        || onnx_archive_sha256 != approved_archive.sha256)
+    {
+        fail("manifest ONNX Runtime archive provenance is not approved");
+    }
+
+    const YAML::Node onnx_provenance = onnx_runtime["provenance"];
+    if (!onnx_provenance || !onnx_provenance.IsMap())
+    {
+        fail("manifest ONNX Runtime provenance field must be a mapping");
+    }
+    const std::string provenance_path =
+        requiredScalar(onnx_provenance, "path");
+    const std::string provenance_sha256 =
+        requiredScalar(onnx_provenance, "sha256");
+    if (provenance_path != "lib/rl_sar/onnxruntime/origin.json"
+        || !isLowerHex(provenance_sha256, 64))
+    {
+        fail("manifest ONNX Runtime provenance record is invalid");
+    }
+    const fs::path provenance_relative = validateRelativePath(provenance_path);
+    requireNoSymlinkComponents(prefix, provenance_relative);
+    const fs::path provenance_file = prefix / provenance_relative;
+    requireRegularNonSymlink(provenance_file, "ONNX Runtime provenance");
+    if (Sha256File(provenance_file) != provenance_sha256)
+    {
+        fail("ONNX Runtime provenance SHA-256 mismatch");
+    }
     const YAML::Node onnx_libraries = onnx_runtime["libraries"];
     if (!onnx_libraries || !onnx_libraries.IsSequence())
     {
@@ -504,7 +589,7 @@ LWDeploymentBundleInfo LWDeploymentBundle::Verify(
         actual_onnx_paths.insert(
             entry.path().lexically_relative(prefix).generic_string());
     }
-    if (actual_onnx_paths != requiredOnnxRuntimeFiles())
+    if (actual_onnx_paths != requiredOnnxRuntimeDirectoryFiles())
     {
         fail("ONNX Runtime directory does not contain the exact approved library set");
     }
@@ -617,6 +702,10 @@ LWDeploymentBundleInfo LWDeploymentBundle::Verify(
         executable_sha256,
         onnx_runtime_version,
         onnx_runtime_architecture,
+        onnx_archive_name,
+        onnx_archive_url,
+        onnx_archive_sha256,
+        {provenance_path, provenance_sha256},
         onnx_records,
         records,
         runtime_records,

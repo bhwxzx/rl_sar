@@ -43,6 +43,13 @@ dependencies include a C++17 compiler, CMake, yaml-cpp, Eigen, Boost, TBB,
 OpenSSL, GLFW, ROS 2, and the inference/MuJoCo runtimes managed by the project
 setup scripts.
 
+Inference archives are restricted to the reviewed Linux platform/version
+matrix in `scripts/inference_runtime_archives.json`. The complete archive
+SHA-256, extracted candidate structure, and ELF architecture must pass before
+installation. A valid existing runtime with missing or different provenance is
+preserved and requires an explicit reviewed upgrade; Python `torch` and
+`onnxruntime` packages are independent of this project runtime directory.
+
 ## Development build
 
 Source ROS 2 and build from the repository root:

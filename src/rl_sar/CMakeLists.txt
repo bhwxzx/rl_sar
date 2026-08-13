@@ -277,6 +277,34 @@ if(EXISTS "${ONNX_RUNTIME_DIR}/include" AND EXISTS "${ONNX_RUNTIME_DIR}/lib")
                     "LW production deployment requires a valid ONNX Runtime "
                     "VERSION_NUMBER")
             endif()
+            execute_process(
+                COMMAND
+                    "${Python3_EXECUTABLE}"
+                    "${PROJECT_ROOT_DIR}/scripts/manage_inference_runtime.py"
+                    check
+                    --catalog
+                    "${PROJECT_ROOT_DIR}/scripts/inference_runtime_archives.json"
+                    --kind onnx
+                    --version "${ONNX_RUNTIME_VERSION}"
+                    --os Linux
+                    --architecture "${RUNTIME_VALIDATION_ARCH}"
+                    --runtime-root "${INFERENCE_RUNTIME_DIR}"
+                    --validator
+                    "${PROJECT_ROOT_DIR}/scripts/validate_inference_runtime.sh"
+                RESULT_VARIABLE LW_ONNX_PROVENANCE_RESULT
+                OUTPUT_VARIABLE LW_ONNX_PROVENANCE_OUTPUT
+                ERROR_VARIABLE LW_ONNX_PROVENANCE_ERROR
+            )
+            if(NOT LW_ONNX_PROVENANCE_RESULT EQUAL 0)
+                message(FATAL_ERROR
+                    "LW production deployment requires an approved ONNX "
+                    "Runtime archive provenance: "
+                    "${LW_ONNX_PROVENANCE_OUTPUT}${LW_ONNX_PROVENANCE_ERROR}")
+            endif()
+            set(
+                LW_ONNX_RUNTIME_ORIGIN_FILE
+                "${ONNX_RUNTIME_DIR}/.rl_sar_runtime_origin.json"
+            )
             get_filename_component(
                 LW_ONNX_RUNTIME_REAL_LIBRARY
                 "${ONNX_RUNTIME_LIB_PATH}"
@@ -735,6 +763,14 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/test/test_inference_runtime_architecture.py
                     ${PROJECT_ROOT_DIR}/scripts/validate_inference_runtime.sh
         )
+        add_test(
+            NAME lw_inference_runtime_download_integrity
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_inference_runtime_download_integrity.py
+                    ${PROJECT_ROOT_DIR}/scripts/manage_inference_runtime.py
+                    ${PROJECT_ROOT_DIR}/scripts/validate_inference_runtime.sh
+                    ${PROJECT_ROOT_DIR}/scripts/inference_runtime_archives.json
+        )
         add_executable(
             test_lw_terminal_keyboard
             test/test_lw_terminal_keyboard.cpp
@@ -1113,6 +1149,11 @@ if(SYSTEM_TYPE STREQUAL "Linux")
             install(
                 FILES "${LW_ONNX_RUNTIME_PROVIDER_LIBRARY}"
                 DESTINATION "${LW_ONNX_RUNTIME_INSTALL_DIRECTORY}"
+            )
+            install(
+                FILES "${LW_ONNX_RUNTIME_ORIGIN_FILE}"
+                DESTINATION "${LW_ONNX_RUNTIME_INSTALL_DIRECTORY}"
+                RENAME "origin.json"
             )
         endif()
         if(BUILD_TESTING)

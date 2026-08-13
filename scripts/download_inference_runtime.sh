@@ -1,36 +1,26 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Automatic download script for LibTorch and ONNX Runtime
-# Usage: ./download_inference_runtime.sh [target_dir] [libtorch|onnx|all]
-#   target_dir: Target directory (default: inference_runtime)
-#   Example: ./download_inference_runtime.sh inference_runtime all
-#            ./download_inference_runtime.sh all
+# Install only the reviewed inference-runtime archives pinned in
+# scripts/inference_runtime_archives.json.
 
-set -e
+set -euo pipefail
 
-# Get script directory
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-
-# Get project root (parent directory of scripts)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
-# Load common utilities
 source "${SCRIPT_DIR}/common.sh"
 
 resolve_jetson_platform
 print_info "Jetson mode: ${IS_JETSON} (${JETSON_DETECTION_SOURCE})"
 
-# Detect the same platform and architecture used by Jetson resolution. The
-# overrides are used only by isolated platform tests; native builds use uname.
 OS_TYPE="${RL_SAR_PLATFORM_OS:-$(uname -s)}"
 ARCH_TYPE="${RL_SAR_PLATFORM_ARCH:-$(uname -m)}"
 
-# Parse arguments: support both new and old usage
-if [ $# -eq 0 ]; then
+if [[ $# -eq 0 ]]; then
     TARGET_DIR="library/inference_runtime"
     DOWNLOAD_TARGET="all"
-elif [ $# -eq 1 ]; then
+elif [[ $# -eq 1 ]]; then
     if [[ "$1" == "libtorch" || "$1" == "onnx" || "$1" == "all" ]]; then
         TARGET_DIR="library/inference_runtime"
         DOWNLOAD_TARGET="$1"
@@ -38,301 +28,150 @@ elif [ $# -eq 1 ]; then
         TARGET_DIR="$1"
         DOWNLOAD_TARGET="all"
     fi
-else
+elif [[ $# -eq 2 ]]; then
     TARGET_DIR="$1"
     DOWNLOAD_TARGET="$2"
+else
+    print_error "Usage: $0 [target-directory] [libtorch|onnx|all]"
+    exit 2
 fi
 
-if [ "${IS_JETSON}" = true ]; then
-    if [ "$DOWNLOAD_TARGET" = libtorch ]; then
+case "$DOWNLOAD_TARGET" in
+    libtorch|onnx|all) ;;
+    *)
+        print_error "Download target must be libtorch, onnx, or all"
+        exit 2
+        ;;
+esac
+
+if [[ "${IS_JETSON}" = true ]]; then
+    if [[ "$DOWNLOAD_TARGET" = libtorch ]]; then
         print_error "LibTorch is not supported by the LW Jetson production path"
         print_info "LW Jetson policies use ONNX Runtime; request the onnx target instead"
         exit 1
     fi
-    if [ "$DOWNLOAD_TARGET" = all ]; then
+    if [[ "$DOWNLOAD_TARGET" = all ]]; then
         print_info "Jetson production path is ONNX-only; skipping LibTorch"
         DOWNLOAD_TARGET=onnx
     fi
 fi
 
-# Inference runtime storage path
-MODEL_INTERFACE_DIR="${PROJECT_ROOT}/${TARGET_DIR}"
-mkdir -p "${MODEL_INTERFACE_DIR}"
+if [[ "$TARGET_DIR" = /* ]]; then
+    MODEL_INTERFACE_DIR="$TARGET_DIR"
+else
+    MODEL_INTERFACE_DIR="${PROJECT_ROOT}/${TARGET_DIR}"
+fi
+mkdir -p "$MODEL_INTERFACE_DIR"
 
-# LibTorch version and path
 LIBTORCH_VERSION="2.3.0"
-LIBTORCH_DIR="${MODEL_INTERFACE_DIR}/libtorch"
-
-# ONNX Runtime version and path
 ONNXRUNTIME_VERSION="1.22.0"
-ONNXRUNTIME_DIR="${MODEL_INTERFACE_DIR}/onnxruntime"
 RUNTIME_VALIDATOR="${SCRIPT_DIR}/validate_inference_runtime.sh"
+RUNTIME_MANAGER="${SCRIPT_DIR}/manage_inference_runtime.py"
+RUNTIME_CATALOG="${SCRIPT_DIR}/inference_runtime_archives.json"
 
-# Function: Validate LibTorch installation
-is_libtorch_valid() {
-    bash "$RUNTIME_VALIDATOR" libtorch "$LIBTORCH_DIR" "$ARCH_TYPE"
+manager_arguments() {
+    local kind=$1
+    local version=$2
+    printf '%s\0' \
+        --catalog "$RUNTIME_CATALOG" \
+        --kind "$kind" \
+        --version "$version" \
+        --os "$OS_TYPE" \
+        --architecture "$ARCH_TYPE"
 }
 
-# Function: Download LibTorch
-download_libtorch() {
-    local url=""
-    local archive_name=""
-
-    # Select download link based on platform
-    case "${OS_TYPE}" in
-        Darwin)
-            if [ "${ARCH_TYPE}" = "arm64" ]; then
-                url="https://download.pytorch.org/libtorch/cpu/libtorch-macos-arm64-${LIBTORCH_VERSION}.zip"
-                archive_name="libtorch-macos-arm64-${LIBTORCH_VERSION}.zip"
-            else
-                url="https://download.pytorch.org/libtorch/cpu/libtorch-macos-x86_64-${LIBTORCH_VERSION}.zip"
-                archive_name="libtorch-macos-x86_64-${LIBTORCH_VERSION}.zip"
-            fi
-            ;;
-        Linux)
-            if [ "${ARCH_TYPE}" = "aarch64" ]; then
-                print_error "ARM64 Linux detected but not identified as Jetson"
-                print_error "LibTorch prebuilt binaries for generic ARM64 Linux are not available"
-                print_info "If this is a Jetson device, please check /etc/nv_tegra_release"
-                exit 1
-            fi
-            url="https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2Bcpu.zip"
-            archive_name="libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}+cpu.zip"
-            ;;
-        MINGW*|MSYS*)
-            url="https://download.pytorch.org/libtorch/cpu/libtorch-win-shared-with-deps-${LIBTORCH_VERSION}%2Bcpu.zip"
-            archive_name="libtorch-win-shared-with-deps-${LIBTORCH_VERSION}+cpu.zip"
-            ;;
-        *)
-            print_error "Unsupported OS: ${OS_TYPE}"
-            exit 1
-            ;;
-    esac
-
-    local archive_path="${MODEL_INTERFACE_DIR}/${archive_name}"
-
-    print_info "Downloading LibTorch ${LIBTORCH_VERSION}..."
-    print_info "Platform: ${OS_TYPE} (${ARCH_TYPE})"
-    print_info "URL: ${url}"
-
-    # Download
-    if command -v curl &> /dev/null; then
-        curl -L --progress-bar -o "${archive_path}" "${url}" || {
-            print_error "Download failed"
-            rm -f "${archive_path}"
-            exit 1
-        }
-    elif command -v wget &> /dev/null; then
-        wget --show-progress -O "${archive_path}" "${url}" || {
-            print_error "Download failed"
-            rm -f "${archive_path}"
-            exit 1
-        }
+download_archive() {
+    local destination=$1
+    local url=$2
+    if command -v curl &>/dev/null; then
+        curl -fL --progress-bar -o "$destination" "$url"
+    elif command -v wget &>/dev/null; then
+        wget --show-progress -O "$destination" "$url"
     else
-        print_error "curl or wget is required to download files"
-        exit 1
+        print_error "curl or wget is required to download inference runtimes"
+        return 1
     fi
-
-    print_info "Extracting LibTorch..."
-    local temp_dir="${MODEL_INTERFACE_DIR}/temp_extract"
-    rm -rf "${temp_dir}"
-    mkdir -p "${temp_dir}"
-
-    unzip -o -q "${archive_path}" -d "${temp_dir}" || {
-        print_error "Extraction failed"
-        rm -rf "${temp_dir}" "${archive_path}"
-        exit 1
-    }
-
-    # Move extracted files
-    if [ -d "${temp_dir}/libtorch" ]; then
-        mv "${temp_dir}/libtorch" "${LIBTORCH_DIR}"
-    else
-        print_error "Incorrect directory structure after extraction"
-        rm -rf "${temp_dir}" "${archive_path}"
-        exit 1
-    fi
-
-    # Cleanup
-    rm -rf "${temp_dir}" "${archive_path}"
-
-    print_success "LibTorch ${LIBTORCH_VERSION} installed successfully"
 }
 
-# Function: Validate ONNX Runtime installation
-is_onnxruntime_valid() {
-    bash "$RUNTIME_VALIDATOR" onnx "$ONNXRUNTIME_DIR" "$ARCH_TYPE"
+ensure_runtime() {
+    local kind=$1
+    local version=$2
+    local common=()
+    while IFS= read -r -d '' argument; do
+        common+=("$argument")
+    done < <(manager_arguments "$kind" "$version")
+
+    local check_status=0
+    if python3 "$RUNTIME_MANAGER" check \
+            "${common[@]}" \
+            --runtime-root "$MODEL_INTERFACE_DIR" \
+            --validator "$RUNTIME_VALIDATOR"; then
+        print_success "$kind $version already exists with approved provenance"
+        return
+    else
+        check_status=$?
+    fi
+
+    if [[ $check_status -eq 3 ]]; then
+        print_error "Existing $kind runtime is valid or identified but is not the approved $version archive"
+        print_info "The directory was preserved. Review any runtime upgrade as a separate change."
+        return 1
+    fi
+    if [[ $check_status -ne 4 ]]; then
+        print_error "Could not validate the pinned $kind runtime selection"
+        return 1
+    fi
+
+    local selection
+    if ! selection=$(python3 "$RUNTIME_MANAGER" select "${common[@]}"); then
+        return 1
+    fi
+    local archive_name url expected_digest extra
+    IFS=$'\t' read -r archive_name url expected_digest extra <<< "$selection"
+    if [[ -z "$archive_name" || -z "$url" || -z "$expected_digest" || -n "${extra:-}" ]]; then
+        print_error "Pinned runtime selection returned malformed data"
+        return 1
+    fi
+
+    local archive_path
+    archive_path=$(mktemp "${MODEL_INTERFACE_DIR}/.${archive_name}.XXXXXX")
+    print_info "Downloading approved $kind $version for ${OS_TYPE} ${ARCH_TYPE}"
+    print_info "URL: $url"
+    print_info "Expected SHA-256: $expected_digest"
+    if ! download_archive "$archive_path" "$url"; then
+        rm -f -- "$archive_path"
+        print_error "Download failed; the existing runtime was preserved"
+        return 1
+    fi
+    if ! python3 "$RUNTIME_MANAGER" install \
+            "${common[@]}" \
+            --runtime-root "$MODEL_INTERFACE_DIR" \
+            --validator "$RUNTIME_VALIDATOR" \
+            --archive "$archive_path"; then
+        rm -f -- "$archive_path"
+        print_error "Archive validation or candidate installation failed; the existing runtime was preserved"
+        return 1
+    fi
+    rm -f -- "$archive_path"
+
+    python3 "$RUNTIME_MANAGER" check \
+        "${common[@]}" \
+        --runtime-root "$MODEL_INTERFACE_DIR" \
+        --validator "$RUNTIME_VALIDATOR"
+    print_success "$kind $version installed with approved provenance"
 }
 
-# Function: Download ONNX Runtime
-download_onnxruntime() {
-    local url=""
-    local archive_name=""
-
-    # Select download link based on platform
-    case "${OS_TYPE}" in
-        Darwin)
-            if [ "${ARCH_TYPE}" = "arm64" ]; then
-                url="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-osx-arm64-${ONNXRUNTIME_VERSION}.tgz"
-                archive_name="onnxruntime-osx-arm64-${ONNXRUNTIME_VERSION}.tgz"
-            else
-                url="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-osx-x86_64-${ONNXRUNTIME_VERSION}.tgz"
-                archive_name="onnxruntime-osx-x86_64-${ONNXRUNTIME_VERSION}.tgz"
-            fi
-            ;;
-        Linux)
-            if [ "${ARCH_TYPE}" = "aarch64" ]; then
-                url="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-aarch64-${ONNXRUNTIME_VERSION}.tgz"
-                archive_name="onnxruntime-linux-aarch64-${ONNXRUNTIME_VERSION}.tgz"
-            else
-                url="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz"
-                archive_name="onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz"
-            fi
-            ;;
-        MINGW*|MSYS*)
-            url="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}.zip"
-            archive_name="onnxruntime-win-x64-${ONNXRUNTIME_VERSION}.zip"
-            ;;
-        *)
-            print_error "Unsupported OS: ${OS_TYPE}"
-            exit 1
-            ;;
-    esac
-
-    local archive_path="${MODEL_INTERFACE_DIR}/${archive_name}"
-
-    print_info "Downloading ONNX Runtime ${ONNXRUNTIME_VERSION}..."
-    print_info "Platform: ${OS_TYPE} (${ARCH_TYPE})"
-    print_info "URL: ${url}"
-
-    # Download
-    if command -v curl &> /dev/null; then
-        curl -L --progress-bar -o "${archive_path}" "${url}" || {
-            print_error "Download failed"
-            rm -f "${archive_path}"
-            exit 1
-        }
-    elif command -v wget &> /dev/null; then
-        wget --show-progress -O "${archive_path}" "${url}" || {
-            print_error "Download failed"
-            rm -f "${archive_path}"
-            exit 1
-        }
-    else
-        print_error "curl or wget is required to download files"
-        exit 1
-    fi
-
-    print_info "Extracting ONNX Runtime..."
-    local temp_dir="${MODEL_INTERFACE_DIR}/temp_extract_onnx"
-    rm -rf "${temp_dir}"
-    mkdir -p "${temp_dir}"
-
-    # Extract based on file type
-    if [[ "${archive_name}" == *.zip ]]; then
-        unzip -o -q "${archive_path}" -d "${temp_dir}" || {
-            print_error "Extraction failed"
-            rm -rf "${temp_dir}" "${archive_path}"
-            exit 1
-        }
-    else
-        tar -xzf "${archive_path}" -C "${temp_dir}" || {
-            print_error "Extraction failed"
-            rm -rf "${temp_dir}" "${archive_path}"
-            exit 1
-        }
-    fi
-
-    # Move extracted files (ONNX Runtime directory includes version)
-    local extracted_dir=$(find "${temp_dir}" -maxdepth 1 -type d -name "onnxruntime-*" | head -1)
-    if [ -d "${extracted_dir}" ]; then
-        mv "${extracted_dir}" "${ONNXRUNTIME_DIR}"
-    else
-        print_error "Incorrect directory structure after extraction"
-        rm -rf "${temp_dir}" "${archive_path}"
-        exit 1
-    fi
-
-    # Cleanup
-    rm -rf "${temp_dir}" "${archive_path}"
-
-    print_success "ONNX Runtime ${ONNXRUNTIME_VERSION} installed successfully"
-}
-
-# Main workflow
 case "$DOWNLOAD_TARGET" in
     libtorch)
-        print_info "Checking LibTorch..."
-        if is_libtorch_valid; then
-            print_success "LibTorch already exists and is valid"
-        else
-            if [ -d "$LIBTORCH_DIR" ]; then
-                print_warning "LibTorch directory incomplete, re-downloading..."
-                rm -rf "$LIBTORCH_DIR"
-            fi
-            download_libtorch
-            if ! is_libtorch_valid; then
-                print_error "LibTorch installation failed"
-                exit 1
-            fi
-        fi
+        ensure_runtime libtorch "$LIBTORCH_VERSION"
         ;;
-
     onnx)
-        print_info "Checking ONNX Runtime..."
-        if is_onnxruntime_valid; then
-            print_success "ONNX Runtime already exists and is valid"
-        else
-            if [ -d "$ONNXRUNTIME_DIR" ]; then
-                print_warning "ONNX Runtime directory incomplete, re-downloading..."
-                rm -rf "$ONNXRUNTIME_DIR"
-            fi
-            download_onnxruntime
-            if ! is_onnxruntime_valid; then
-                print_error "ONNX Runtime installation failed"
-                exit 1
-            fi
-        fi
+        ensure_runtime onnx "$ONNXRUNTIME_VERSION"
         ;;
-
     all)
-        print_info "Checking inference runtimes..."
-
-        # Check LibTorch
-        if is_libtorch_valid; then
-            print_success "LibTorch already exists and is valid"
-        else
-            if [ -d "$LIBTORCH_DIR" ]; then
-                print_warning "LibTorch directory incomplete, re-downloading..."
-                rm -rf "$LIBTORCH_DIR"
-            fi
-            download_libtorch
-            if ! is_libtorch_valid; then
-                print_error "LibTorch installation failed"
-                exit 1
-            fi
-        fi
-
-        # Check ONNX Runtime
-        if is_onnxruntime_valid; then
-            print_success "ONNX Runtime already exists and is valid"
-        else
-            if [ -d "$ONNXRUNTIME_DIR" ]; then
-                print_warning "ONNX Runtime directory incomplete, re-downloading..."
-                rm -rf "$ONNXRUNTIME_DIR"
-            fi
-            download_onnxruntime
-            if ! is_onnxruntime_valid; then
-                print_error "ONNX Runtime installation failed"
-                exit 1
-            fi
-        fi
-        ;;
-
-    *)
-        echo "Usage: $0 [libtorch|onnx|all]"
-        exit 1
+        ensure_runtime libtorch "$LIBTORCH_VERSION"
+        ensure_runtime onnx "$ONNXRUNTIME_VERSION"
         ;;
 esac
 
-print_success "All inference runtimes are ready"
+print_success "All requested inference runtimes are ready"

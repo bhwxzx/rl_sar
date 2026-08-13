@@ -2,11 +2,14 @@
 
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
 import tempfile
 
+
+ORIGIN_FILENAME = "origin.json"
 
 POLICY_FILES = (
     "policy/LW/base.yaml",
@@ -61,6 +64,51 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def load_approved_onnx_origin(
+    catalog_path: Path,
+    origin_path: Path,
+    version: str,
+    architecture: str,
+) -> dict[str, str]:
+    try:
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        origin = json.loads(origin_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RuntimeError(f"cannot read ONNX Runtime provenance: {error}") from error
+    if not isinstance(catalog, dict) or catalog.get("schema_version") != 1:
+        raise RuntimeError("unsupported inference-runtime catalog schema")
+    archives = catalog.get("archives")
+    if not isinstance(archives, list):
+        raise RuntimeError("inference-runtime catalog has no archive list")
+    matches = [
+        entry
+        for entry in archives
+        if isinstance(entry, dict)
+        and entry.get("kind") == "onnx"
+        and entry.get("version") == version
+        and entry.get("os") == "Linux"
+        and entry.get("architecture") == architecture
+    ]
+    if len(matches) != 1:
+        raise RuntimeError("ONNX Runtime catalog selection is missing or ambiguous")
+    expected = {"schema_version": 1, **matches[0]}
+    if origin != expected:
+        raise RuntimeError("installed ONNX Runtime provenance differs from the approved catalog")
+    digest = matches[0].get("sha256")
+    url = matches[0].get("url")
+    archive_name = matches[0].get("archive_name")
+    if (
+        not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        or not isinstance(url, str)
+        or not url.startswith("https://")
+        or not isinstance(archive_name, str)
+        or Path(archive_name).name != archive_name
+    ):
+        raise RuntimeError("approved ONNX Runtime catalog entry is malformed")
+    return matches[0]
+
+
 def require_regular_file(path: Path, description: str) -> None:
     if path.is_symlink() or not path.is_file():
         raise RuntimeError(
@@ -111,12 +159,14 @@ def render_manifest(
     executable_sha256: str,
     onnx_version: str,
     onnx_architecture: str,
+    onnx_archive: dict[str, str],
+    onnx_origin_hash: str,
     onnx_hashes: list[tuple[str, str]],
     policy_hashes: list[tuple[str, str]],
     runtime_hashes: list[tuple[str, str]],
 ) -> str:
     lines = [
-        "schema_version: 3",
+        "schema_version: 4",
         f'source_commit: "{source_commit}"',
         f'build_type: "{build_type}"',
         "executable:",
@@ -125,6 +175,13 @@ def render_manifest(
         "onnx_runtime:",
         f'  version: "{onnx_version}"',
         f'  architecture: "{onnx_architecture}"',
+        "  archive:",
+        f'    name: "{onnx_archive["archive_name"]}"',
+        f'    url: "{onnx_archive["url"]}"',
+        f'    sha256: "{onnx_archive["sha256"]}"',
+        "  provenance:",
+        f'    path: "lib/rl_sar/onnxruntime/{ORIGIN_FILENAME}"',
+        f'    sha256: "{onnx_origin_hash}"',
         "  libraries:",
     ]
     for relative_path, digest in onnx_hashes:
@@ -159,6 +216,7 @@ def generate_manifest(
     build_type: str,
     onnx_version: str,
     onnx_architecture: str,
+    runtime_catalog: Path,
 ) -> Path:
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
         raise RuntimeError("source commit must be a full lowercase Git SHA-1")
@@ -183,10 +241,21 @@ def generate_manifest(
         raise RuntimeError(
             f"ONNX Runtime directory must be a real directory: {onnx_directory}"
         )
+    origin_path = onnx_directory / ORIGIN_FILENAME
+    require_regular_file(origin_path, "ONNX Runtime provenance")
+    approved_origin = load_approved_onnx_origin(
+        runtime_catalog,
+        origin_path,
+        onnx_version,
+        normalized_architecture,
+    )
     actual_onnx_files = {
         entry.relative_to(prefix).as_posix() for entry in onnx_directory.iterdir()
     }
-    if actual_onnx_files != set(ONNX_RUNTIME_FILES):
+    expected_onnx_files = set(ONNX_RUNTIME_FILES) | {
+        f"lib/rl_sar/onnxruntime/{ORIGIN_FILENAME}"
+    }
+    if actual_onnx_files != expected_onnx_files:
         raise RuntimeError(
             "ONNX Runtime directory does not contain the exact approved library set"
         )
@@ -244,6 +313,8 @@ def generate_manifest(
         sha256_file(executable),
         onnx_version,
         normalized_architecture,
+        approved_origin,
+        sha256_file(origin_path),
         onnx_hashes,
         policy_hashes,
         runtime_hashes,
@@ -273,6 +344,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--build-type", required=True)
     parser.add_argument("--onnx-version", required=True)
     parser.add_argument("--onnx-architecture", required=True)
+    parser.add_argument("--runtime-catalog", required=True, type=Path)
     return parser.parse_args()
 
 
@@ -285,6 +357,7 @@ def main() -> int:
             args.build_type,
             args.onnx_version,
             args.onnx_architecture,
+            args.runtime_catalog,
         )
     except (OSError, RuntimeError) as error:
         print(f"LW deployment manifest generation failed: {error}", file=os.sys.stderr)

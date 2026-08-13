@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -38,6 +39,7 @@ class ManifestGeneratorTests(unittest.TestCase):
         self.executable = self.prefix / "lib" / "rl_sar" / "rl_real_LW"
         self.executable.parent.mkdir(parents=True)
         self.executable.write_bytes(b"test executable\n")
+        self.catalog = Path(self.temporary.name) / "runtime-catalog.json"
         for relative in GENERATOR.POLICY_FILES:
             asset = self.bundle / relative
             asset.parent.mkdir(parents=True, exist_ok=True)
@@ -50,6 +52,30 @@ class ManifestGeneratorTests(unittest.TestCase):
             library = self.prefix / relative
             library.parent.mkdir(parents=True, exist_ok=True)
             library.write_bytes(elf64_bytes(62))
+        self.origin_entry = {
+            "kind": "onnx",
+            "version": "1.22.0",
+            "os": "Linux",
+            "architecture": "x86_64",
+            "archive_name": "onnxruntime-linux-x64-1.22.0.tgz",
+            "archive_format": "tgz",
+            "root_directory": "onnxruntime-linux-x64-1.22.0",
+            "url": "https://example.invalid/onnxruntime-linux-x64-1.22.0.tgz",
+            "sha256": "b" * 64,
+        }
+        self.catalog.write_text(
+            json.dumps({"schema_version": 1, "archives": [self.origin_entry]}),
+            encoding="utf-8",
+        )
+        self.origin = (
+            self.prefix
+            / "lib/rl_sar/onnxruntime"
+            / GENERATOR.ORIGIN_FILENAME
+        )
+        self.origin.write_text(
+            json.dumps({"schema_version": 1, **self.origin_entry}),
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -67,18 +93,22 @@ class ManifestGeneratorTests(unittest.TestCase):
             build_type,
             version,
             architecture,
+            self.catalog,
         )
 
     def test_generates_complete_manifest(self) -> None:
         commit = "a" * 40
         manifest = self.generate(commit=commit)
         content = manifest.read_text(encoding="utf-8")
-        self.assertIn("schema_version: 3", content)
+        self.assertIn("schema_version: 4", content)
         self.assertIn(f'source_commit: "{commit}"', content)
         self.assertIn('name: "rl_real_LW"', content)
         self.assertIn("onnx_runtime:", content)
         self.assertIn('  version: "1.22.0"', content)
         self.assertIn('  architecture: "x86_64"', content)
+        self.assertIn('    name: "onnxruntime-linux-x64-1.22.0.tgz"', content)
+        self.assertIn('    sha256: "' + "b" * 64 + '"', content)
+        self.assertIn('    path: "lib/rl_sar/onnxruntime/origin.json"', content)
         self.assertIn("runtime_files:", content)
         self.assertEqual(
             sum(line.startswith("  - path:") for line in content.splitlines()),
@@ -146,6 +176,24 @@ class ManifestGeneratorTests(unittest.TestCase):
         extra = self.prefix / "lib/rl_sar/onnxruntime/libunexpected.so"
         extra.write_bytes(elf64_bytes(62))
         with self.assertRaisesRegex(RuntimeError, "exact approved library set"):
+            self.generate()
+
+    def test_rejects_missing_or_mismatched_runtime_provenance(self) -> None:
+        self.origin.unlink()
+        with self.assertRaisesRegex(RuntimeError, "provenance"):
+            self.generate()
+
+        self.origin.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    **self.origin_entry,
+                    "sha256": "c" * 64,
+                }
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(RuntimeError, "differs"):
             self.generate()
 
     def test_normalizes_architecture_alias(self) -> None:

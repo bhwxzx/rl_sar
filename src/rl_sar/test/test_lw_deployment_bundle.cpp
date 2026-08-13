@@ -46,13 +46,24 @@ const std::vector<std::string> kOnnxRuntimeFiles = {
     "lib/rl_sar/onnxruntime/libonnxruntime.so.1",
     "lib/rl_sar/onnxruntime/libonnxruntime_providers_shared.so",
 };
+const std::string kOnnxOrigin = "lib/rl_sar/onnxruntime/origin.json";
 
 #if defined(__x86_64__) || defined(_M_X64)
 const std::string kArchitecture = "x86_64";
+const std::string kArchiveName = "onnxruntime-linux-x64-1.22.0.tgz";
+const std::string kArchiveUrl =
+    "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz";
+const std::string kArchiveSha256 =
+    "8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3";
 constexpr std::uint16_t kElfMachine = 62;
 constexpr std::uint16_t kOtherElfMachine = 183;
 #elif defined(__aarch64__) || defined(_M_ARM64)
 const std::string kArchitecture = "aarch64";
+const std::string kArchiveName = "onnxruntime-linux-aarch64-1.22.0.tgz";
+const std::string kArchiveUrl =
+    "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-aarch64-1.22.0.tgz";
+const std::string kArchiveSha256 =
+    "bb76395092d150b52c7092dc6b8f2fe4d80f0f3bf0416d2f269193e347e24702";
 constexpr std::uint16_t kElfMachine = 183;
 constexpr std::uint16_t kOtherElfMachine = 62;
 #else
@@ -125,6 +136,7 @@ public:
         {
             writeFile(prefix / relative, elf64Bytes(kElfMachine));
         }
+        writeFile(prefix / kOnnxOrigin, "{\"approved\":true}\n");
         writeManifest();
     }
 
@@ -138,10 +150,11 @@ public:
         const std::string& source_commit = kCommit,
         const std::string& first_manifest_path = "",
         const std::string& onnx_version = "1.22.0",
-        const std::string& onnx_architecture = kArchitecture)
+        const std::string& onnx_architecture = kArchitecture,
+        const std::string& archive_sha256 = kArchiveSha256)
     {
         std::ostringstream manifest;
-        manifest << "schema_version: 3\n"
+        manifest << "schema_version: 4\n"
                  << "source_commit: \"" << source_commit << "\"\n"
                  << "build_type: \"Release\"\n"
                  << "executable:\n"
@@ -152,6 +165,15 @@ public:
                  << "onnx_runtime:\n"
                  << "  version: \"" << onnx_version << "\"\n"
                  << "  architecture: \"" << onnx_architecture << "\"\n"
+                 << "  archive:\n"
+                 << "    name: \"" << kArchiveName << "\"\n"
+                 << "    url: \"" << kArchiveUrl << "\"\n"
+                 << "    sha256: \"" << archive_sha256 << "\"\n"
+                 << "  provenance:\n"
+                 << "    path: \"" << kOnnxOrigin << "\"\n"
+                 << "    sha256: \""
+                 << LWDeploymentBundle::Sha256File(prefix / kOnnxOrigin)
+                 << "\"\n"
                  << "  libraries:\n";
         for (const std::string& relative : kOnnxRuntimeFiles)
         {
@@ -225,6 +247,12 @@ void testValidAndRelocatableBundle()
             "wrong ONNX Runtime version");
     require(initial.onnx_runtime_architecture == kArchitecture,
             "wrong ONNX Runtime architecture");
+    require(initial.onnx_runtime_archive_name == kArchiveName,
+            "wrong ONNX Runtime archive name");
+    require(initial.onnx_runtime_archive_url == kArchiveUrl,
+            "wrong ONNX Runtime archive URL");
+    require(initial.onnx_runtime_archive_sha256 == kArchiveSha256,
+            "wrong ONNX Runtime archive SHA-256");
     require(initial.source_commit == kCommit, "wrong source commit");
 
     const fs::path moved_prefix = fixture.root / "moved-install";
@@ -355,6 +383,22 @@ void testTamperedOnnxRuntimeLibraryFails()
         "ONNX Runtime SHA-256 mismatch");
 }
 
+void testTamperedOnnxRuntimeProvenanceFails()
+{
+    Fixture fixture;
+    std::ofstream output(
+        fixture.prefix / kOnnxOrigin,
+        std::ios::binary | std::ios::app);
+    output << "tampered";
+    output.close();
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "provenance SHA-256 mismatch");
+}
+
 void testSymlinkOnnxRuntimeLibraryFails()
 {
     Fixture fixture;
@@ -409,6 +453,26 @@ void testInvalidOnnxRuntimeVersionFails()
                 fixture.share, fixture.executable, kCommit);
         },
         "ONNX Runtime version is invalid");
+}
+
+void testUnapprovedOnnxRuntimeVersionAndArchiveFail()
+{
+    Fixture fixture;
+    fixture.writeManifest(kCommit, "", "1.23.0");
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "version is not approved");
+
+    fixture.writeManifest(kCommit, "", "1.22.0", kArchitecture, std::string(64, 'c'));
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "archive provenance is not approved");
 }
 
 void testExtraOnnxRuntimeLibraryFails()
@@ -496,10 +560,12 @@ int main()
         testSymlinkRuntimeDependencyFails();
         testMissingOnnxRuntimeLibraryFails();
         testTamperedOnnxRuntimeLibraryFails();
+        testTamperedOnnxRuntimeProvenanceFails();
         testSymlinkOnnxRuntimeLibraryFails();
         testWrongOnnxRuntimeElfArchitectureFails();
         testManifestOnnxRuntimeArchitectureMismatchFails();
         testInvalidOnnxRuntimeVersionFails();
+        testUnapprovedOnnxRuntimeVersionAndArchiveFail();
         testExtraOnnxRuntimeLibraryFails();
         testSourceCommitMismatchFails();
         testSymlinkAssetFails();

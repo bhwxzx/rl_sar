@@ -76,8 +76,18 @@ class BuildWorkflowTests(unittest.TestCase):
 
         downloader = RUNTIME_DOWNLOADER.read_text(encoding="utf-8")
         all_target = downloader[downloader.index('    all)') :]
-        self.assertIn("download_libtorch", all_target)
-        self.assertIn("download_onnxruntime", all_target)
+        self.assertIn('ensure_runtime libtorch "$LIBTORCH_VERSION"', all_target)
+        self.assertIn('ensure_runtime onnx "$ONNXRUNTIME_VERSION"', all_target)
+
+    def test_runtime_download_is_pinned_and_transactional(self) -> None:
+        downloader = RUNTIME_DOWNLOADER.read_text(encoding="utf-8")
+        self.assertIn("inference_runtime_archives.json", downloader)
+        self.assertIn("manage_inference_runtime.py", downloader)
+        self.assertIn("Expected SHA-256", downloader)
+        self.assertNotIn('rm -rf "$LIBTORCH_DIR"', downloader)
+        self.assertNotIn('rm -rf "$ONNXRUNTIME_DIR"', downloader)
+        self.assertNotIn("Darwin)", downloader)
+        self.assertNotIn("MINGW", downloader)
 
     def test_explicit_jetson_libtorch_request_is_rejected(self) -> None:
         environment = os.environ.copy()

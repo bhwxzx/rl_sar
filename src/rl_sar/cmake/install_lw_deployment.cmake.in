@@ -7,6 +7,7 @@ execute_process(
         --build-type "@CMAKE_BUILD_TYPE@"
         --onnx-version "@ONNX_RUNTIME_VERSION@"
         --onnx-architecture "@RUNTIME_VALIDATION_ARCH@"
+        --runtime-catalog "@PROJECT_ROOT_DIR@/scripts/inference_runtime_archives.json"
     RESULT_VARIABLE LW_MANIFEST_RESULT
     OUTPUT_VARIABLE LW_MANIFEST_OUTPUT
     ERROR_VARIABLE LW_MANIFEST_ERROR

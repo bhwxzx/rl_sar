@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "archives": [
+    {
+      "kind": "libtorch",
+      "version": "2.3.0",
+      "os": "Linux",
+      "architecture": "x86_64",
+      "archive_name": "libtorch-cxx11-abi-shared-with-deps-2.3.0+cpu.zip",
+      "archive_format": "zip",
+      "root_directory": "libtorch",
+      "url": "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.3.0%2Bcpu.zip",
+      "sha256": "f60009d2a74b6c8bdb174e398c70d217b7d12a4d3d358cd1db0690b32f6e193b"
+    },
+    {
+      "kind": "onnx",
+      "version": "1.22.0",
+      "os": "Linux",
+      "architecture": "x86_64",
+      "archive_name": "onnxruntime-linux-x64-1.22.0.tgz",
+      "archive_format": "tgz",
+      "root_directory": "onnxruntime-linux-x64-1.22.0",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz",
+      "sha256": "8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3"
+    },
+    {
+      "kind": "onnx",
+      "version": "1.22.0",
+      "os": "Linux",
+      "architecture": "aarch64",
+      "archive_name": "onnxruntime-linux-aarch64-1.22.0.tgz",
+      "archive_format": "tgz",
+      "root_directory": "onnxruntime-linux-aarch64-1.22.0",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-aarch64-1.22.0.tgz",
+      "sha256": "bb76395092d150b52c7092dc6b8f2fe4d80f0f3bf0416d2f269193e347e24702"
+    }
+  ]
+}

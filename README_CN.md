@@ -45,6 +45,11 @@ CMake、yaml-cpp、Eigen、Boost、TBB、OpenSSL、GLFW、ROS 2，以及由项�
 sudo 密码。普通 x86_64 开发机构建会准备 LibTorch 和 ONNX Runtime；Jetson
 真机构建只准备实际使用的 ONNX Runtime。可用下面的命令只查看系统包清单：
 
+推理下载器只接受仓库清单固定的 Linux 平台、版本、官方 URL 和 SHA-256，归档
+摘要、解压候选结构及 ELF 架构全部通过后才安装。已有的有效运行时若版本或来源
+不匹配会被保留并使构建停止，不会静默升级或降级；系统 Python 环境中的
+`torch`/`onnxruntime` 不属于该目录，不受影响。
+
 这里的 LibTorch 是 C++ 版 PyTorch，供 Sim2Sim 可选的
 `--use_actuator_net` 加载 `.pt` 执行器模型。训练脚本使用的 Python `torch`
 不是编译依赖，不由 `build.sh` 通过 pip 修改用户 Python 环境。启用执行器网络时，

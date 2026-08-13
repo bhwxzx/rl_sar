@@ -2742,7 +2742,7 @@ source state predates the configured output-age limit.
 ## [LW-034] Trusted inference-runtime download integrity
 
 **Priority**: P1 / high
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-020, LW-027
 
 ### Problem
@@ -2786,6 +2786,56 @@ the approved upstream release.
   an unverified fallback.
 - Deployment generation continues to bind the installed runtime libraries and
   all bootstrap tests pass without network access.
+
+### Resolution
+
+- **Resolved**: 2026-08-13T15:49:27+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 推理运行时支持矩阵收紧为 Linux x86_64 的 LibTorch
+  2.3.0/ONNX Runtime 1.22.0，以及 Linux aarch64 的 ONNX Runtime 1.22.0；
+  Darwin、Windows 和其他未审查组合不再使用回退 URL。清单固定运行时类型、
+  版本、OS、规范化架构、精确官方 HTTPS URL、归档名/格式/根目录和完整归档
+  SHA-256。三个摘要于 2026-08-13 从清单中的精确 PyTorch/ONNX Runtime 官方
+  URL 流式读取完整归档并计算：LibTorch x86_64
+  `f60009d2a74b6c8bdb174e398c70d217b7d12a4d3d358cd1db0690b32f6e193b`，
+  ONNX x86_64
+  `8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3`，
+  ONNX aarch64
+  `bb76395092d150b52c7092dc6b8f2fe4d80f0f3bf0416d2f269193e347e24702`。
+  下载器使用独立临时归档，摘要匹配前不解压；候选在同一文件系统的隔离目录完成
+  安全路径、精确根目录、结构和 ELF 架构验证并写入来源证明后才替换结构损坏的
+  目录。任一失败均清理候选并保留旧目录；结构有效但来源缺失、版本更高或来源
+  不匹配的现有运行时会明确停止并要求单独审查升级，不自动覆盖。正式生产 CMake
+  要求来源证明匹配仓库清单；部署 manifest 升级为 schema v4，绑定批准的 ONNX
+  归档名/URL/SHA-256、来源文件哈希及实际部署库哈希，运行时验证器同时与编译进
+  二进制的 x86_64/aarch64 批准归档身份比对。用户 Python 环境中的包不受影响。
+- **Changed Files**: `.gitignore`、`README.md`、`README_CN.md`、
+  `docs/LW_BUILD_DEPLOYMENT_CN.md`、
+  `scripts/inference_runtime_archives.json`、
+  `scripts/manage_inference_runtime.py`、
+  `scripts/download_inference_runtime.sh`、`src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/cmake/install_lw_deployment.cmake.in`、
+  `src/rl_sar/scripts/generate_lw_deployment_manifest.py`、
+  `src/rl_sar/library/core/deployment/lw_deployment_bundle.hpp`、
+  `src/rl_sar/library/core/deployment/lw_deployment_bundle.cpp`、
+  `src/rl_sar/test/test_inference_runtime_download_integrity.py`、
+  `src/rl_sar/test/test_build_workflow.py`、
+  `src/rl_sar/test/test_generate_lw_deployment_manifest.py`、
+  `src/rl_sar/test/test_lw_deployment_bundle.cpp`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 普通 Debug 完整构建成功且 40/40 CTest 通过；全新
+  `scripts/validate_lw_strict_build.sh` 在
+  `-Wall -Wextra -Wpedantic -Werror` 下完成全部维护目标并通过 40/40 CTest；
+  Python 严格语法、Shell 语法和 `git diff --check` 通过。新增 7 项纯离线测试
+  使用合成 TGZ/ELF 覆盖正确安装及精确来源、单字节归档篡改在解压前拒绝、候选
+  结构失败、结构有效但无来源时拒绝自动替换、无效旧目录只在候选完全验证后
+  替换、重复/不支持清单失败和三项生产支持矩阵。manifest 生成与 C++ 启动验证
+  测试覆盖来源缺失/不匹配、未批准版本/归档、来源文件及部署库篡改。正常测试套件
+  未执行网络下载；未启动 ROS 节点、IMU、串口、MuJoCo GUI 或电机。
+- **Accepted Limitation**: 固定摘要是对指定官方 HTTPS 资产完整字节的项目审查
+  信任锚，不是上游数字签名。以后升级版本必须单独审查新 URL 与摘要并重新完成
+  全量构建、Sim2Sim 和部署验收，不能把更高版本静默视为当前批准版本。
+- **Remaining Follow-ups**: none
 
 ---
 

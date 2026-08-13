@@ -135,6 +135,15 @@ CUDA 标志，并在日志中输出 `Jetson mode: true`。只有容器等环境�
 也不启用 CUDA/TensorRT 推理。已有推理库会先校验 ELF 架构，不能把 x86_64
 开发机的 `library/inference_runtime` 复制到 Jetson 使用。
 
+推理运行时下载只支持三种已审查组合：Linux x86_64 的 LibTorch 2.3.0 与
+ONNX Runtime 1.22.0，以及 Linux aarch64 的 ONNX Runtime 1.22.0。版本、精确
+官方 HTTPS URL 和归档 SHA-256 固定在
+`scripts/inference_runtime_archives.json`。下载器先验证完整归档摘要，再在隔离
+目录解压并验证结构和 ELF 架构；全部成功后才替换结构损坏的旧目录。一个结构
+有效但缺少匹配来源证明、版本更高或摘要不同的现有运行时不会被自动覆盖，构建会
+停止并要求把升级作为单独变更审查。项目的 C++ LibTorch 与 ONNX 运行时独立于
+用户 Python 环境中安装的 `torch`/`onnxruntime`，后者版本更高不会触发此检查。
+
 这个开发构建与后面的正式部署构建用途不同：
 
 - `./build.sh` 生成开发机上的 Sim2Sim 程序；
@@ -887,6 +896,10 @@ Jetson。即使目录结构完整，其 ELF 架构仍不兼容；当前构建会
 `library/inference_runtime/onnxruntime` 是否完整。部署生成后若随包库缺失，
 manifest 校验或动态加载器会在 ROS、串口和电机初始化前拒绝运行；不要从其他
 部署目录手工补文件，应从预期提交重新生成整个部署版本。
+
+如果脚本报告现有运行时缺少批准的归档来源或与固定清单不符，不要删除来源检查、
+伪造 `origin.json` 或让脚本自动降级覆盖。确认该目录是否来自其他版本；需要升级
+时应单独更新版本、URL、归档摘要，完成完整构建和 Sim2Sim 后再生成部署包。
 
 ### ONNX Runtime 架构不匹配
 
