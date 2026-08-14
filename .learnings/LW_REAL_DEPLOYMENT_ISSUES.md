@@ -127,7 +127,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 33 | LW-033 | P1 / high | pending | Bind policy-output freshness to the robot-state input snapshot |
 | 34 | LW-034 | P1 / high | pending | Verify downloaded inference runtimes against pinned trusted digests |
 | 35 | LW-035 | P2 / medium | pending | Bind the production launch file into deployment integrity verification |
-| 36 | LW-036 | P2 / medium | pending | Validate optional actuator-network outputs on every Sim2Sim inference |
+| 36 | LW-036 | P2 / medium | resolved | Validate optional actuator-network outputs on every Sim2Sim inference |
 | 37 | LW-037 | P2 / medium | pending | Make Sim2Sim SIGTERM and normal ROS shutdown stop the render loop |
 | 38 | LW-038 | P2 / medium | pending | Remove repeated configuration decoding and allocation from the real control cycle |
 | 39 | LW-039 | P2 / low | pending | Reject actuator-model symlinks and policy-root escapes |
@@ -2931,7 +2931,7 @@ started with materially different dependencies or parameters.
 ## [LW-036] Runtime actuator-network output validation
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-005, LW-013, LW-016, LW-021, LW-029
 
 ### Problem
@@ -2971,6 +2971,38 @@ outside the existing final finite-command boundary.
   approved safe action without undefined behavior or invalid MuJoCo controls.
 - Valid optional actuator models retain their current behavior and real-robot
   command paths are unchanged.
+
+### Resolution
+
+- **Resolved**: 2026-08-14T20:06:59+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 执行器模型启动预热与每次 Sim2Sim 运行时调用复用同一
+  6 输入、单输出和有限性校验入口，捕获标准及未知推理异常。每个控制周期先
+  使旧执行器网络 generation 失效，在独立候选帧中完成全部 leg/foot 关节推理，
+  只有全部成功才原子提交力矩和 generation；策略输出无效或 S2 fallback 时不会
+  复用旧网络力矩。最终网络/前馈或 MuJoCo PD 力矩先在预分配缓冲区中全部形成，
+  验证有限并限幅后才统一写入 `mj_data->ctrl`。新增仅由 Sim2Sim 发出的
+  `SimulationActuatorCommandInvalid`，映射为 S4
+  `HardDisableAndShutdown`，立即清零 MuJoCo 执行器并停止仿真；真机命令路径
+  未修改。
+- **Changed Files**: `src/rl_sar/library/core/simulation/lw_actuator_models.hpp`、
+  `src/rl_sar/library/core/simulation/lw_actuator_models.cpp`、
+  `src/rl_sar/library/core/safety/lw_safety_policy.hpp`、
+  `src/rl_sar/include/rl_sim_LW.hpp`、`src/rl_sar/src/rl_sim_LW.cpp`、
+  `src/rl_sar/test/test_lw_actuator_models.cpp`、
+  `src/rl_sar/test/test_lw_safety_policy.cpp`、
+  `src/rl_sar/test/test_lw_sim_lifecycle_integration.py`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 定向构建 `test_lw_actuator_models`、
+  `test_lw_safety_policy` 和 `rl_sim_LW` 成功；三项定向 CTest 连续 20 轮通过。
+  有状态 fake model 覆盖预热后有效输出、空输出、超长输出、NaN、Inf 和异常；
+  事务缓冲测试覆盖失败时 generation 清除且不泄漏部分结果，最终力矩测试覆盖
+  有限限幅和无效候选不产生部分写入。当前 Debug 完整构建成功且 40/40 CTest
+  通过；全新 `scripts/validate_lw_strict_build.sh` 在
+  `-Wall -Wextra -Wpedantic -Werror` 下完成全部维护目标并通过 40/40 CTest。
+  定向 `cppcheck` 和 `git diff --check` 通过。未启动 ROS 节点、MuJoCo GUI、
+  IMU、串口或电机，用户所有的未跟踪技能目录未修改。
+- **Remaining Follow-ups**: none
 
 ---
 

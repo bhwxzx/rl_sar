@@ -124,20 +124,24 @@ RL_Real::RL_Real(int argc, char **argv)
         }
     }
 
+    const int num_dofs = this->params.Get<int>("num_of_dofs");
+    actuator_net_torque_frame_.resize(static_cast<std::size_t>(num_dofs));
+    mujoco_tau_candidates_.assign(static_cast<std::size_t>(num_dofs), 0.0f);
+    mujoco_tau_bounded_.assign(static_cast<std::size_t>(num_dofs), 0.0f);
+
     // 如果开启了执行器网络，加载 TorchScript 并初始化 Buffer
     if (this->use_actuator_net_) {
-        const LWActuatorModelPaths actuator_paths =
+        actuator_model_paths_ =
             ResolveLWActuatorModelPaths(policy_root_, this->robot_name);
         std::cout << LOGGER::INFO << "Loading leg actuator model: "
-                  << actuator_paths.leg << std::endl;
+                  << actuator_model_paths_.leg << std::endl;
         std::cout << LOGGER::INFO << "Loading foot actuator model: "
-                  << actuator_paths.foot << std::endl;
+                  << actuator_model_paths_.foot << std::endl;
         this->leg_actuator_model_ =
-            LoadLWActuatorModel(actuator_paths.leg);
+            LoadLWActuatorModel(actuator_model_paths_.leg);
         this->foot_actuator_model_ =
-            LoadLWActuatorModel(actuator_paths.foot);
+            LoadLWActuatorModel(actuator_model_paths_.foot);
 
-        int num_dofs = this->params.Get<int>("num_of_dofs");
         int decimation = this->params.Get<int>("decimation");
         int history_len = 2 * decimation + 1; // 队列大小设为 9 (decimation=4)
 
@@ -145,8 +149,6 @@ RL_Real::RL_Real(int argc, char **argv)
             this->pos_err_history_.push_front(std::vector<float>(num_dofs, 0.0f));
             this->vel_history_.push_front(std::vector<float>(num_dofs, 0.0f));
         }
-
-        this->actuator_net_tau_.resize(num_dofs, 0.0f);
     }
 
     // auto load FSM by robot_name
@@ -665,6 +667,12 @@ void RL_Real::ApplySimulationControls()
 
 void RL_Real::UpdateActuatorNetwork()
 {
+    if (!this->use_actuator_net_)
+    {
+        return;
+    }
+    std::vector<float>& candidate_tau =
+        actuator_net_torque_frame_.beginUpdate();
     const auto activation = LoadLWPolicyActivation();
     const auto inference_output = LoadLWPolicyOutput();
     const auto now = std::chrono::steady_clock::now();
@@ -680,9 +688,9 @@ void RL_Real::UpdateActuatorNetwork()
                now,
                GetLWPolicyOutputMaxAge(*activation))
             == LWPolicyOutputStatus::Ready;
-    if (this->use_actuator_net_
-        && this->leg_actuator_model_
+    if (this->leg_actuator_model_
         && this->foot_actuator_model_
+        && !runtime_core_.controlledFallbackLatched()
         && has_current_inference_output
         && inference_output->dof_pos.size()
             == static_cast<size_t>(
@@ -715,36 +723,54 @@ void RL_Real::UpdateActuatorNetwork()
         
         int decimation = this->params.Get<int>("decimation"); // 通常是 4
         
-        for (int i : leg_train_indices) {
-            // 跨步长抓取历史特征 (对应 0ms, -20ms, -40ms)
-            std::vector<float> mlp_input = {
-                this->pos_err_history_[0][i] * 1.0f,               // 0ms
-                this->pos_err_history_[decimation][i] * 1.0f,      // -20ms
-                this->pos_err_history_[2 * decimation][i] * 1.0f,  // -40ms
-                this->vel_history_[0][i] * 1.0f,
-                this->vel_history_[decimation][i] * 1.0f,
-                this->vel_history_[2 * decimation][i] * 1.0f
-            };
-            
-            auto output = this->leg_actuator_model_->forward({mlp_input});
-            this->actuator_net_tau_[i] = output[0] * 1.0f; 
-        }
+        try
+        {
+            for (int i : leg_train_indices) {
+                // 跨步长抓取历史特征 (对应 0ms, -20ms, -40ms)
+                const std::vector<float> mlp_input = {
+                    this->pos_err_history_[0][i] * 1.0f,               // 0ms
+                    this->pos_err_history_[decimation][i] * 1.0f,      // -20ms
+                    this->pos_err_history_[2 * decimation][i] * 1.0f,  // -40ms
+                    this->vel_history_[0][i] * 1.0f,
+                    this->vel_history_[decimation][i] * 1.0f,
+                    this->vel_history_[2 * decimation][i] * 1.0f
+                };
+                candidate_tau[i] = EvaluateLWActuatorModelOutput(
+                    *this->leg_actuator_model_,
+                    mlp_input,
+                    actuator_model_paths_.leg);
+            }
 
-        for (int i : foot_train_indices) {
-            // 跨步长抓取历史特征 (对应 0ms, -20ms, -40ms)
-            std::vector<float> mlp_input = {
-                this->pos_err_history_[0][i] * 1.0f,               // 0ms
-                this->pos_err_history_[decimation][i] * 1.0f,      // -20ms
-                this->pos_err_history_[2 * decimation][i] * 1.0f,  // -40ms
-                this->vel_history_[0][i] * 1.0f,
-                this->vel_history_[decimation][i] * 1.0f,
-                this->vel_history_[2 * decimation][i] * 1.0f
-            };
-            
-            auto output = this->foot_actuator_model_->forward({mlp_input});
-            this->actuator_net_tau_[i] = output[0] * 1.0f; 
+            for (int i : foot_train_indices) {
+                // 跨步长抓取历史特征 (对应 0ms, -20ms, -40ms)
+                const std::vector<float> mlp_input = {
+                    this->pos_err_history_[0][i] * 1.0f,               // 0ms
+                    this->pos_err_history_[decimation][i] * 1.0f,      // -20ms
+                    this->pos_err_history_[2 * decimation][i] * 1.0f,  // -40ms
+                    this->vel_history_[0][i] * 1.0f,
+                    this->vel_history_[decimation][i] * 1.0f,
+                    this->vel_history_[2 * decimation][i] * 1.0f
+                };
+                candidate_tau[i] = EvaluateLWActuatorModelOutput(
+                    *this->foot_actuator_model_,
+                    mlp_input,
+                    actuator_model_paths_.foot);
+            }
+            actuator_net_torque_frame_.commit(activation->generation);
         }
-        actuator_net_generation_ = activation->generation;
+        catch (const std::exception& exception)
+        {
+            ApplySafetyEvent(
+                LWSafetyEvent::SimulationActuatorCommandInvalid,
+                std::string("[Safety] Invalid actuator-network output: ")
+                    + exception.what());
+        }
+        catch (...)
+        {
+            ApplySafetyEvent(
+                LWSafetyEvent::SimulationActuatorCommandInvalid,
+                "[Safety] Actuator-network inference threw an unknown exception");
+        }
     }
 }
 
@@ -860,6 +886,7 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
     }
     auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
     auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
+    auto torque_limits = this->params.Get<std::vector<float>>("torque_limits");
     int num_dofs = this->params.Get<int>("num_of_dofs");
 
     for (int i = 0; i < num_dofs; ++i)
@@ -902,7 +929,8 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
         }
         const auto activation =
             this->LoadLWPolicyActivation();
-        for (int i = 0; i < this->params.Get<int>("num_of_dofs"); ++i)
+        const auto& actuator_net_tau = actuator_net_torque_frame_.values();
+        for (int i = 0; i < num_dofs; ++i)
         {
             float target_tau = 0.0f;
             
@@ -910,7 +938,7 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
             bool is_actuator_net_controlled = false;
             if (this->use_actuator_net_
                 && activation
-                && actuator_net_generation_
+                && actuator_net_torque_frame_.generation()
                     == activation->generation) {
                 if (std::find(this->leg_train_indices.begin(), this->leg_train_indices.end(), i) != this->leg_train_indices.end()) {
                     is_actuator_net_controlled = true;
@@ -922,17 +950,39 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
 
             if (is_actuator_net_controlled) {
                 // 使用执行器网络的输出力矩 (附加可能存在的前馈 FF 力矩)
-                target_tau = this->actuator_net_tau_[i] + command->motor_command.tau[i]; 
+                target_tau = actuator_net_tau[i]
+                    + command->motor_command.tau[i];
             } else {
                 // 使用理想的 MuJoCo PD 力矩 (用于轮子或其他没被接管的关节)
                 target_tau = command->motor_command.tau[i] +
-                    command->motor_command.kp[i] * (command->motor_command.q[i] - mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i]]) +
-                    command->motor_command.kd[i] * (command->motor_command.dq[i] - mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i] + this->params.Get<int>("num_of_dofs")]);
+                    command->motor_command.kp[i]
+                        * (command->motor_command.q[i]
+                           - mj_data->sensordata[joint_mapping[i]]) +
+                    command->motor_command.kd[i]
+                        * (command->motor_command.dq[i]
+                           - mj_data->sensordata[joint_mapping[i] + num_dofs]);
             }
+            mujoco_tau_candidates_[i] = target_tau;
+        }
 
-            // 限幅并写入 MuJoCo
-            mj_data->ctrl[this->params.Get<std::vector<int>>("joint_mapping")[i]] = 
-                clamp<float>(target_tau, -this->params.Get<std::vector<float>>("torque_limits")[i], this->params.Get<std::vector<float>>("torque_limits")[i]);
+        const LWActuatorTorqueValidation validation =
+            PrepareLWActuatorTorques(
+                mujoco_tau_candidates_,
+                torque_limits,
+                mujoco_tau_bounded_);
+        if (!validation.valid())
+        {
+            ApplySafetyEvent(
+                LWSafetyEvent::SimulationActuatorCommandInvalid,
+                std::string("[Safety] Invalid final MuJoCo actuator torque: ")
+                    + validation.failureName()
+                    + " at joint " + std::to_string(validation.index));
+            return;
+        }
+
+        for (int i = 0; i < num_dofs; ++i)
+        {
+            mj_data->ctrl[joint_mapping[i]] = mujoco_tau_bounded_[i];
         }
     }
 }

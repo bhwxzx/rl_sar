@@ -1,5 +1,6 @@
 #include "lw_actuator_models.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <system_error>
@@ -75,31 +76,65 @@ void ValidateLWActuatorModelContract(
         throw std::runtime_error(
             "LW actuator model must be TorchScript: " + source);
     }
+    static_cast<void>(EvaluateLWActuatorModelOutput(
+        model,
+        std::vector<float>(kActuatorModelInputSize, 0.0f),
+        model_path));
+}
+
+float EvaluateLWActuatorModelOutput(
+    InferenceRuntime::Model& model,
+    const std::vector<float>& input,
+    const std::filesystem::path& model_path)
+{
+    if (input.size() != kActuatorModelInputSize)
+    {
+        throw std::runtime_error(
+            "LW actuator model requires exactly 6 input values '"
+            + model_path.string() + "': got "
+            + std::to_string(input.size()));
+    }
+    if (!std::all_of(input.begin(), input.end(), [](float value)
+        {
+            return std::isfinite(value);
+        }))
+    {
+        throw std::runtime_error(
+            "LW actuator model received a non-finite input: "
+            + model_path.string());
+    }
 
     std::vector<float> output;
     try
     {
-        output = model.forward(
-            {std::vector<float>(kActuatorModelInputSize, 0.0f)});
+        output = model.forward({input});
     }
     catch (const std::exception& exception)
     {
         throw std::runtime_error(
             "LW actuator model rejected the expected 6-value input '"
-            + source + "': " + exception.what());
+            + model_path.string() + "': " + exception.what());
+    }
+    catch (...)
+    {
+        throw std::runtime_error(
+            "LW actuator model rejected the expected 6-value input '"
+            + model_path.string() + "' with an unknown exception");
     }
     if (output.size() != kActuatorModelOutputSize)
     {
         throw std::runtime_error(
             "LW actuator model must produce exactly one output '"
-            + source + "': got " + std::to_string(output.size()));
+            + model_path.string() + "': got "
+            + std::to_string(output.size()));
     }
     if (!std::isfinite(output.front()))
     {
         throw std::runtime_error(
-            "LW actuator model produced a non-finite warmup output: "
-            + source);
+            "LW actuator model produced a non-finite output: "
+            + model_path.string());
     }
+    return output.front();
 }
 
 std::shared_ptr<InferenceRuntime::Model> LoadLWActuatorModel(
@@ -114,4 +149,85 @@ std::shared_ptr<InferenceRuntime::Model> LoadLWActuatorModel(
     }
     ValidateLWActuatorModelContract(*model, model_path);
     return std::shared_ptr<InferenceRuntime::Model>(std::move(model));
+}
+
+void LWActuatorTorqueFrame::resize(std::size_t size)
+{
+    candidate_.assign(size, 0.0f);
+    committed_.assign(size, 0.0f);
+    generation_ = 0;
+}
+
+std::vector<float>& LWActuatorTorqueFrame::beginUpdate() noexcept
+{
+    generation_ = 0;
+    std::fill(candidate_.begin(), candidate_.end(), 0.0f);
+    return candidate_;
+}
+
+void LWActuatorTorqueFrame::commit(std::uint64_t generation)
+{
+    if (generation == 0 || candidate_.size() != committed_.size())
+    {
+        throw std::runtime_error(
+            "Invalid LW actuator torque-frame commit");
+    }
+    committed_ = candidate_;
+    generation_ = generation;
+}
+
+const std::vector<float>& LWActuatorTorqueFrame::values() const noexcept
+{
+    return committed_;
+}
+
+std::uint64_t LWActuatorTorqueFrame::generation() const noexcept
+{
+    return generation_;
+}
+
+const char* LWActuatorTorqueValidation::failureName() const noexcept
+{
+    switch (failure)
+    {
+    case LWActuatorTorqueFailure::None: return "none";
+    case LWActuatorTorqueFailure::SizeMismatch: return "size-mismatch";
+    case LWActuatorTorqueFailure::NonFiniteCandidate:
+        return "non-finite-candidate";
+    case LWActuatorTorqueFailure::InvalidLimit: return "invalid-limit";
+    }
+    return "unknown";
+}
+
+LWActuatorTorqueValidation PrepareLWActuatorTorques(
+    const std::vector<float>& candidates,
+    const std::vector<float>& limits,
+    std::vector<float>& bounded) noexcept
+{
+    if (candidates.size() != limits.size()
+        || candidates.size() != bounded.size())
+    {
+        return {LWActuatorTorqueFailure::SizeMismatch, 0};
+    }
+
+    for (std::size_t index = 0; index < candidates.size(); ++index)
+    {
+        if (!std::isfinite(candidates[index]))
+        {
+            return {
+                LWActuatorTorqueFailure::NonFiniteCandidate,
+                index};
+        }
+        if (!std::isfinite(limits[index]) || limits[index] < 0.0f)
+        {
+            return {LWActuatorTorqueFailure::InvalidLimit, index};
+        }
+    }
+
+    for (std::size_t index = 0; index < candidates.size(); ++index)
+    {
+        bounded[index] = std::clamp(
+            candidates[index], -limits[index], limits[index]);
+    }
+    return {};
 }

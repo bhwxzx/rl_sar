@@ -92,8 +92,10 @@ public:
     enum class Output
     {
         Valid,
+        Empty,
         TooLarge,
         NonFinite,
+        Infinite,
         Throw
     };
 
@@ -126,6 +128,10 @@ public:
         {
             throw std::runtime_error("incompatible input shape");
         }
+        if (output_ == Output::Empty)
+        {
+            return {};
+        }
         if (output_ == Output::TooLarge)
         {
             return {0.0f, 0.0f};
@@ -134,7 +140,11 @@ public:
         {
             return {std::numeric_limits<float>::quiet_NaN()};
         }
-        return {0.0f};
+        if (output_ == Output::Infinite)
+        {
+            return {std::numeric_limits<float>::infinity()};
+        }
+        return {valid_output_};
     }
 
     std::string get_model_type() const override
@@ -147,11 +157,22 @@ public:
         return observed_input_size_;
     }
 
+    void set_output(Output output) noexcept
+    {
+        output_ = output;
+    }
+
+    void set_valid_output(float output) noexcept
+    {
+        valid_output_ = output;
+    }
+
 private:
     Output output_;
     bool loaded_;
     std::string model_type_;
     std::size_t observed_input_size_ = 0;
+    float valid_output_ = 0.0f;
 };
 
 void TestRelocatedPolicyRootSelectsBothModels()
@@ -251,6 +272,115 @@ void TestIncompatibleModelsAreRejected()
         {model_path.string(), "non-finite"});
 }
 
+void TestRuntimeOutputsAreValidatedAfterWarmup()
+{
+    const fs::path model_path("/selected/leg_actuator_net.pt");
+    FakeTorchModel model;
+    ValidateLWActuatorModelContract(model, model_path);
+
+    model.set_valid_output(1.25f);
+    Require(
+        EvaluateLWActuatorModelOutput(
+            model, std::vector<float>(6, 0.5f), model_path)
+            == 1.25f,
+        "valid runtime actuator output changed");
+
+    for (const auto output : {
+             FakeTorchModel::Output::Empty,
+             FakeTorchModel::Output::TooLarge})
+    {
+        model.set_output(output);
+        RequireFailure(
+            [&]() {
+                EvaluateLWActuatorModelOutput(
+                    model, std::vector<float>(6, 0.0f), model_path);
+            },
+            {model_path.string(), "exactly one output"});
+    }
+    for (const auto output : {
+             FakeTorchModel::Output::NonFinite,
+             FakeTorchModel::Output::Infinite})
+    {
+        model.set_output(output);
+        RequireFailure(
+            [&]() {
+                EvaluateLWActuatorModelOutput(
+                    model, std::vector<float>(6, 0.0f), model_path);
+            },
+            {model_path.string(), "non-finite"});
+    }
+    model.set_output(FakeTorchModel::Output::Throw);
+    RequireFailure(
+        [&]() {
+            EvaluateLWActuatorModelOutput(
+                model, std::vector<float>(6, 0.0f), model_path);
+        },
+        {model_path.string(), "incompatible input shape"});
+}
+
+void TestActuatorTorqueFrameCommitsAtomically()
+{
+    LWActuatorTorqueFrame frame;
+    frame.resize(3);
+    auto& first = frame.beginUpdate();
+    first = {1.0f, 2.0f, 3.0f};
+    frame.commit(7);
+    Require(frame.generation() == 7, "valid torque generation was not committed");
+    Require(
+        frame.values() == std::vector<float>({1.0f, 2.0f, 3.0f}),
+        "valid torque frame was not committed");
+
+    auto& failed = frame.beginUpdate();
+    failed[0] = 9.0f;
+    Require(frame.generation() == 0, "failed update retained an old generation");
+    Require(
+        frame.values() == std::vector<float>({1.0f, 2.0f, 3.0f}),
+        "partial torque candidate leaked into committed values");
+
+    failed = {4.0f, 5.0f, 6.0f};
+    frame.commit(8);
+    Require(frame.generation() == 8, "replacement generation was not committed");
+    Require(
+        frame.values() == std::vector<float>({4.0f, 5.0f, 6.0f}),
+        "replacement torque frame was not committed atomically");
+}
+
+void TestFinalActuatorTorquesValidateBeforeMutation()
+{
+    std::vector<float> bounded(3, 99.0f);
+    auto result = PrepareLWActuatorTorques(
+        {2.0f, -3.0f, 0.5f},
+        {1.0f, 2.0f, 1.0f},
+        bounded);
+    Require(result.valid(), "finite final torques were rejected");
+    Require(
+        bounded == std::vector<float>({1.0f, -2.0f, 0.5f}),
+        "finite final torques were not clamped correctly");
+
+    const std::vector<float> unchanged(3, 77.0f);
+    for (const float invalid : {
+             std::numeric_limits<float>::quiet_NaN(),
+             std::numeric_limits<float>::infinity()})
+    {
+        bounded = unchanged;
+        result = PrepareLWActuatorTorques(
+            {1.0f, invalid, 2.0f},
+            {3.0f, 3.0f, 3.0f},
+            bounded);
+        Require(!result.valid(), "non-finite final torque was accepted");
+        Require(result.index == 1, "wrong invalid final-torque index reported");
+        Require(bounded == unchanged, "invalid torque caused a partial mutation");
+    }
+
+    bounded = unchanged;
+    result = PrepareLWActuatorTorques(
+        {1.0f, 2.0f, 3.0f},
+        {3.0f, -1.0f, 3.0f},
+        bounded);
+    Require(!result.valid(), "invalid torque limit was accepted");
+    Require(bounded == unchanged, "invalid limit caused a partial mutation");
+}
+
 void TestCurrentModelsLoadWithoutGui()
 {
 #ifdef USE_TORCH
@@ -273,6 +403,9 @@ int main()
         TestMissingModelIsRejectedWithResolvedPath();
         TestCompatibleModelUsesSixInputsAndOneOutput();
         TestIncompatibleModelsAreRejected();
+        TestRuntimeOutputsAreValidatedAfterWarmup();
+        TestActuatorTorqueFrameCommitsAtomically();
+        TestFinalActuatorTorquesValidateBeforeMutation();
         TestCurrentModelsLoadWithoutGui();
     }
     catch (const std::exception& exception)

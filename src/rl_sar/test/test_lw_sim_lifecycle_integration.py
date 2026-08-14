@@ -124,11 +124,43 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
             "ResolveLWActuatorModelPaths(policy_root_, this->robot_name)",
             actuator_block,
         )
-        self.assertIn("LoadLWActuatorModel(actuator_paths.leg)", actuator_block)
-        self.assertIn("LoadLWActuatorModel(actuator_paths.foot)", actuator_block)
+        self.assertIn(
+            "LoadLWActuatorModel(actuator_model_paths_.leg)", actuator_block
+        )
+        self.assertIn(
+            "LoadLWActuatorModel(actuator_model_paths_.foot)", actuator_block
+        )
         self.assertNotIn("POLICY_DIR", actuator_block)
         self.assertIn("Loading leg actuator model:", actuator_block)
         self.assertIn("Loading foot actuator model:", actuator_block)
+
+    def test_actuator_network_and_mujoco_torques_are_transactional(self) -> None:
+        source = SIM_SOURCE.read_text(encoding="utf-8")
+        update = source[
+            source.index("void RL_Real::UpdateActuatorNetwork()") : source.index(
+                "void RL_Real::RunModel()"
+            )
+        ]
+        command = source[
+            source.index("void RL_Real::SetCommand(") : source.index(
+                "void RL_Real::SetupSysJoystick("
+            )
+        ]
+
+        self.assertNotIn("output[0]", update)
+        self.assertLess(update.index("beginUpdate()"), update.index("const auto activation"))
+        self.assertIn("!runtime_core_.controlledFallbackLatched()", update)
+        self.assertEqual(update.count("actuator_net_torque_frame_.commit("), 1)
+        self.assertEqual(
+            update.count("LWSafetyEvent::SimulationActuatorCommandInvalid"),
+            2,
+        )
+
+        prepare = command.index("PrepareLWActuatorTorques(")
+        first_write = command.index("mj_data->ctrl[")
+        self.assertLess(prepare, first_write)
+        self.assertIn("if (!validation.valid())", command[prepare:first_write])
+        self.assertNotIn("mj_data->ctrl[", command[:prepare])
 
 
 if __name__ == "__main__":

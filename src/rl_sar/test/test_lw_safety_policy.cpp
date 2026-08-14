@@ -75,7 +75,8 @@ void testSourceSpecificActions()
              LWSafetyEvent::RobotCommandInvalid,
              LWSafetyEvent::NullRobotCommand,
              LWSafetyEvent::FeedbackReadFailed,
-             LWSafetyEvent::ControlCommandIncomplete})
+             LWSafetyEvent::ControlCommandIncomplete,
+             LWSafetyEvent::SimulationActuatorCommandInvalid})
     {
         require_action(event, LWSafetyAction::HardDisableAndShutdown);
     }
@@ -102,6 +103,11 @@ void testSourceSpecificActions()
         LWSafetyDecisionFor(LWSafetyEvent::ControlLoopException).action
             == LWSafetyAction::HardDisableAndShutdown,
         "control exception did not retain fatal protection");
+    require(
+        LWSafetyDecisionFor(
+            LWSafetyEvent::SimulationActuatorCommandInvalid).action
+            == LWSafetyAction::HardDisableAndShutdown,
+        "invalid simulation actuator command did not stop Sim2Sim");
     require(
         LWSafetyDecisionFor(LWSafetyEvent::MotorHardwareFault).action
             == LWSafetyAction::HardDisable,

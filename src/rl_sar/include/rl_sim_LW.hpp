@@ -127,14 +127,16 @@ private:
 
     // actuator net
     bool use_actuator_net_ = false; // 是否使用执行器网络的 Flag
+    LWActuatorModelPaths actuator_model_paths_;
     std::shared_ptr<InferenceRuntime::Model> leg_actuator_model_; // 模型指针
     std::shared_ptr<InferenceRuntime::Model> foot_actuator_model_; // 模型指针
     std::vector<int> leg_train_indices = {0, 1, 2, 3, 4, 5}; 
     std::vector<int> foot_train_indices = {6, 7};
     std::deque<std::vector<float>> pos_err_history_; 
     std::deque<std::vector<float>> vel_history_;     
-    std::vector<float> actuator_net_tau_;
-    std::uint64_t actuator_net_generation_ = 0;
+    LWActuatorTorqueFrame actuator_net_torque_frame_;
+    std::vector<float> mujoco_tau_candidates_;
+    std::vector<float> mujoco_tau_bounded_;
 
     // others
     void disable_robot(void);
