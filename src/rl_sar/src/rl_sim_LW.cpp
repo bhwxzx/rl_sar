@@ -1335,15 +1335,9 @@ int main(int argc, char **argv)
             });
         std::exception_ptr ros_error;
         std::thread ros_thread([&]() {
-            try
-            {
-                rclcpp::spin(rl_sar->ros2_node);
-            }
-            catch (...)
-            {
-                ros_error = std::current_exception();
-                rl_sar->RequestSimulationStop();
-            }
+            ros_error = RunLWSimShutdownBoundWorker(
+                shutdown_coordinator,
+                [&]() { rclcpp::spin(rl_sar->ros2_node); });
         });
 
         std::exception_ptr main_thread_error;
@@ -1356,14 +1350,14 @@ int main(int argc, char **argv)
             if (shutdown_coordinator.requested())
             {
                 std::cout << LOGGER::INFO
-                          << "Received SIGINT, exiting Sim2Sim..."
+                          << "Shutdown requested, exiting Sim2Sim..."
                           << std::endl;
             }
         }
         catch (...)
         {
             main_thread_error = std::current_exception();
-            rl_sar->RequestSimulationStop();
+            shutdown_coordinator.Request();
         }
 
         try
@@ -1376,7 +1370,7 @@ int main(int argc, char **argv)
             {
                 main_thread_error = std::current_exception();
             }
-            rl_sar->RequestSimulationStop();
+            shutdown_coordinator.Request();
         }
         if (ros_thread.joinable())
         {

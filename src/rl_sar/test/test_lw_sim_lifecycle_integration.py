@@ -99,7 +99,11 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
         )
         self.assertIn("shutdown_coordinator.Bind(", main)
         self.assertIn("locked->RequestSimulationStop();", main)
+        self.assertIn("RunLWSimShutdownBoundWorker(", main)
+        self.assertIn("rclcpp::spin(rl_sar->ros2_node);", main)
         self.assertIn("shutdown_coordinator.requested()", main)
+        self.assertIn("Shutdown requested, exiting Sim2Sim...", main)
+        self.assertNotIn("Received SIGINT, exiting Sim2Sim...", main)
         self.assertLess(
             main.index("rclcpp::shutdown();"),
             main.index("sigint_waiter.ShutdownAndKeepBlocked();"),

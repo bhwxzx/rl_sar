@@ -73,6 +73,35 @@ private:
     bool requested_ = false;
 };
 
+template<typename Worker>
+std::exception_ptr RunLWSimShutdownBoundWorker(
+    LWSimShutdownCoordinator& coordinator,
+    Worker&& worker) noexcept
+{
+    std::exception_ptr error;
+    try
+    {
+        std::forward<Worker>(worker)();
+    }
+    catch (...)
+    {
+        error = std::current_exception();
+    }
+
+    try
+    {
+        coordinator.Request();
+    }
+    catch (...)
+    {
+        if (!error)
+        {
+            error = std::current_exception();
+        }
+    }
+    return error;
+}
+
 class LWSigintWaiter
 {
 public:

@@ -442,6 +442,29 @@ if(BUILD_TESTING)
         )
         target_link_libraries(test_lw_signal_shutdown PRIVATE Threads::Threads)
         add_test(NAME lw_signal_shutdown COMMAND test_lw_signal_shutdown)
+        if(NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
+            add_executable(test_lw_ros_shutdown
+                test/test_lw_ros_shutdown.cpp
+            )
+            target_include_directories(test_lw_ros_shutdown PRIVATE
+                library/core/simulation
+            )
+            target_link_libraries(test_lw_ros_shutdown Threads::Threads)
+            ament_target_dependencies(test_lw_ros_shutdown rclcpp)
+            add_test(
+                NAME lw_ros_shutdown_normal
+                COMMAND test_lw_ros_shutdown normal
+            )
+            add_test(
+                NAME lw_ros_shutdown_sigterm
+                COMMAND test_lw_ros_shutdown sigterm
+            )
+            set_tests_properties(
+                lw_ros_shutdown_normal
+                lw_ros_shutdown_sigterm
+                PROPERTIES TIMEOUT 10
+            )
+        endif()
     endif()
     add_test(
         NAME lw_sim_lifecycle_integration

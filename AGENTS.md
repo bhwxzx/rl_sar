@@ -6,6 +6,12 @@
 - Do not infer approval merely from a request to investigate, diagnose, review, or propose a fix.
 - Read-only inspection and analysis may proceed without approval.
 
+## Code Change Proposal Communication
+
+- End every code modification proposal with a concise section that states what
+  problems the proposal solves and what concrete advantages the proposed
+  approach provides, including material safety or maintenance benefits.
+
 ## LW Real-Deployment Remediation
 
 - Use `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md` as the authoritative issue order and status record.

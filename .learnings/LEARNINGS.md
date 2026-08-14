@@ -1,5 +1,37 @@
 # Learnings
 
+## [LRN-20260814-001] correction
+
+**Logged**: 2026-08-14T20:17:53+08:00
+**Priority**: high
+**Status**: promoted
+**Area**: docs
+
+### Summary
+每份代码修改方案都必须在末尾明确说明方案解决的问题和具体优势。
+
+### Details
+用户指出，仅列实施步骤、文件范围和验证方法不足以支持方案审批。方案结尾还应
+把技术动作映射回实际问题，说明消除了哪些故障路径，以及所选做法在安全性、
+可维护性、可测试性或变更边界方面的优势，便于用户判断方案是否值得批准。
+
+### Suggested Action
+以后提出任何代码修改方案时，以独立的“解决的问题与方案优势”段落收尾；内容
+必须具体对应当前问题，不能只使用“更安全”“更可靠”等泛化表述。
+
+### Metadata
+- Source: user_feedback
+- Related Files: AGENTS.md
+- Tags: proposal, approval, communication, rationale, benefits
+- Pattern-Key: workflow.code_proposal_explains_solution_and_benefits
+- Recurrence-Count: 1
+- First-Seen: 2026-08-14
+- Last-Seen: 2026-08-14
+
+**Promoted**: AGENTS.md
+
+---
+
 ## [LRN-20260811-003] correction
 
 **Logged**: 2026-08-11T17:57:11+08:00

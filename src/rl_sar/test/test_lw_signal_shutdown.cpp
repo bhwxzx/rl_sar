@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <unistd.h>
 
@@ -138,6 +139,59 @@ void TestCallbackFailureIsReported()
     Require(reported, "SIGINT callback failure was not retained");
 }
 
+void TestShutdownBoundWorkerStopsAfterNormalReturn()
+{
+    LWSimShutdownCoordinator coordinator;
+    std::atomic<int> stop_count{0};
+    coordinator.Bind([&]() { ++stop_count; });
+
+    const std::exception_ptr error = RunLWSimShutdownBoundWorker(
+        coordinator,
+        []() {});
+    Require(!error, "normal worker return reported an exception");
+    Require(stop_count.load() == 1, "normal worker return did not stop simulation");
+}
+
+void TestShutdownBoundWorkerStopsAndRetainsException()
+{
+    LWSimShutdownCoordinator coordinator;
+    std::atomic<int> stop_count{0};
+    coordinator.Bind([&]() { ++stop_count; });
+
+    const std::exception_ptr error = RunLWSimShutdownBoundWorker(
+        coordinator,
+        []() { throw std::runtime_error("ROS worker failure"); });
+    Require(stop_count.load() == 1, "throwing worker did not stop simulation");
+    bool retained = false;
+    try
+    {
+        std::rethrow_exception(error);
+    }
+    catch (const std::runtime_error& exception)
+    {
+        retained = std::string(exception.what()) == "ROS worker failure";
+    }
+    Require(retained, "worker exception was not retained");
+}
+
+void TestConcurrentShutdownRequestsAreIdempotent()
+{
+    LWSimShutdownCoordinator coordinator;
+    std::atomic<int> stop_count{0};
+    coordinator.Bind([&]() { ++stop_count; });
+
+    std::vector<std::thread> requesters;
+    for (int index = 0; index < 32; ++index)
+    {
+        requesters.emplace_back([&]() { coordinator.Request(); });
+    }
+    for (std::thread& requester : requesters)
+    {
+        requester.join();
+    }
+    Require(stop_count.load() == 1, "concurrent shutdown was not idempotent");
+}
+
 void TestProcessShutdownCanKeepSigintBlocked()
 {
     sigset_t original_mask;
@@ -165,6 +219,9 @@ int main()
         TestShutdownIsBoundedWithoutSignal();
         TestRepeatedSigintDuringShutdownIsSafe();
         TestCallbackFailureIsReported();
+        TestShutdownBoundWorkerStopsAfterNormalReturn();
+        TestShutdownBoundWorkerStopsAndRetainsException();
+        TestConcurrentShutdownRequestsAreIdempotent();
         TestProcessShutdownCanKeepSigintBlocked();
     }
     catch (const std::exception& error)

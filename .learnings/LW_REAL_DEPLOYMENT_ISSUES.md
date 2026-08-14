@@ -124,11 +124,11 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 30 | LW-031 | P2 / low | resolved | Restore a warning-clean strict build for maintained LW code and tests |
 | 31 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
 | 32 | LW-032 | P0 / critical | resolved | Require complete, initialized, independently fresh IMU and AHRS data end to end |
-| 33 | LW-033 | P1 / high | pending | Bind policy-output freshness to the robot-state input snapshot |
-| 34 | LW-034 | P1 / high | pending | Verify downloaded inference runtimes against pinned trusted digests |
-| 35 | LW-035 | P2 / medium | pending | Bind the production launch file into deployment integrity verification |
+| 33 | LW-033 | P1 / high | resolved | Bind policy-output freshness to the robot-state input snapshot |
+| 34 | LW-034 | P1 / high | resolved | Verify downloaded inference runtimes against pinned trusted digests |
+| 35 | LW-035 | P2 / medium | resolved | Bind the production launch file into deployment integrity verification |
 | 36 | LW-036 | P2 / medium | resolved | Validate optional actuator-network outputs on every Sim2Sim inference |
-| 37 | LW-037 | P2 / medium | pending | Make Sim2Sim SIGTERM and normal ROS shutdown stop the render loop |
+| 37 | LW-037 | P2 / medium | resolved | Make Sim2Sim SIGTERM and normal ROS shutdown stop the render loop |
 | 38 | LW-038 | P2 / medium | pending | Remove repeated configuration decoding and allocation from the real control cycle |
 | 39 | LW-039 | P2 / low | pending | Reject actuator-model symlinks and policy-root escapes |
 | 40 | LW-040 | P2 / low | pending | Make the polymorphic RL base destruction contract safe |
@@ -3009,7 +3009,7 @@ outside the existing final finite-command boundary.
 ## [LW-037] Complete Sim2Sim SIGTERM and ROS shutdown
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-024, LW-028
 
 ### Problem
@@ -3043,6 +3043,33 @@ blocked in MuJoCo `RenderLoop()` until the window is closed manually.
 - Normal return from the ROS executor cannot leave `RenderLoop()` running.
 - Repeated and concurrent shutdown requests remain idempotent, all workers are
   joined, and stored worker errors are still propagated.
+
+### Resolution
+
+- **Resolved**: 2026-08-14T20:28:39+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 新增可测试的 ROS worker 包装器，使正常 spin 返回与异常
+  都在保存 worker 异常后请求同一个 `LWSimShutdownCoordinator`；SIGINT 继续由
+  同步等待线程安全处理，SIGTERM、显式 ROS shutdown、正常 spin 返回、ROS
+  worker 异常和主线程生命周期异常统一进入幂等仿真停止路径。保留现有
+  `RequestExit()` 唤醒机制、worker join 顺序和异常传播顺序，未修改第三方
+  MuJoCo 代码。
+- **Changed Files**: `src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/library/core/simulation/lw_signal_shutdown.hpp`、
+  `src/rl_sar/src/rl_sim_LW.cpp`、
+  `src/rl_sar/test/test_lw_signal_shutdown.cpp`、
+  `src/rl_sar/test/test_lw_ros_shutdown.cpp`、
+  `src/rl_sar/test/test_lw_sim_lifecycle_integration.py`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 定向构建 `test_lw_signal_shutdown`、
+  `test_lw_ros_shutdown` 和 `rl_sim_LW` 成功；正常 ROS shutdown、真实进程内
+  SIGTERM、worker 异常及并发重复停止请求等四项定向 CTest 各连续 20 轮通过。
+  当前 Debug 完整构建成功且 42/42 CTest 通过；全新
+  `scripts/validate_lw_strict_build.sh` 在
+  `-Wall -Wextra -Wpedantic -Werror` 下完成全部维护目标并通过 42/42 CTest。
+  定向 `cppcheck`、Python 语法检查和 `git diff --check` 通过。未启动 MuJoCo
+  GUI、真实机器人、IMU、串口或电机，用户所有的未跟踪技能目录未修改。
+- **Remaining Follow-ups**: none
 
 ---
 
