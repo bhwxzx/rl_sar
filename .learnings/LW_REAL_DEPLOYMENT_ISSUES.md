@@ -129,7 +129,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 35 | LW-035 | P2 / medium | resolved | Bind the production launch file into deployment integrity verification |
 | 36 | LW-036 | P2 / medium | resolved | Validate optional actuator-network outputs on every Sim2Sim inference |
 | 37 | LW-037 | P2 / medium | resolved | Make Sim2Sim SIGTERM and normal ROS shutdown stop the render loop |
-| 38 | LW-038 | P2 / medium | pending | Remove repeated configuration decoding and allocation from the real control cycle |
+| 38 | LW-038 | P2 / medium | resolved | Remove repeated configuration decoding and allocation from the real control cycle |
 | 39 | LW-039 | P2 / low | pending | Reject actuator-model symlinks and policy-root escapes |
 | 40 | LW-040 | P2 / low | pending | Make the polymorphic RL base destruction contract safe |
 | 41 | LW-041 | P2 / low | pending | Make high-rate Sim2Sim plot publishing explicitly opt-in |
@@ -3076,7 +3076,7 @@ blocked in MuJoCo `RenderLoop()` until the window is closed manually.
 ## [LW-038] Allocation-bounded real control cycle
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-007, LW-011, LW-013, LW-031, LW-033
 
 ### Problem
@@ -3120,6 +3120,47 @@ monitor and strict build gate.
   refreshed atomically on an approved policy switch.
 - Runtime parity, safety behavior, and full strict tests remain green; target-
   host timing evidence is recorded before any threshold recommendation.
+
+### Resolution
+
+- **Resolved**: 2026-08-14T21:20:17+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 将 base 和 policy YAML 在校验阶段解码为强类型、只读运行时配置，
+  并把 policy 配置与不可变定义及激活 generation 原子绑定；真实控制、LW FSM、
+  共享推理运行时和配置 profiler 改用缓存值。策略输入状态传输复用预分配快照，
+  控制侧使用非阻塞 `tryPublish()`，仅成功发布时递增序号，争用或跳帧继续由现有
+  新鲜度与代际检查处理。增加稳定态分配计数、确定性锁争用、配置解码和代际绑定
+  回归测试；未修改时序阈值，未启动硬件、ROS、串口或电机。
+- **Changed Files**: `src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/fsm_robot/fsm_LW.hpp`、
+  `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp`、
+  `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.hpp`、
+  `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp`、
+  `src/rl_sar/library/core/rl_sdk/rl_sdk.hpp`、
+  `src/rl_sar/library/core/safety/lw_runtime_core.hpp`、
+  `src/rl_sar/library/core/safety/lw_runtime_sync.hpp`、
+  `src/rl_sar/src/lw_config_profiler.cpp`、
+  `src/rl_sar/src/rl_real_LW.cpp`、
+  `src/rl_sar/src/rl_sim_LW.cpp`、
+  `src/rl_sar/test/test_lw_allocation_bound.cpp`、
+  `src/rl_sar/test/test_lw_configuration_validation.cpp`、
+  `src/rl_sar/test/test_lw_runtime_parity.cpp`、
+  `src/rl_sar/test/test_lw_runtime_sync.cpp`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 定向维护目标与 `rl_real_LW`、`rl_sim_LW`、
+  `lw_config_profiler` 构建成功；`lw_allocation_bound`、`lw_runtime_sync`、
+  `lw_configuration_validation`、`lw_runtime_parity`、`lw_fsm_transitions` 和
+  `lw_control_safety` 各连续 20 轮通过，其中稳定态 10,000 次配置访问及策略输入
+  快照传输的分配计数为零，锁争用测试验证控制侧发布立即返回且恢复后快照一致，
+  代际测试验证切换时强类型定义原子替换。Debug 完整套件 43/43 通过；最终
+  `scripts/validate_lw_strict_build.sh` 在
+  `-Wall -Wextra -Wpedantic -Werror` 下完成全部目标并通过 43/43 CTest；定向
+  `cppcheck`（仅精确抑制未修改的 `CSVInit(std::string)` 既有
+  `passedByValue` 提示）和 `git diff --check` 通过。host-only profiler 实际加载、
+  预热并运行 4 个正式 ONNX 策略各 0.2 秒，报告为 `failed=false`、
+  `commands_sent=none`。没有依据该短时宿主机结果调整阈值；未来任何时序阈值建议
+  仍须先取得目标 Jetson/硬件证据。
+- **Remaining Follow-ups**: none
 
 ---
 

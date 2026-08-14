@@ -65,6 +65,21 @@ public:
     ReplayRL()
     {
         params.config_node["num_of_dofs"] = static_cast<int>(kNumDofs);
+        LWBaseRuntimeConfiguration runtime_configuration;
+        runtime_configuration.num_dofs = kNumDofs;
+        runtime_configuration.dt = 0.005f;
+        runtime_configuration.decimation = 4;
+        runtime_configuration.joint_mapping =
+            {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        runtime_configuration.wheel_indices = {2, 3};
+        runtime_configuration.wheel_mask.assign(kNumDofs, 0);
+        runtime_configuration.wheel_mask[2] = 1;
+        runtime_configuration.wheel_mask[3] = 1;
+        runtime_configuration.rl_kp.assign(kNumDofs, 20.0f);
+        runtime_configuration.rl_kd.assign(kNumDofs, 0.5f);
+        runtime_configuration.fixed_kp.assign(kNumDofs, 20.0f);
+        runtime_configuration.fixed_kd.assign(kNumDofs, 0.5f);
+        SetLWBaseRuntimeConfiguration(std::move(runtime_configuration));
         source.motor_state.resize(kNumDofs);
         robot_state.motor_state.resize(kNumDofs);
         robot_command.motor_command.resize(kNumDofs);
@@ -463,6 +478,50 @@ void testPolicyGenerationSwitchWaitsForMatchingInput()
         "matching input did not start the new policy generation");
 }
 
+void testPolicyGenerationSwitchBindsTypedRuntimeConfiguration()
+{
+    Harness harness;
+    constexpr const char* leg_policy = "LW/robot_lab/leg_loco";
+    constexpr const char* wheel_policy = "LW/robot_lab/wheel_loco";
+    harness.rl.SetPolicyRoot(POLICY_DIR);
+    harness.rl.ReadYaml("LW", "base.yaml");
+    harness.rl.PreloadModel(leg_policy);
+    harness.rl.PreloadModel(wheel_policy);
+    harness.rl.PreloadLWPolicyContext(leg_policy);
+    harness.rl.PreloadLWPolicyContext(wheel_policy);
+
+    const auto leg_definition =
+        harness.rl.GetLWPolicyDefinition(leg_policy);
+    const auto wheel_definition =
+        harness.rl.GetLWPolicyDefinition(wheel_policy);
+    require(
+        leg_definition && wheel_definition,
+        "typed policy definitions were not retained");
+    require(
+        leg_definition->runtime.observations.size()
+            != wheel_definition->runtime.observations.size(),
+        "test policies do not expose distinct typed configurations");
+
+    const std::uint64_t leg_generation =
+        harness.rl.ActivateLWPolicy(leg_policy);
+    const auto leg_activation = harness.rl.LoadLWPolicyActivation();
+    require(
+        leg_activation
+            && leg_activation->generation == leg_generation
+            && leg_activation->definition == leg_definition,
+        "leg generation was not bound to its typed definition");
+
+    const std::uint64_t wheel_generation =
+        harness.rl.ActivateLWPolicy(wheel_policy);
+    const auto wheel_activation = harness.rl.LoadLWPolicyActivation();
+    require(
+        wheel_activation
+            && wheel_activation->generation == wheel_generation
+            && wheel_generation != leg_generation
+            && wheel_activation->definition == wheel_definition,
+        "wheel generation did not atomically replace the typed definition");
+}
+
 void testNominalReplayParity()
 {
     Harness real;
@@ -768,6 +827,7 @@ int main()
         testInputIsConsumedOnceAndHeldOutputRemainsUsable();
         testStalledControlInputTriggersS2Parity();
         testPolicyGenerationSwitchWaitsForMatchingInput();
+        testPolicyGenerationSwitchBindsTypedRuntimeConfiguration();
         testS1PreservesRecoveryInputAndZerosVelocity();
         testLWKeyboardVelocityCommandsAreIgnored();
         testNonLWStateControllerRetainsLegacyKeyboardVelocity();

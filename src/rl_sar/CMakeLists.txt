@@ -852,6 +852,16 @@ if(BUILD_TESTING)
     )
     add_test(NAME lw_runtime_parity COMMAND test_lw_runtime_parity)
 
+    add_executable(test_lw_allocation_bound
+        test/test_lw_allocation_bound.cpp
+    )
+    target_link_libraries(test_lw_allocation_bound PRIVATE
+        rl_sdk
+        observation_buffer
+        ${YAML_CPP_LIBRARIES}
+    )
+    add_test(NAME lw_allocation_bound COMMAND test_lw_allocation_bound)
+
     add_executable(test_lw_safety_policy
         test/test_lw_safety_policy.cpp
     )

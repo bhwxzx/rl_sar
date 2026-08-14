@@ -13,6 +13,12 @@ inline float GetLWMotionSourceFPS(
     return policy_params.Get<float>("motion_fps");
 }
 
+inline float GetLWMotionSourceFPS(
+    const LWPolicyRuntimeConfiguration& policy_configuration) noexcept
+{
+    return policy_configuration.motion_fps;
+}
+
 class RLFSMStatePassive : public RLFSMState
 {
 public:
@@ -25,7 +31,9 @@ public:
 
     void Run() override
     {
-        for (int i = 0; i < rl.params.Get<int>("num_of_dofs"); ++i)
+        const std::size_t num_dofs =
+            rl.GetLWBaseRuntimeConfiguration().num_dofs;
+        for (std::size_t i = 0; i < num_dofs; ++i)
         {
             // fsm_command->motor_command.q[i] = fsm_state->motor_state.q[i];
             fsm_command->motor_command.dq[i] = 0;
@@ -90,11 +98,11 @@ public:
 
             if (Interpolate(percent_pre_getup, rl.now_state.motor_state.q, pre_running_pos, 2.0f, "Pre Getting up", true, LWOperatorMode::GetUpLeg)) return;
             // 这里的params是从base.yaml中读取的
-            if (Interpolate(percent_getup, pre_running_pos, rl.params.Get<std::vector<float>>("default_dof_pos_leg"), 2.0f, "Getting up", true, LWOperatorMode::GetUpLeg)) return;
+            if (Interpolate(percent_getup, pre_running_pos, rl.GetLWBaseRuntimeConfiguration().default_dof_pos_leg, 2.0f, "Getting up", true, LWOperatorMode::GetUpLeg)) return;
         }
         else
         {
-            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos_leg"), 3.0f, "Getting up", true, LWOperatorMode::GetUpLeg)) return;
+            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.GetLWBaseRuntimeConfiguration().default_dof_pos_leg, 3.0f, "Getting up", true, LWOperatorMode::GetUpLeg)) return;
         }
     }
 
@@ -163,11 +171,11 @@ public:
         {
 
             if (Interpolate(percent_pre_getup, rl.now_state.motor_state.q, pre_running_pos, 2.0f, "Pre Getting up", true, LWOperatorMode::GetUpWheel)) return;
-            if (Interpolate(percent_getup, pre_running_pos, rl.params.Get<std::vector<float>>("default_dof_pos_wheel"), 2.0f, "Getting up", true, LWOperatorMode::GetUpWheel)) return;
+            if (Interpolate(percent_getup, pre_running_pos, rl.GetLWBaseRuntimeConfiguration().default_dof_pos_wheel, 2.0f, "Getting up", true, LWOperatorMode::GetUpWheel)) return;
         }
         else
         {
-            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.params.Get<std::vector<float>>("default_dof_pos_wheel"), 3.0f, "Getting up", true, LWOperatorMode::GetUpWheel)) return;
+            if (Interpolate(percent_getup, rl.now_state.motor_state.q, rl.GetLWBaseRuntimeConfiguration().default_dof_pos_wheel, 3.0f, "Getting up", true, LWOperatorMode::GetUpWheel)) return;
         }
     }
 
@@ -413,15 +421,14 @@ public:
             }
 
             // Initialize motion loader
-            const YamlParams& policy_params = definition->params;
+            const auto& policy_configuration = definition->runtime;
             std::string motion_file_path = this->rl.ResolvePolicyPath(
                 robot_config_path + "/"
-                + policy_params.Get<std::string>("motion_file"));
-            const float fps = GetLWMotionSourceFPS(policy_params);
+                + policy_configuration.motion_file);
+            const float fps = GetLWMotionSourceFPS(policy_configuration);
             const int time_offset_frames =
-                policy_params.Get<int>("motion_time_offset_frames");
-            const std::size_t num_dofs = static_cast<std::size_t>(
-                policy_params.Get<int>("num_of_dofs"));
+                policy_configuration.motion_time_offset_frames;
+            const std::size_t num_dofs = policy_configuration.num_dofs;
             rl.motion_loader_lw = std::make_unique<MotionLoaderLW>(
                 motion_file_path,
                 fps,
@@ -462,12 +469,11 @@ public:
         {
             return;
         }
-        const YamlParams& policy_params =
-            activation->definition->params;
+        const auto& policy_configuration =
+            activation->definition->runtime;
         float motion_time =
             progress->frame
-            * policy_params.Get<float>("dt")
-            * policy_params.Get<int>("decimation");
+            * policy_configuration.period_seconds;
         motion_time = std::fmin(motion_time, rl.motion_length);
         float percent = motion_time / rl.motion_length;
         rl.PublishLWOperatorStatus(LWOperatorMode::LegToWheel, percent);
@@ -525,15 +531,14 @@ public:
             }
 
             // Initialize motion loader
-            const YamlParams& policy_params = definition->params;
+            const auto& policy_configuration = definition->runtime;
             std::string motion_file_path = this->rl.ResolvePolicyPath(
                 robot_config_path + "/"
-                + policy_params.Get<std::string>("motion_file"));
-            const float fps = GetLWMotionSourceFPS(policy_params);
+                + policy_configuration.motion_file);
+            const float fps = GetLWMotionSourceFPS(policy_configuration);
             const int time_offset_frames =
-                policy_params.Get<int>("motion_time_offset_frames");
-            const std::size_t num_dofs = static_cast<std::size_t>(
-                policy_params.Get<int>("num_of_dofs"));
+                policy_configuration.motion_time_offset_frames;
+            const std::size_t num_dofs = policy_configuration.num_dofs;
             rl.motion_loader_lw = std::make_unique<MotionLoaderLW>(
                 motion_file_path,
                 fps,
@@ -574,12 +579,11 @@ public:
         {
             return;
         }
-        const YamlParams& policy_params =
-            activation->definition->params;
+        const auto& policy_configuration =
+            activation->definition->runtime;
         float motion_time =
             progress->frame
-            * policy_params.Get<float>("dt")
-            * policy_params.Get<int>("decimation");
+            * policy_configuration.period_seconds;
         motion_time = std::fmin(motion_time, rl.motion_length);
         float percent = motion_time / rl.motion_length;
         rl.PublishLWOperatorStatus(LWOperatorMode::WheelToLeg, percent);

@@ -364,11 +364,12 @@ public:
             resetInferenceWorkspace(*activation);
         }
 
-        LWPolicyInputSnapshot policy_input;
-        if (!policy_input_snapshot_.read(policy_input))
+        if (!policy_input_snapshot_.read(inference_policy_input_))
         {
             return;
         }
+        const LWPolicyInputSnapshot& policy_input =
+            inference_policy_input_;
         const auto policy_data_max_age =
             rl_->GetLWPolicyOutputMaxAge(*activation);
         const auto input_now = std::chrono::steady_clock::now();
@@ -399,15 +400,10 @@ public:
         }
 
         inference_motion_reference_ = rl_->LoadLWMotionReference();
-        const auto observations =
-            activation->definition->params.Get<std::vector<std::string>>(
-                "observations");
+        const auto& policy_configuration =
+            activation->definition->runtime;
         const bool needs_motion_reference =
-            std::find(
-                observations.begin(),
-                observations.end(),
-                "whole_body_tracking/motion_command")
-            != observations.end();
+            policy_configuration.needs_motion_reference;
         if (needs_motion_reference
             && (!inference_motion_reference_
                 || inference_motion_reference_->generation
@@ -433,10 +429,8 @@ public:
             hooks.mutate_observation(inference_obs_, local_state);
         }
 
-        const YamlParams& policy_params = activation->definition->params;
         inference_gait_phase_time_ +=
-            policy_params.Get<float>("dt")
-            * policy_params.Get<int>("decimation")
+            policy_configuration.period_seconds
             * effective_control.gait_frequency;
         while (inference_gait_phase_time_ >= 1.0f)
         {
@@ -460,14 +454,13 @@ public:
         }
 
         rl_->ComputeLWOutput(
-            policy_params,
+            policy_configuration,
             inference_obs_,
             inference_obs_.actions,
             inference_output_dof_pos_,
             inference_output_dof_vel_,
             inference_output_dof_tau_);
-        const size_t num_dofs = static_cast<size_t>(
-            policy_params.Get<int>("num_of_dofs"));
+        const size_t num_dofs = policy_configuration.num_dofs;
         if (!acceptPolicyOutputs(
                 inference_output_dof_pos_,
                 inference_output_dof_vel_,
@@ -477,7 +470,9 @@ public:
             return;
         }
 
-        if (rl_->TorqueProtect(inference_output_dof_tau_, policy_params))
+        if (rl_->TorqueProtect(
+                inference_output_dof_tau_,
+                policy_configuration))
         {
             reportSafetyEvent(LWSafetyEvent::TorqueLimitWarning);
         }
@@ -538,9 +533,9 @@ public:
             return {};
         }
         const auto& definition = *inference_activation_->definition;
-        const auto& policy_params = definition.params;
+        const auto& policy_configuration = definition.runtime;
         const auto clamped_obs = rl_->ComputeLWObservation(
-            policy_params,
+            policy_configuration,
             inference_obs_,
             inference_obs_dims_,
             inference_motion_reference_.get(),
@@ -548,8 +543,8 @@ public:
             inference_activation_->motion_length);
 
         std::vector<float> actions;
-        const auto history_indices =
-            policy_params.Get<std::vector<int>>("observations_history");
+        const auto& history_indices =
+            policy_configuration.observations_history;
         if (!history_indices.empty())
         {
             if (inference_frame_ == 1)
@@ -566,17 +561,16 @@ public:
             actions = definition.model->forward({clamped_obs});
         }
 
-        const size_t num_dofs = static_cast<size_t>(
-            policy_params.Get<int>("num_of_dofs"));
+        const size_t num_dofs = policy_configuration.num_dofs;
         if (!acceptPolicyActions(actions, num_dofs))
         {
             return {};
         }
 
-        const auto upper =
-            policy_params.Get<std::vector<float>>("clip_actions_upper");
-        const auto lower =
-            policy_params.Get<std::vector<float>>("clip_actions_lower");
+        const auto& upper =
+            policy_configuration.clip_actions_upper;
+        const auto& lower =
+            policy_configuration.clip_actions_lower;
         if (!upper.empty() && !lower.empty())
         {
             const LWValidationResult upper_result =
@@ -630,21 +624,27 @@ private:
         std::chrono::steady_clock::time_point state_capture_time)
     {
         const auto activation = rl_->LoadLWPolicyActivation();
-        policy_input_snapshot_.publish(
-            {activation ? activation->generation : 0,
-             next_policy_input_sequence_++,
-             state_capture_time,
-             rl_->robot_state,
-             {rl_->control.x,
-              rl_->control.y,
-              rl_->control.yaw,
-              rl_->control.gait_frequency}});
+        control_policy_input_.generation =
+            activation ? activation->generation : 0;
+        control_policy_input_.sequence =
+            next_policy_input_sequence_;
+        control_policy_input_.state_capture_time = state_capture_time;
+        control_policy_input_.robot_state = rl_->robot_state;
+        control_policy_input_.control =
+            {rl_->control.x,
+             rl_->control.y,
+             rl_->control.yaw,
+             rl_->control.gait_frequency};
+        if (policy_input_snapshot_.tryPublish(control_policy_input_))
+        {
+            ++next_policy_input_sequence_;
+        }
     }
 
     bool validateFeedbackAndAttitude()
     {
-        const size_t num_dofs = static_cast<size_t>(
-            rl_->params.Get<int>("num_of_dofs"));
+        const size_t num_dofs =
+            rl_->GetLWBaseRuntimeConfiguration().num_dofs;
         const LWValidationResult feedback_result =
             LWValidateFeedbackState(rl_->robot_state, num_dofs);
         if (!feedback_result.valid())
@@ -684,8 +684,8 @@ private:
 
     bool validateCommandForSend(const RobotCommand<float>& command)
     {
-        const size_t num_dofs = static_cast<size_t>(
-            rl_->params.Get<int>("num_of_dofs"));
+        const size_t num_dofs =
+            rl_->GetLWBaseRuntimeConfiguration().num_dofs;
         const LWValidationResult command_result =
             LWValidateRobotCommand(command, num_dofs);
         if (!command_result.valid())
@@ -719,14 +719,13 @@ private:
         LWBuildPassiveDampingCommand(
             rl_->robot_state,
             rl_->robot_command,
-            static_cast<size_t>(rl_->params.Get<int>("num_of_dofs")));
+            rl_->GetLWBaseRuntimeConfiguration().num_dofs);
     }
 
     void resetInferenceWorkspace(const LWPolicyActivation& activation)
     {
-        const YamlParams& policy_params = activation.definition->params;
-        const size_t num_dofs = static_cast<size_t>(
-            policy_params.Get<int>("num_of_dofs"));
+        const auto& policy_configuration = activation.definition->runtime;
+        const size_t num_dofs = policy_configuration.num_dofs;
         inference_frame_ = 0;
         last_inference_input_generation_ = 0;
         last_inference_input_sequence_ = 0;
@@ -740,7 +739,7 @@ private:
         inference_obs_.commands = {0.0f, 0.0f, 0.0f};
         inference_obs_.base_quat = {1.0f, 0.0f, 0.0f, 0.0f};
         inference_obs_.dof_pos =
-            policy_params.Get<std::vector<float>>("default_dof_pos");
+            policy_configuration.default_dof_pos;
         inference_obs_.dof_vel.assign(num_dofs, 0.0f);
         inference_obs_.actions.assign(num_dofs, 0.0f);
         inference_obs_.gait_phase = {0.0f, 1.0f};
@@ -750,14 +749,14 @@ private:
         inference_history_obs_.clear();
 
         rl_->ComputeLWObservation(
-            policy_params,
+            policy_configuration,
             inference_obs_,
             inference_obs_dims_,
             nullptr,
             0,
             activation.motion_length);
-        const auto history_indices =
-            policy_params.Get<std::vector<int>>("observations_history");
+        const auto& history_indices =
+            policy_configuration.observations_history;
         if (!history_indices.empty())
         {
             const int history_length =
@@ -769,8 +768,7 @@ private:
                 1,
                 inference_obs_dims_,
                 history_length,
-                policy_params.Get<std::string>(
-                    "observations_history_priority"));
+                policy_configuration.observations_history_priority);
         }
     }
 
@@ -784,6 +782,8 @@ private:
     LWSnapshotBuffer<LWInferenceTraceSnapshot> inference_trace_;
 
     std::shared_ptr<const LWPolicyActivation> inference_activation_;
+    LWPolicyInputSnapshot control_policy_input_;
+    LWPolicyInputSnapshot inference_policy_input_;
     std::shared_ptr<const LWMotionReferenceSnapshot> inference_motion_reference_;
     Observations<float> inference_obs_;
     std::vector<int> inference_obs_dims_;

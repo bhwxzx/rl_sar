@@ -11,6 +11,20 @@ template <typename T>
 class LWSnapshotBuffer
 {
 public:
+    bool tryPublish(const T& value)
+    {
+        std::unique_lock<std::mutex> lock(
+            mutex_,
+            std::try_to_lock);
+        if (!lock.owns_lock())
+        {
+            return false;
+        }
+        value_ = value;
+        valid_ = true;
+        return true;
+    }
+
     void publish(const T& value)
     {
         std::lock_guard<std::mutex> lock(mutex_);

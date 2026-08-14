@@ -103,9 +103,10 @@ RL_Real::RL_Real(
     this->ang_vel_axis = "body";
     this->robot_name = "LW";
     this->ReadYaml(this->robot_name, "base.yaml");
-    ValidateLWBaseConfiguration(
-        this->params.config_node,
-        this->ResolvePolicyPath(this->robot_name + "/base.yaml"));
+    SetLWBaseRuntimeConfiguration(
+        ValidateLWBaseConfiguration(
+            this->params.config_node,
+            this->ResolvePolicyPath(this->robot_name + "/base.yaml")));
     const float sensor_timeout_seconds = this->params.Get<float>("sensor_timeout");
     if (!std::isfinite(sensor_timeout_seconds) || sensor_timeout_seconds <= 0.0f)
     {
@@ -658,6 +659,8 @@ void RL_Real::AhrsCallback(const geometry_msgs::msg::Vector3::SharedPtr msg)
 
 void RL_Real::GetState(RobotState<float> *state)
 {
+    const auto& runtime_configuration =
+        GetLWBaseRuntimeConfiguration();
     const LWFeedbackUpdate feedback_update =
         startup_disable_->sdk().RecvFdData(this->lw_low_state);
     const auto now = SafetyClock::now();
@@ -709,11 +712,15 @@ void RL_Real::GetState(RobotState<float> *state)
     state->imu.gyroscope[1] = imu.angular_velocity.y;
     state->imu.gyroscope[2] = imu.angular_velocity.z;
 
-    for (int i = 0; i < this->params.Get<int>("num_of_dofs"); ++i)
+    for (std::size_t i = 0; i < runtime_configuration.num_dofs; ++i)
     {
-        state->motor_state.q[i] = this->lw_low_state.motorState[this->params.Get<std::vector<int>>("joint_mapping")[i]].pos_now;
-        state->motor_state.dq[i] = this->lw_low_state.motorState[this->params.Get<std::vector<int>>("joint_mapping")[i]].vel_now;
-        state->motor_state.tau_est[i] = this->lw_low_state.motorState[this->params.Get<std::vector<int>>("joint_mapping")[i]].tau_now;
+        const int motor_id = runtime_configuration.joint_mapping[i];
+        state->motor_state.q[i] =
+            this->lw_low_state.motorState[motor_id].pos_now;
+        state->motor_state.dq[i] =
+            this->lw_low_state.motorState[motor_id].vel_now;
+        state->motor_state.tau_est[i] =
+            this->lw_low_state.motorState[motor_id].tau_now;
     }
 }
 
@@ -731,30 +738,21 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
     const bool command_sent = startup_disable_->commandGate().sendIfOpen(
         [this, command, &send_result]()
         {
-            auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
-            auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
-            int num_dofs = this->params.Get<int>("num_of_dofs");
+            const auto& runtime_configuration =
+                GetLWBaseRuntimeConfiguration();
 
-            for (int i = 0; i < num_dofs; ++i)
+            for (std::size_t i = 0;
+                 i < runtime_configuration.num_dofs;
+                 ++i)
             {
-                int motor_id = joint_mapping[i];
+                const int motor_id = runtime_configuration.joint_mapping[i];
 
                 this->lw_low_command.motorCmd[motor_id].Kp =
                     command->motor_command.kp[i];
                 this->lw_low_command.motorCmd[motor_id].Kd =
                     command->motor_command.kd[i];
 
-                bool is_wheel = false;
-                for (int k : wheel_indices)
-                {
-                    if (i == k)
-                    {
-                        is_wheel = true;
-                        break;
-                    }
-                }
-
-                if (is_wheel)
+                if (runtime_configuration.wheel_mask[i] != 0)
                 {
                     this->lw_low_command.motorCmd[motor_id].action_set =
                         command->motor_command.dq[i];
@@ -943,9 +941,11 @@ void RL_Real::GetSysJoystick()
     // float lx = -float(this->sys_js_axis[0]) / float(this->sys_js_max_value);
     // float rx = -float(this->sys_js_axis[3]) / float(this->sys_js_max_value);
 
-    float ly = (-float(this->sys_js_axis[1]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[0];
-    float lx = (-float(this->sys_js_axis[0]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[1];
-    float rx = (-float(this->sys_js_axis[2]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[2];
+    const auto& velocity_limits =
+        GetLWBaseRuntimeConfiguration().vel_command;
+    float ly = (-float(this->sys_js_axis[1]) / float(this->sys_js_max_value)) * velocity_limits[0];
+    float lx = (-float(this->sys_js_axis[0]) / float(this->sys_js_max_value)) * velocity_limits[1];
+    float rx = (-float(this->sys_js_axis[2]) / float(this->sys_js_max_value)) * velocity_limits[2];
 
     bool has_input = (ly != 0.0f || lx != 0.0f || rx != 0.0f);
 

@@ -307,7 +307,7 @@ void validateTensor(
 }
 } // namespace
 
-void ValidateLWBaseConfiguration(
+LWBaseRuntimeConfiguration ValidateLWBaseConfiguration(
     const YAML::Node& config,
     const std::string& source)
 {
@@ -389,6 +389,30 @@ void ValidateLWBaseConfiguration(
     requireUniqueStrings(config, "joint_controller_names", dofs, source);
     requireUniqueIndices(config, "joint_mapping", dofs, dofs, source);
     requireUniqueIndices(config, "wheel_indices", 2, dofs, source);
+
+    LWBaseRuntimeConfiguration runtime;
+    runtime.num_dofs = dofs;
+    runtime.dt = config["dt"].as<float>();
+    runtime.decimation = config["decimation"].as<int>();
+    runtime.joint_mapping = config["joint_mapping"].as<std::vector<int>>();
+    runtime.wheel_indices = config["wheel_indices"].as<std::vector<int>>();
+    runtime.wheel_mask.assign(dofs, 0);
+    for (const int index : runtime.wheel_indices)
+    {
+        runtime.wheel_mask[static_cast<std::size_t>(index)] = 1;
+    }
+    runtime.rl_kp = config["rl_kp"].as<std::vector<float>>();
+    runtime.rl_kd = config["rl_kd"].as<std::vector<float>>();
+    runtime.fixed_kp = config["fixed_kp"].as<std::vector<float>>();
+    runtime.fixed_kd = config["fixed_kd"].as<std::vector<float>>();
+    runtime.torque_limits = config["torque_limits"].as<std::vector<float>>();
+    runtime.default_dof_pos_leg =
+        config["default_dof_pos_leg"].as<std::vector<float>>();
+    runtime.default_dof_pos_wheel =
+        config["default_dof_pos_wheel"].as<std::vector<float>>();
+    runtime.gait_command = config["gait_command"].as<std::vector<float>>();
+    runtime.vel_command = config["vel_command"].as<std::vector<float>>();
+    return runtime;
 }
 
 LWValidatedPolicyConfiguration ValidateLWPolicyConfiguration(
@@ -614,12 +638,78 @@ LWValidatedPolicyConfiguration ValidateLWPolicyConfiguration(
         fail(source, "computed model input dimension overflows");
     }
 
+    LWPolicyRuntimeConfiguration runtime;
+    runtime.num_dofs = dofs;
+    runtime.dt = merged["dt"].as<float>();
+    runtime.decimation = merged["decimation"].as<int>();
+    runtime.period_seconds = runtime.dt * runtime.decimation;
+    runtime.output_max_age_seconds = 3.0f * runtime.period_seconds;
+    runtime.clip_obs = policy_config["clip_obs"].as<float>();
+    runtime.model_name = model_name;
+    runtime.observations = observations;
+    runtime.observations_history = history;
+    runtime.observations_history_priority = history_priority;
+    runtime.action_scale =
+        policy_config["action_scale"].as<std::vector<float>>();
+    runtime.clip_actions_lower = lower;
+    runtime.clip_actions_upper = upper;
+    runtime.rl_kp = policy_config["rl_kp"].as<std::vector<float>>();
+    runtime.rl_kd = policy_config["rl_kd"].as<std::vector<float>>();
+    runtime.fixed_kp = policy_config["fixed_kp"].as<std::vector<float>>();
+    runtime.fixed_kd = policy_config["fixed_kd"].as<std::vector<float>>();
+    runtime.torque_limits =
+        policy_config["torque_limits"].as<std::vector<float>>();
+    runtime.default_dof_pos =
+        policy_config["default_dof_pos"].as<std::vector<float>>();
+    runtime.joint_mapping =
+        policy_config["joint_mapping"].as<std::vector<int>>();
+    runtime.wheel_indices =
+        policy_config["wheel_indices"].as<std::vector<int>>();
+    runtime.wheel_mask.assign(dofs, 0);
+    for (const int index : runtime.wheel_indices)
+    {
+        runtime.wheel_mask[static_cast<std::size_t>(index)] = 1;
+    }
+    if (policy_config["ang_vel_scale"])
+    {
+        runtime.ang_vel_scale = policy_config["ang_vel_scale"].as<float>();
+    }
+    if (policy_config["commands_scale"])
+    {
+        runtime.commands_scale =
+            policy_config["commands_scale"].as<std::vector<float>>();
+    }
+    if (policy_config["dof_pos_scale"])
+    {
+        runtime.dof_pos_scale = policy_config["dof_pos_scale"].as<float>();
+    }
+    if (policy_config["dof_vel_scale"])
+    {
+        runtime.dof_vel_scale = policy_config["dof_vel_scale"].as<float>();
+    }
+    runtime.needs_motion_reference =
+        std::find(
+            observations.begin(),
+            observations.end(),
+            "whole_body_tracking/motion_command")
+        != observations.end();
+    if (needs_motion)
+    {
+        runtime.motion_file = policy_config["motion_file"].as<std::string>();
+        runtime.motion_fps = policy_config["motion_fps"].as<float>();
+        runtime.motion_time_offset_frames =
+            policy_config["motion_time_offset_frames"].as<int>();
+        runtime.motion_joint_mapping =
+            policy_config["motion_joint_mapping"].as<std::vector<int>>();
+    }
+
     return {
         std::move(merged),
         {dofs,
          observation_dimension,
          observation_dimension * history_frames,
-         dofs}};
+         dofs},
+        std::move(runtime)};
 }
 
 void ValidateLWModelContract(

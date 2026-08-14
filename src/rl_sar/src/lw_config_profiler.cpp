@@ -418,9 +418,10 @@ public:
         robot_name = "LW";
         ang_vel_axis = "body";
         ReadYaml(robot_name, "base.yaml");
-        ValidateLWBaseConfiguration(
-            params.config_node,
-            ResolvePolicyPath("LW/base.yaml"));
+        SetLWBaseRuntimeConfiguration(
+            ValidateLWBaseConfiguration(
+                params.config_node,
+                ResolvePolicyPath("LW/base.yaml")));
         const float imu_ahrs_pair_max_age_seconds =
             params.Get<float>("imu_ahrs_pair_max_age");
         imu_ahrs_guard_.setPairMaxAge(
@@ -906,19 +907,17 @@ private:
         {
             throw std::runtime_error("missing preloaded policy: " + policy);
         }
-        const auto observations =
-            definition->params.Get<std::vector<std::string>>("observations");
-        const bool needs_motion = std::find(
-            observations.begin(), observations.end(),
-            "whole_body_tracking/motion_command") != observations.end();
+        const auto& policy_configuration = definition->runtime;
+        const bool needs_motion =
+            policy_configuration.needs_motion_reference;
         if (needs_motion)
         {
             motion_loader_ = std::make_unique<MotionLoaderLW>(
                 ResolvePolicyPath(
                     policy + "/"
-                    + definition->params.Get<std::string>("motion_file")),
-                definition->params.Get<float>("motion_fps"),
-                definition->params.Get<int>("motion_time_offset_frames"),
+                    + policy_configuration.motion_file),
+                policy_configuration.motion_fps,
+                policy_configuration.motion_time_offset_frames,
                 kNumDofs);
             motion_loader_->Reset(robot_state.imu.quaternion);
             motion_length_ = motion_loader_->GetDuration();

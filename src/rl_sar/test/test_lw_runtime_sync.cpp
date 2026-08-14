@@ -1,9 +1,12 @@
 #include "lw_runtime_sync.hpp"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -92,6 +95,70 @@ void testSnapshotBufferPublishesWholeFrames()
     require(
         !failed.load(std::memory_order_acquire),
         "snapshot buffer exposed a partially published frame");
+}
+
+struct CopyGate
+{
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool release = false;
+};
+
+struct BlockingReadFrame
+{
+    std::uint64_t value = 0;
+    bool block_on_assignment = false;
+    std::shared_ptr<CopyGate> gate;
+
+    BlockingReadFrame& operator=(const BlockingReadFrame& other)
+    {
+        if (block_on_assignment && gate)
+        {
+            std::unique_lock<std::mutex> lock(gate->mutex);
+            gate->entered = true;
+            gate->condition.notify_all();
+            gate->condition.wait(lock, [&]() { return gate->release; });
+        }
+        value = other.value;
+        return *this;
+    }
+};
+
+void testTryPublishNeverWaitsForAReader()
+{
+    LWSnapshotBuffer<BlockingReadFrame> buffer;
+    BlockingReadFrame initial;
+    initial.value = 1;
+    buffer.publish(initial);
+
+    const auto gate = std::make_shared<CopyGate>();
+    BlockingReadFrame blocked_destination;
+    blocked_destination.block_on_assignment = true;
+    blocked_destination.gate = gate;
+    std::thread reader([&]() { buffer.read(blocked_destination); });
+
+    {
+        std::unique_lock<std::mutex> lock(gate->mutex);
+        gate->condition.wait(lock, [&]() { return gate->entered; });
+    }
+    BlockingReadFrame update;
+    update.value = 2;
+    require(
+        !buffer.tryPublish(update),
+        "tryPublish waited for or overwrote a reader-held snapshot");
+
+    {
+        std::lock_guard<std::mutex> lock(gate->mutex);
+        gate->release = true;
+    }
+    gate->condition.notify_all();
+    reader.join();
+
+    require(buffer.tryPublish(update), "tryPublish did not recover after contention");
+    BlockingReadFrame received;
+    require(buffer.read(received), "updated snapshot was unavailable");
+    require(received.value == 2, "updated snapshot was incoherent");
 }
 
 struct ImmutableContext
@@ -315,6 +382,7 @@ int main()
     try
     {
         testSnapshotBufferPublishesWholeFrames();
+        testTryPublishNeverWaitsForAReader();
         testAtomicSnapshotKeepsContextCoherent();
         testInputMailboxKeepsVelocityCoherentAndEventsSequenced();
         testOperatorStatusMailboxPublishesCoherentFramesWithoutBlocking();

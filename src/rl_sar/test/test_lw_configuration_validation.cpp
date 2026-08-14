@@ -127,7 +127,17 @@ void testCurrentLWConfigurationsAndModels()
     const fs::path policy_root(POLICY_DIR);
     const YAML::Node base =
         loadConfig(policy_root / "LW/base.yaml", "LW");
-    ValidateLWBaseConfiguration(base, "LW/base.yaml");
+    const auto base_runtime =
+        ValidateLWBaseConfiguration(base, "LW/base.yaml");
+    require(base_runtime.num_dofs == 10, "base runtime DOF count differs");
+    require(
+        base_runtime.joint_mapping.size() == base_runtime.num_dofs,
+        "base runtime joint mapping was not retained");
+    require(
+        base_runtime.wheel_mask.size() == base_runtime.num_dofs
+            && base_runtime.wheel_mask[8] != 0
+            && base_runtime.wheel_mask[9] != 0,
+        "base runtime wheel mask was not decoded");
 
     struct ExpectedPolicy
     {
@@ -159,6 +169,24 @@ void testCurrentLWConfigurationsAndModels()
         require(
             validated.dimensions.model_output == 10,
             policy.relative_path + " computed the wrong action size");
+        require(
+            validated.runtime.num_dofs == 10
+                && validated.runtime.period_seconds > 0.0f
+                && validated.runtime.output_max_age_seconds
+                    == 3.0f * validated.runtime.period_seconds,
+            policy.relative_path + " typed timing configuration differs");
+        require(
+            validated.runtime.observations.size()
+                == policy_config["observations"].size(),
+            policy.relative_path + " observation list was not retained");
+        require(
+            validated.runtime.wheel_mask.size() == 10,
+            policy.relative_path + " wheel mask was not decoded");
+        const bool expected_motion =
+            policy.relative_path.find("_to_") != std::string::npos;
+        require(
+            validated.runtime.needs_motion_reference == expected_motion,
+            policy.relative_path + " motion requirement differs");
 
         const fs::path model_path =
             policy_root / policy.relative_path / "policy.onnx";

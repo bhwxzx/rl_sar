@@ -194,6 +194,7 @@ struct LWPolicyDefinition
 {
     std::string path;
     YamlParams params;
+    LWPolicyRuntimeConfiguration runtime;
     std::shared_ptr<InferenceRuntime::Model> model;
 };
 
@@ -357,13 +358,17 @@ public:
     void InitControl();
     void InitRL(std::string robot_config_path);
     void InitJointNum(size_t num_joints);
+    void SetLWBaseRuntimeConfiguration(
+        LWBaseRuntimeConfiguration configuration);
+    const LWBaseRuntimeConfiguration& GetLWBaseRuntimeConfiguration() const;
     void SetPolicyRoot(const std::filesystem::path& policy_root);
     std::string ResolvePolicyPath(const std::string& relative_path) const;
     // 预加载模型函数
     void PreloadModel(const std::string& robot_config_path);
     // 存放已经加载好的 ONNX 模型的字典
     std::unordered_map<std::string, std::shared_ptr<InferenceRuntime::Model>> preloaded_models_;
-    std::unordered_map<std::string, YAML::Node> preloaded_lw_policy_configs_;
+    std::unordered_map<std::string, LWValidatedPolicyConfiguration>
+        preloaded_lw_policy_configs_;
     void PreloadLWPolicyContext(const std::string& robot_config_path);
     std::shared_ptr<const LWPolicyDefinition> GetLWPolicyDefinition(
         const std::string& robot_config_path) const;
@@ -401,7 +406,7 @@ public:
     virtual std::vector<float> Forward() = 0;
     std::vector<float> ComputeObservation();
     std::vector<float> ComputeLWObservation(
-        const YamlParams& policy_params,
+        const LWPolicyRuntimeConfiguration& policy_configuration,
         Observations<float>& policy_obs,
         std::vector<int>& policy_obs_dims,
         const LWMotionReferenceSnapshot* motion_reference,
@@ -415,7 +420,7 @@ public:
         bool apply_keyboard_velocity = true);
     void ComputeOutput(const std::vector<float> &actions, std::vector<float> &output_dof_pos, std::vector<float> &output_dof_vel, std::vector<float> &output_dof_tau);
     void ComputeLWOutput(
-        const YamlParams& policy_params,
+        const LWPolicyRuntimeConfiguration& policy_configuration,
         const Observations<float>& policy_obs,
         const std::vector<float>& actions,
         std::vector<float>& output_dof_pos,
@@ -458,6 +463,9 @@ public:
     bool TorqueProtect(
         const std::vector<float>& origin_output_dof_tau,
         const YamlParams& policy_params) const;
+    bool TorqueProtect(
+        const std::vector<float>& origin_output_dof_tau,
+        const LWPolicyRuntimeConfiguration& policy_configuration) const;
     void AttitudeProtect(const std::vector<float> &quaternion, float pitch_threshold, float roll_threshold);
 
     // rl module
@@ -471,6 +479,7 @@ public:
     std::mutex model_mutex;
 
 private:
+    LWBaseRuntimeConfiguration lw_base_runtime_configuration_;
     std::unordered_map<
         std::string,
         std::shared_ptr<const LWPolicyDefinition>> lw_policy_definitions_;

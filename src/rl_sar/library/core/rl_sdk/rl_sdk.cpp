@@ -339,7 +339,7 @@ std::vector<float> RL::ComputeObservation()
 }
 
 std::vector<float> RL::ComputeLWObservation(
-    const YamlParams& policy_params,
+    const LWPolicyRuntimeConfiguration& policy_configuration,
     Observations<float>& policy_obs,
     std::vector<int>& policy_obs_dims,
     const LWMotionReferenceSnapshot* motion_reference,
@@ -348,13 +348,13 @@ std::vector<float> RL::ComputeLWObservation(
 {
     std::vector<std::vector<float>> obs_list;
     for (const std::string& observation :
-         policy_params.Get<std::vector<std::string>>("observations"))
+         policy_configuration.observations)
     {
         if (observation == "ang_vel")
         {
             obs_list.push_back(
                 policy_obs.ang_vel
-                * policy_params.Get<float>("ang_vel_scale"));
+                * policy_configuration.ang_vel_scale);
         }
         else if (observation == "gravity_vec")
         {
@@ -367,27 +367,27 @@ std::vector<float> RL::ComputeLWObservation(
         {
             obs_list.push_back(
                 policy_obs.commands
-                * policy_params.Get<std::vector<float>>("commands_scale"));
+                * policy_configuration.commands_scale);
         }
         else if (observation == "dof_pos")
         {
             std::vector<float> dof_pos_rel =
                 policy_obs.dof_pos
-                - policy_params.Get<std::vector<float>>("default_dof_pos");
+                - policy_configuration.default_dof_pos;
             for (int index :
-                 policy_params.Get<std::vector<int>>("wheel_indices"))
+                 policy_configuration.wheel_indices)
             {
                 dof_pos_rel[index] = 0.0f;
             }
             obs_list.push_back(
                 dof_pos_rel
-                * policy_params.Get<float>("dof_pos_scale"));
+                * policy_configuration.dof_pos_scale);
         }
         else if (observation == "dof_vel")
         {
             obs_list.push_back(
                 policy_obs.dof_vel
-                * policy_params.Get<float>("dof_vel_scale"));
+                * policy_configuration.dof_vel_scale);
         }
         else if (observation == "actions")
         {
@@ -402,9 +402,8 @@ std::vector<float> RL::ComputeLWObservation(
             std::vector<float> motion_command;
             if (motion_reference != nullptr)
             {
-                const auto mapping =
-                    policy_params.Get<std::vector<int>>(
-                        "motion_joint_mapping");
+                const auto& mapping =
+                    policy_configuration.motion_joint_mapping;
                 std::vector<float> joint_pos(mapping.size());
                 std::vector<float> joint_vel(mapping.size());
                 for (size_t i = 0; i < mapping.size(); ++i)
@@ -426,7 +425,7 @@ std::vector<float> RL::ComputeLWObservation(
             else
             {
                 motion_command.resize(
-                    policy_params.Get<int>("num_of_dofs") * 2,
+                    policy_configuration.num_dofs * 2,
                     0.0f);
             }
             obs_list.push_back(std::move(motion_command));
@@ -456,8 +455,7 @@ std::vector<float> RL::ComputeLWObservation(
         else if (observation == "RoboMimic_Deploy/phase")
         {
             const float policy_dt =
-                policy_params.Get<float>("dt")
-                * policy_params.Get<int>("decimation");
+                policy_configuration.period_seconds;
             const float phase =
                 motion_length > 0.0f
                 ? static_cast<float>(policy_frame) * policy_dt
@@ -478,7 +476,7 @@ std::vector<float> RL::ComputeLWObservation(
             observation.begin(),
             observation.end());
     }
-    const float clip = policy_params.Get<float>("clip_obs");
+    const float clip = policy_configuration.clip_obs;
     return clamp(flattened, -clip, clip);
 }
 
@@ -522,6 +520,23 @@ void RL::InitJointNum(size_t num_joints)
     this->start_state.motor_state.resize(num_joints);
     this->now_state.motor_state.resize(num_joints);
     this->robot_command.motor_command.resize(num_joints);
+}
+
+void RL::SetLWBaseRuntimeConfiguration(
+    LWBaseRuntimeConfiguration configuration)
+{
+    lw_base_runtime_configuration_ = std::move(configuration);
+}
+
+const LWBaseRuntimeConfiguration&
+RL::GetLWBaseRuntimeConfiguration() const
+{
+    if (lw_base_runtime_configuration_.num_dofs == 0)
+    {
+        throw std::logic_error(
+            "LW base runtime configuration has not been initialized");
+    }
+    return lw_base_runtime_configuration_;
 }
 
 void RL::SetPolicyRoot(const std::filesystem::path& policy_root)
@@ -574,6 +589,13 @@ std::string RL::ResolvePolicyPath(
 
 void RL::PreloadModel(const std::string& robot_config_path)
 {
+    if (lw_base_runtime_configuration_.num_dofs == 0)
+    {
+        SetLWBaseRuntimeConfiguration(
+            ValidateLWBaseConfiguration(
+                this->params.config_node,
+                "LW/base.yaml"));
+    }
     const std::string config_path = ResolvePolicyPath(
         robot_config_path + "/config.yaml");
     YAML::Node policy_config;
@@ -593,8 +615,7 @@ void RL::PreloadModel(const std::string& robot_config_path)
             policy_config,
             config_path);
 
-    const std::string model_name =
-        validated.merged["model_name"].as<std::string>();
+    const std::string& model_name = validated.runtime.model_name;
     const std::string model_path = ResolvePolicyPath(
         robot_config_path + "/" + model_name);
 
@@ -620,8 +641,7 @@ void RL::PreloadModel(const std::string& robot_config_path)
               << std::fixed << std::setprecision(3) << duration_ms.count()
               << " ms." << std::endl;
 
-    this->preloaded_lw_policy_configs_[robot_config_path] =
-        YAML::Clone(validated.merged);
+    this->preloaded_lw_policy_configs_[robot_config_path] = validated;
     this->preloaded_models_[robot_config_path] =
         std::shared_ptr<InferenceRuntime::Model>(std::move(model));
     std::cout << LOGGER::INFO << "Preload & Warmup finished for: " << robot_config_path << std::endl;
@@ -641,7 +661,8 @@ void RL::PreloadLWPolicyContext(
 
     auto definition = std::make_shared<LWPolicyDefinition>();
     definition->path = robot_config_path;
-    definition->params.config_node = YAML::Clone(config_it->second);
+    definition->params.config_node = YAML::Clone(config_it->second.merged);
+    definition->runtime = config_it->second.runtime;
 
     const auto model_it =
         this->preloaded_models_.find(robot_config_path);
@@ -801,8 +822,8 @@ bool RL::PublishLWPolicyOutput(LWPolicyOutputFrame output)
     {
         return false;
     }
-    const size_t expected_dofs = static_cast<size_t>(
-        activation->definition->params.Get<int>("num_of_dofs"));
+    const size_t expected_dofs =
+        activation->definition->runtime.num_dofs;
     return lw_policy_output_transport_.publish(
         std::move(output),
         activation->generation,
@@ -819,12 +840,8 @@ std::chrono::steady_clock::duration
 RL::GetLWPolicyOutputMaxAge(
     const LWPolicyActivation& activation) const
 {
-    const YamlParams& policy_params =
-        activation.definition->params;
     const float max_age_seconds =
-        3.0f
-        * policy_params.Get<float>("dt")
-        * policy_params.Get<int>("decimation");
+        activation.definition->runtime.output_max_age_seconds;
     return std::chrono::duration_cast<
         std::chrono::steady_clock::duration>(
             std::chrono::duration<float>(max_age_seconds));
@@ -893,7 +910,7 @@ void RL::ComputeOutput(const std::vector<float> &actions, std::vector<float> &ou
 }
 
 void RL::ComputeLWOutput(
-    const YamlParams& policy_params,
+    const LWPolicyRuntimeConfiguration& policy_configuration,
     const Observations<float>& policy_obs,
     const std::vector<float>& actions,
     std::vector<float>& output_dof_pos,
@@ -902,31 +919,32 @@ void RL::ComputeLWOutput(
 {
     const std::vector<float> actions_scaled =
         actions
-        * policy_params.Get<std::vector<float>>("action_scale");
+        * policy_configuration.action_scale;
     std::vector<float> pos_actions_scaled = actions_scaled;
     std::vector<float> vel_actions_scaled(actions.size(), 0.0f);
     for (int index :
-         policy_params.Get<std::vector<int>>("wheel_indices"))
+         policy_configuration.wheel_indices)
     {
         pos_actions_scaled[index] = 0.0f;
         vel_actions_scaled[index] = actions_scaled[index];
     }
 
-    const auto default_dof_pos =
-        policy_params.Get<std::vector<float>>("default_dof_pos");
+    const auto& default_dof_pos =
+        policy_configuration.default_dof_pos;
     output_dof_pos = pos_actions_scaled + default_dof_pos;
     output_dof_vel = vel_actions_scaled;
     output_dof_tau =
-        policy_params.Get<std::vector<float>>("rl_kp")
+        policy_configuration.rl_kp
             * (pos_actions_scaled + default_dof_pos
                - policy_obs.dof_pos)
-        + policy_params.Get<std::vector<float>>("rl_kd")
+        + policy_configuration.rl_kd
             * (vel_actions_scaled - policy_obs.dof_vel);
 }
 
 int RL::InverseJointMapping(int idx) const
 {
-    auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
+    const auto& joint_mapping =
+        GetLWBaseRuntimeConfiguration().joint_mapping;
     for (size_t i = 0; i < joint_mapping.size(); ++i) {
         if (joint_mapping[i] == idx) return (int)i;
     }
@@ -938,14 +956,14 @@ bool RL::TorqueProtect(const std::vector<float>& origin_output_dof_tau)
     return TorqueProtect(origin_output_dof_tau, this->params);
 }
 
-bool RL::TorqueProtect(
+namespace
+{
+bool torqueProtectWithLimits(
     const std::vector<float>& origin_output_dof_tau,
-    const YamlParams& policy_params) const
+    const std::vector<float>& torque_limits)
 {
     std::vector<int> out_of_range_indices;
     std::vector<float> out_of_range_values;
-    const auto torque_limits =
-        policy_params.Get<std::vector<float>>("torque_limits");
     for (size_t i = 0; i < origin_output_dof_tau.size(); ++i)
     {
         float torque_value = origin_output_dof_tau[i];
@@ -974,6 +992,25 @@ bool RL::TorqueProtect(
         // std::cout << LOGGER::INFO << "Switching to STATE_POS_GETDOWN"<< std::endl;
     }
     return !out_of_range_indices.empty();
+}
+} // namespace
+
+bool RL::TorqueProtect(
+    const std::vector<float>& origin_output_dof_tau,
+    const YamlParams& policy_params) const
+{
+    const auto torque_limits =
+        policy_params.Get<std::vector<float>>("torque_limits");
+    return torqueProtectWithLimits(origin_output_dof_tau, torque_limits);
+}
+
+bool RL::TorqueProtect(
+    const std::vector<float>& origin_output_dof_tau,
+    const LWPolicyRuntimeConfiguration& policy_configuration) const
+{
+    return torqueProtectWithLimits(
+        origin_output_dof_tau,
+        policy_configuration.torque_limits);
 }
 
 void RL::AttitudeProtect(const std::vector<float> &quaternion, float pitch_threshold, float roll_threshold)
@@ -1224,16 +1261,27 @@ bool RLFSMState::Interpolate(
         }
     }
 
-    int required_frames = std::max(1, static_cast<int>(std::ceil(duration_seconds / rl.params.Get<float>("dt"))));
+    const auto& runtime_configuration =
+        rl.GetLWBaseRuntimeConfiguration();
+    int required_frames = std::max(
+        1,
+        static_cast<int>(
+            std::ceil(duration_seconds / runtime_configuration.dt)));
     float step = 1.0f / required_frames;
 
     percent += step;
     percent = std::min(percent, 1.0f);
 
-    auto kp = use_fixed_gains ? rl.params.Get<std::vector<float>>("fixed_kp") : rl.params.Get<std::vector<float>>("rl_kp");
-    auto kd = use_fixed_gains ? rl.params.Get<std::vector<float>>("fixed_kd") : rl.params.Get<std::vector<float>>("rl_kd");
+    const auto& kp = use_fixed_gains
+        ? runtime_configuration.fixed_kp
+        : runtime_configuration.rl_kp;
+    const auto& kd = use_fixed_gains
+        ? runtime_configuration.fixed_kd
+        : runtime_configuration.rl_kd;
 
-    for (int i = 0; i < rl.params.Get<int>("num_of_dofs"); ++i)
+    for (std::size_t i = 0;
+         i < runtime_configuration.num_dofs;
+         ++i)
     {
         fsm_command->motor_command.q[i] = (1 - percent) * start_pos[i] + percent * target_pos[i];
         fsm_command->motor_command.dq[i] = 0;
@@ -1299,8 +1347,9 @@ void RLFSMState::RLControlLW()
     const auto now = std::chrono::steady_clock::now();
     const auto max_age =
         rl.GetLWPolicyOutputMaxAge(*activation);
-    const size_t expected_dofs = static_cast<size_t>(
-        activation->definition->params.Get<int>("num_of_dofs"));
+    const auto& policy_configuration =
+        activation->definition->runtime;
+    const size_t expected_dofs = policy_configuration.num_dofs;
     LWPolicyOutputStatus status = EvaluateLWPolicyOutput(
         output.get(),
         activation->generation,
@@ -1365,20 +1414,14 @@ void RLFSMState::RLControlLW()
             output->source_state_time;
     }
 
-    const YamlParams& policy_params =
-        activation->definition->params;
-    const auto rl_kp =
-        policy_params.Get<std::vector<float>>("rl_kp");
-    const auto rl_kd =
-        policy_params.Get<std::vector<float>>("rl_kd");
     for (size_t i = 0; i < expected_dofs; ++i)
     {
         fsm_command->motor_command.q[i] =
             output->dof_pos[i];
         fsm_command->motor_command.dq[i] =
             output->dof_vel[i];
-        fsm_command->motor_command.kp[i] = rl_kp[i];
-        fsm_command->motor_command.kd[i] = rl_kd[i];
+        fsm_command->motor_command.kp[i] = policy_configuration.rl_kp[i];
+        fsm_command->motor_command.kd[i] = policy_configuration.rl_kd[i];
         fsm_command->motor_command.tau[i] = 0.0f;
     }
 }

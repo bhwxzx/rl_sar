@@ -102,9 +102,10 @@ RL_Real::RL_Real(int argc, char **argv)
     this->ang_vel_axis = "body";
     
     this->ReadYaml(this->robot_name, "base.yaml");
-    ValidateLWBaseConfiguration(
-        this->params.config_node,
-        this->ResolvePolicyPath(this->robot_name + "/base.yaml"));
+    SetLWBaseRuntimeConfiguration(
+        ValidateLWBaseConfiguration(
+            this->params.config_node,
+            this->ResolvePolicyPath(this->robot_name + "/base.yaml")));
 
     // 提前加载所有的模型到内存
     this->PreloadModel(this->robot_name + "/robot_lab/leg_loco");
@@ -682,9 +683,7 @@ void RL_Real::UpdateActuatorNetwork()
         && EvaluateLWPolicyOutput(
                inference_output.get(),
                activation->generation,
-               static_cast<size_t>(
-                   activation->definition->params.Get<int>(
-                       "num_of_dofs")),
+               activation->definition->runtime.num_dofs,
                now,
                GetLWPolicyOutputMaxAge(*activation))
             == LWPolicyOutputStatus::Ready;
@@ -693,10 +692,10 @@ void RL_Real::UpdateActuatorNetwork()
         && !runtime_core_.controlledFallbackLatched()
         && has_current_inference_output
         && inference_output->dof_pos.size()
-            == static_cast<size_t>(
-                this->params.Get<int>("num_of_dofs")))
+            == GetLWBaseRuntimeConfiguration().num_dofs)
     {
-        int num_dofs = this->params.Get<int>("num_of_dofs");
+        const int num_dofs = static_cast<int>(
+            GetLWBaseRuntimeConfiguration().num_dofs);
         std::vector<float> current_pos_err(num_dofs, 0.0f);
         std::vector<float> current_vel(num_dofs, 0.0f);
         
@@ -721,7 +720,8 @@ void RL_Real::UpdateActuatorNetwork()
         this->vel_history_.pop_back();
         this->vel_history_.push_front(current_vel);
         
-        int decimation = this->params.Get<int>("decimation"); // 通常是 4
+        const int decimation =
+            GetLWBaseRuntimeConfiguration().decimation; // 通常是 4
         
         try
         {
