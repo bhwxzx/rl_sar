@@ -110,8 +110,12 @@ The ROS 2 launch entry point is:
 
 ```bash
 source install/setup.bash
-ros2 launch rl_sar rl_real_LW.launch.py
+PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py
 ```
+
+Keep `PYTHONDONTWRITEBYTECODE=1`: the verified production launch directory is
+an exact manifest-bound file set and must not acquire an unverified bytecode
+cache.
 
 Do not start the real node without completing the hardware-side checks in the
 deployment guide.

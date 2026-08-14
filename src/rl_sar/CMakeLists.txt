@@ -1192,11 +1192,11 @@ endif()
 
 if(NOT USE_CMAKE)
     if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-        install(
-            DIRECTORY launch worlds
-            DESTINATION share/${PROJECT_NAME}/${dir}
-        )
         if(LW_PRODUCTION_DEPLOYMENT)
+            install(
+                FILES launch/rl_real_LW.launch.py
+                DESTINATION share/${PROJECT_NAME}/launch
+            )
             set(LW_DEPLOYMENT_POLICY_FILES
                 LW/base.yaml
                 LW/robot_lab/leg_loco/config.yaml
@@ -1228,6 +1228,10 @@ if(NOT USE_CMAKE)
                 SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/install_lw_deployment.cmake"
             )
         else()
+            install(
+                DIRECTORY launch worlds
+                DESTINATION share/${PROJECT_NAME}/${dir}
+            )
             install(
                 DIRECTORY ${PROJECT_ROOT_DIR}/policy
                 DESTINATION share/${PROJECT_NAME}/${dir}

@@ -31,12 +31,19 @@ RUNTIME_FILES = (
     "lib/rl_sar/lw_config_profiler",
     "lib/rl_sar/profile_lw_runtime_config.py",
     "share/ament_index/resource_index/packages/fdilink_ahrs",
+    "share/ament_index/resource_index/packages/rl_sar",
     "share/ament_index/resource_index/packages/serial",
     "share/fdilink_ahrs/launch/ahrs_driver.launch.py",
     "share/fdilink_ahrs/package.xml",
     "share/fdilink_ahrs/wheeltec_udev.sh",
+    "share/rl_sar/launch/rl_real_LW.launch.py",
     "share/serial/package.xml",
 )
+
+PRODUCTION_LAUNCH_DIRECTORY = "share/rl_sar/launch"
+PRODUCTION_LAUNCH_FILES = {
+    "share/rl_sar/launch/rl_real_LW.launch.py",
+}
 
 ONNX_RUNTIME_FILES = (
     "lib/rl_sar/onnxruntime/libonnxruntime.so.1",
@@ -290,6 +297,19 @@ def generate_manifest(
                 f"deployment asset escapes bundle: {relative_string}"
             ) from error
         policy_hashes.append((relative_string, sha256_file(asset)))
+
+    launch_directory = prefix / PRODUCTION_LAUNCH_DIRECTORY
+    if launch_directory.is_symlink() or not launch_directory.is_dir():
+        raise RuntimeError(
+            f"production launch directory must be a real directory: {launch_directory}"
+        )
+    actual_launch_files = {
+        entry.relative_to(prefix).as_posix() for entry in launch_directory.iterdir()
+    }
+    if actual_launch_files != PRODUCTION_LAUNCH_FILES:
+        raise RuntimeError(
+            "production launch directory does not contain the exact approved file set"
+        )
 
     runtime_hashes = []
     for relative_string in RUNTIME_FILES:

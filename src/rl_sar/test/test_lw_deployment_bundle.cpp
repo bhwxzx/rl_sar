@@ -36,10 +36,12 @@ const std::vector<std::string> kRuntimeFiles = {
     "lib/rl_sar/lw_config_profiler",
     "lib/rl_sar/profile_lw_runtime_config.py",
     "share/ament_index/resource_index/packages/fdilink_ahrs",
+    "share/ament_index/resource_index/packages/rl_sar",
     "share/ament_index/resource_index/packages/serial",
     "share/fdilink_ahrs/launch/ahrs_driver.launch.py",
     "share/fdilink_ahrs/package.xml",
     "share/fdilink_ahrs/wheeltec_udev.sh",
+    "share/rl_sar/launch/rl_real_LW.launch.py",
     "share/serial/package.xml",
 };
 const std::vector<std::string> kOnnxRuntimeFiles = {
@@ -355,6 +357,97 @@ void testSymlinkRuntimeDependencyFails()
         "symbolic link");
 }
 
+void testMissingProductionLaunchFails()
+{
+    Fixture fixture;
+    fs::remove(
+        fixture.prefix / "share/rl_sar/launch/rl_real_LW.launch.py");
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "runtime dependency must be a regular non-symlink file");
+}
+
+void testTamperedProductionLaunchFails()
+{
+    Fixture fixture;
+    std::ofstream output(
+        fixture.prefix / "share/rl_sar/launch/rl_real_LW.launch.py",
+        std::ios::binary | std::ios::app);
+    output << "tampered";
+    output.close();
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "runtime SHA-256 mismatch");
+}
+
+void testSymlinkProductionLaunchFails()
+{
+    Fixture fixture;
+    const fs::path launch =
+        fixture.prefix / "share/rl_sar/launch/rl_real_LW.launch.py";
+    const fs::path external = fixture.root / "external-launch.py";
+    writeFile(external, "external launch\n");
+    fs::remove(launch);
+    fs::create_symlink(external, launch);
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "symbolic link");
+}
+
+void testSymlinkProductionLaunchDirectoryFails()
+{
+    Fixture fixture;
+    const fs::path launch_directory =
+        fixture.prefix / "share/rl_sar/launch";
+    const fs::path external = fixture.root / "external-launch-directory";
+    fs::rename(launch_directory, external);
+    fs::create_directory_symlink(external, launch_directory);
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "symbolic link");
+}
+
+void testExtraProductionLaunchFails()
+{
+    Fixture fixture;
+    writeFile(
+        fixture.prefix / "share/rl_sar/launch/gazebo.launch.py",
+        "development launch\n");
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "exact approved file set");
+}
+
+void testProductionLaunchBytecodeCacheFails()
+{
+    Fixture fixture;
+    writeFile(
+        fixture.prefix
+            / "share/rl_sar/launch/__pycache__/rl_real_LW.launch.pyc",
+        "unapproved bytecode\n");
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "non-regular entry");
+}
+
 void testMissingOnnxRuntimeLibraryFails()
 {
     Fixture fixture;
@@ -558,6 +651,12 @@ int main()
         testMissingRuntimeDependencyFails();
         testTamperedRuntimeDependencyFails();
         testSymlinkRuntimeDependencyFails();
+        testMissingProductionLaunchFails();
+        testTamperedProductionLaunchFails();
+        testSymlinkProductionLaunchFails();
+        testSymlinkProductionLaunchDirectoryFails();
+        testExtraProductionLaunchFails();
+        testProductionLaunchBytecodeCacheFails();
         testMissingOnnxRuntimeLibraryFails();
         testTamperedOnnxRuntimeLibraryFails();
         testTamperedOnnxRuntimeProvenanceFails();

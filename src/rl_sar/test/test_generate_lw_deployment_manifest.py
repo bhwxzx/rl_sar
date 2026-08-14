@@ -110,6 +110,14 @@ class ManifestGeneratorTests(unittest.TestCase):
         self.assertIn('    sha256: "' + "b" * 64 + '"', content)
         self.assertIn('    path: "lib/rl_sar/onnxruntime/origin.json"', content)
         self.assertIn("runtime_files:", content)
+        self.assertIn(
+            '  - path: "share/rl_sar/launch/rl_real_LW.launch.py"',
+            content,
+        )
+        self.assertIn(
+            '  - path: "share/ament_index/resource_index/packages/rl_sar"',
+            content,
+        )
         self.assertEqual(
             sum(line.startswith("  - path:") for line in content.splitlines()),
             len(GENERATOR.POLICY_FILES) + len(GENERATOR.RUNTIME_FILES),
@@ -149,6 +157,42 @@ class ManifestGeneratorTests(unittest.TestCase):
         runtime.unlink()
         runtime.symlink_to(external)
         with self.assertRaisesRegex(RuntimeError, "symbolic link"):
+            self.generate()
+
+    def test_rejects_missing_production_launch(self) -> None:
+        launch = self.prefix / "share/rl_sar/launch/rl_real_LW.launch.py"
+        launch.unlink()
+        with self.assertRaisesRegex(RuntimeError, "exact approved file set"):
+            self.generate()
+
+    def test_rejects_extra_production_launch(self) -> None:
+        extra = self.prefix / "share/rl_sar/launch/gazebo.launch.py"
+        extra.write_text("development launch\n", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "exact approved file set"):
+            self.generate()
+
+    def test_rejects_production_launch_bytecode_cache(self) -> None:
+        cache = self.prefix / "share/rl_sar/launch/__pycache__"
+        cache.mkdir()
+        (cache / "rl_real_LW.launch.pyc").write_bytes(b"unapproved bytecode")
+        with self.assertRaisesRegex(RuntimeError, "exact approved file set"):
+            self.generate()
+
+    def test_rejects_symlink_production_launch(self) -> None:
+        launch = self.prefix / "share/rl_sar/launch/rl_real_LW.launch.py"
+        external = Path(self.temporary.name) / "external-launch.py"
+        external.write_text("external launch\n", encoding="utf-8")
+        launch.unlink()
+        launch.symlink_to(external)
+        with self.assertRaisesRegex(RuntimeError, "symbolic link"):
+            self.generate()
+
+    def test_rejects_symlink_production_launch_directory(self) -> None:
+        launch_directory = self.prefix / "share/rl_sar/launch"
+        external = Path(self.temporary.name) / "external-launch-directory"
+        launch_directory.rename(external)
+        launch_directory.symlink_to(external, target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, "real directory"):
             self.generate()
 
     def test_rejects_missing_onnx_runtime_library(self) -> None:

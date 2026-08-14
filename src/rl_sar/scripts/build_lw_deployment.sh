@@ -73,6 +73,7 @@ if find "$output_prefix/lib/rl_sar/rl_real_LW" \
         "$output_prefix/lib/rl_sar/lw_config_profiler" \
         "$output_prefix/lib/rl_sar/onnxruntime" \
         "$output_prefix/lib/rl_sar/profile_lw_runtime_config.py" \
+        "$output_prefix/share/rl_sar/launch" \
         "$output_prefix/share/rl_sar/deployment/LW" -type l -print -quit \
         | grep -q .; then
     echo "Production bundle contains symbolic links" >&2
@@ -92,6 +93,8 @@ verify_deployment_prefix()
             exit 1
         fi
     done
+    PYTHONDONTWRITEBYTECODE=1 \
+        ros2 launch rl_sar rl_real_LW.launch.py --show-args >/dev/null
     for executable in \
         "$LW_DEPLOYMENT_PREFIX/lib/fdilink_ahrs/ahrs_driver_node" \
         "$LW_DEPLOYMENT_PREFIX/lib/rl_sar/rl_real_LW" \
@@ -146,4 +149,4 @@ echo "LW deployment created from commit $source_commit"
 echo "Install prefix: $output_prefix"
 echo "Manifest: $manifest"
 echo "Launch from this prefix with:"
-echo "  source '$output_prefix/setup.bash' && ros2 launch rl_sar rl_real_LW.launch.py"
+echo "  source '$output_prefix/setup.bash' && PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py"

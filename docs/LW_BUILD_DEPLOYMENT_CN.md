@@ -466,8 +466,12 @@ done
 在刚才完成离线验收、并且 `DEPLOY_PREFIX` 指向正确版本的终端中执行：
 
 ```bash
-ros2 launch rl_sar rl_real_LW.launch.py
+PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py
 ```
+
+必须保留 `PYTHONDONTWRITEBYTECODE=1`。正式部署只允许清单绑定的
+`rl_real_LW.launch.py`，禁止 Python 在同一目录生成未经验证的
+`__pycache__`；省略该环境变量会使节点在离线完整性检查时安全失败。
 
 正常启动会加载 AHRS 驱动并运行 `rl_real_LW`，随后可能访问真实硬件。不要跳过离线验收，也不要用正常启动命令测试部署包是否完整。
 
@@ -508,7 +512,7 @@ FSM 状态解释，不能在机器人未吊装、人员位于运动范围内时�
 显式关闭：
 
 ```bash
-ros2 launch rl_sar rl_real_LW.launch.py enable_keyboard:=false
+PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py enable_keyboard:=false
 ```
 
 关闭后不存在终端 `GetDown` 通道，必须在启动前准备独立的受控恢复方式、可靠
@@ -617,7 +621,7 @@ AHRS 事件作为一次性授权，并只接受授权时效内紧随其后、角
 `/LW_joint_states` 话题：
 
 ```bash
-ros2 launch rl_sar rl_real_LW.launch.py enable_debug_publisher:=true
+PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py enable_debug_publisher:=true
 ```
 
 该话题仅用于受控调试和绘图；每条消息使用同一个控制周期的完整快照，并在

@@ -126,6 +126,27 @@ class BuildWorkflowTests(unittest.TestCase):
         self.assertIn("retains build-tree ONNX RPATH", deployment)
         self.assertIn("resolved ONNX Runtime outside the deployment", deployment)
         self.assertIn('verify_deployment_prefix "$relocated_prefix"', deployment)
+        self.assertIn(
+            "PYTHONDONTWRITEBYTECODE=1", deployment
+        )
+        self.assertIn(
+            "ros2 launch rl_sar rl_real_LW.launch.py --show-args", deployment
+        )
+        self.assertIn('"$output_prefix/share/rl_sar/launch"', deployment)
+
+    def test_production_install_contains_only_real_launch(self) -> None:
+        cmake = CMAKE_FILE.read_text(encoding="utf-8")
+        install_block = cmake[cmake.rindex("if(NOT USE_CMAKE)") :]
+        production_block = install_block[
+            install_block.index("if(LW_PRODUCTION_DEPLOYMENT)") :
+        ]
+        production_block, development_block = production_block.split(
+            "else()", 1
+        )
+
+        self.assertIn("FILES launch/rl_real_LW.launch.py", production_block)
+        self.assertNotIn("DIRECTORY launch worlds", production_block)
+        self.assertIn("DIRECTORY launch worlds", development_block)
 
     def test_dependency_installer_lists_base_and_ros_packages(self) -> None:
         environment = os.environ.copy()

@@ -2842,7 +2842,7 @@ the approved upstream release.
 ## [LW-035] Production launch-file integrity
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-010, LW-017, LW-019, LW-023, LW-027, LW-034
 
 ### Problem
@@ -2883,6 +2883,48 @@ started with materially different dependencies or parameters.
   deployment verification fail before hardware access.
 - A clean relocated production prefix still passes verification and resolves
   all required ROS packages within that prefix.
+
+### Resolution
+
+- **Resolved**: 2026-08-14T18:57:31+08:00
+- **Commit**: 本提交
+- **Approved Scope**: `LW_PRODUCTION_DEPLOYMENT=ON` 时只安装项目自有的
+  `share/rl_sar/launch/rl_real_LW.launch.py`，不再把 Gazebo launch 或
+  `worlds` 带入正式前缀；开发构建保持原有安装范围。manifest 的
+  `runtime_files` 同时绑定该 launch 及
+  `share/ament_index/resource_index/packages/rl_sar`，并继续绑定其引用的
+  FDLink launch。生成器和 C++ 离线验证器都要求 `share/rl_sar/launch`
+  是前缀内的真实目录、只含批准的单一普通文件，且 manifest 路径集合和
+  SHA-256 完全匹配；缺失、修改、额外文件/目录、路径逃逸以及文件或目录符号
+  链接均失败。生产构建在原始与迁移前缀内使用
+  `PYTHONDONTWRITEBYTECODE=1 ros2 launch ... --show-args` 验证 `rl_sar`、
+  FDLink 和 launch 参数解析而不启动节点。所有正式启动文档及构建输出均固定
+  `PYTHONDONTWRITEBYTECODE=1`，避免 Python 在精确集合目录内生成或使用未绑定的
+  `__pycache__`；省略时额外缓存会被完整性检查安全拒绝。manifest 格式未变化，
+  保持 schema v4。
+- **Changed Files**: `README.md`、`README_CN.md`、
+  `docs/LW_BUILD_DEPLOYMENT_CN.md`、`src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/scripts/build_lw_deployment.sh`、
+  `src/rl_sar/scripts/generate_lw_deployment_manifest.py`、
+  `src/rl_sar/library/core/deployment/lw_deployment_bundle.cpp`、
+  `src/rl_sar/test/test_build_workflow.py`、
+  `src/rl_sar/test/test_generate_lw_deployment_manifest.py`、
+  `src/rl_sar/test/test_lw_deployment_bundle.cpp`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 三项定向 CTest
+  `lw_deployment_bundle`、`lw_deployment_manifest_generator` 和
+  `lw_build_workflow` 全部通过；普通 Debug 完整构建成功且 40/40 CTest 通过；
+  全新 `scripts/validate_lw_strict_build.sh` 在
+  `-Wall -Wextra -Wpedantic -Werror` 下构建成功并通过 40/40 CTest。第一次最终
+  严格运行中与本项无关的 `lw_debug_publisher` 首次发布时序测试单次失败，其余
+  39 项通过；未修改该测试，第二次全新严格构建和 40 项测试全部通过。另在隔离
+  临时 Git 仓库中下载并核验 LW-034 批准的 ONNX Runtime，正式生成生产前缀；
+  原始前缀和复制迁移前缀均完成 ROS 包解析、`--show-args` 与
+  `--verify-deployment-only`，生产 launch 目录只含
+  `rl_real_LW.launch.py` 且不存在 `worlds`。临时目录随后移入系统回收站。
+  Python/Shell 语法和 `git diff --check` 通过；未启动 ROS 节点、IMU、串口、
+  MuJoCo GUI 或电机，`src/fdilink_ahrs_ROS2` 无修改。
+- **Remaining Follow-ups**: none
 
 ---
 

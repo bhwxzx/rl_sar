@@ -46,11 +46,21 @@ const std::set<std::string>& requiredRuntimeFiles()
         "lib/rl_sar/lw_config_profiler",
         "lib/rl_sar/profile_lw_runtime_config.py",
         "share/ament_index/resource_index/packages/fdilink_ahrs",
+        "share/ament_index/resource_index/packages/rl_sar",
         "share/ament_index/resource_index/packages/serial",
         "share/fdilink_ahrs/launch/ahrs_driver.launch.py",
         "share/fdilink_ahrs/package.xml",
         "share/fdilink_ahrs/wheeltec_udev.sh",
+        "share/rl_sar/launch/rl_real_LW.launch.py",
         "share/serial/package.xml",
+    };
+    return files;
+}
+
+const std::set<std::string>& requiredProductionLaunchFiles()
+{
+    static const std::set<std::string> files = {
+        "share/rl_sar/launch/rl_real_LW.launch.py",
     };
     return files;
 }
@@ -687,6 +697,26 @@ LWDeploymentBundleInfo LWDeploymentBundle::Verify(
     if (seen_runtime_paths != requiredRuntimeFiles())
     {
         fail("manifest does not contain the exact approved runtime file set");
+    }
+
+    const fs::path launch_directory = canonicalDirectory(
+        prefix / "share" / "rl_sar" / "launch",
+        "production launch directory");
+    std::set<std::string> actual_launch_paths;
+    for (const fs::directory_entry& entry : fs::directory_iterator(launch_directory))
+    {
+        const fs::file_status status = entry.symlink_status(error);
+        if (error || fs::is_symlink(status) || !fs::is_regular_file(status))
+        {
+            fail("production launch directory contains a non-regular entry: "
+                 + entry.path().string());
+        }
+        actual_launch_paths.insert(
+            entry.path().lexically_relative(prefix).generic_string());
+    }
+    if (actual_launch_paths != requiredProductionLaunchFiles())
+    {
+        fail("production launch directory does not contain the exact approved file set");
     }
 
     const fs::path policy_root = canonicalDirectory(

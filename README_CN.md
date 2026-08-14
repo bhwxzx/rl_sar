@@ -131,8 +131,11 @@ ROS 2 启动入口为：
 
 ```bash
 source install/setup.bash
-ros2 launch rl_sar rl_real_LW.launch.py
+PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py
 ```
+
+必须保留 `PYTHONDONTWRITEBYTECODE=1`：正式 launch 目录是清单绑定的精确文件
+集合，不能在启动时生成未经验证的字节码缓存。
 
 该入口默认从控制终端 `/dev/tty` 启用真机键盘；数字键 `9` 可按 FSM 当前状态
 请求 `GetDown`，且手柄断联锁存不会清除该键盘通道。无交互终端的受控部署必须
