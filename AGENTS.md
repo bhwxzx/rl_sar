@@ -11,6 +11,9 @@
 - End every code modification proposal with a concise section that states what
   problems the proposal solves and what concrete advantages the proposed
   approach provides, including material safety or maintenance benefits.
+- Apply this requirement only to proposals requesting approval for future code
+  changes. Do not add that section to Git commit reports, completed-task
+  summaries, status updates, or other non-proposal messages.
 
 ## LW Real-Deployment Remediation
 

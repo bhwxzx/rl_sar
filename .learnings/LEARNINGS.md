@@ -8,23 +8,26 @@
 **Area**: docs
 
 ### Summary
-每份代码修改方案都必须在末尾明确说明方案解决的问题和具体优势。
+只有代码修改方案必须在末尾明确说明方案解决的问题和具体优势。
 
 ### Details
 用户指出，仅列实施步骤、文件范围和验证方法不足以支持方案审批。方案结尾还应
 把技术动作映射回实际问题，说明消除了哪些故障路径，以及所选做法在安全性、
-可维护性、可测试性或变更边界方面的优势，便于用户判断方案是否值得批准。
+可维护性、可测试性或变更边界方面的优势，便于用户判断方案是否值得批准。该
+要求只适用于请求审批的代码修改方案；Git 提交结果、任务完成汇报、状态更新等
+不是代码修改方案，不应机械追加该段落。
 
 ### Suggested Action
 以后提出任何代码修改方案时，以独立的“解决的问题与方案优势”段落收尾；内容
-必须具体对应当前问题，不能只使用“更安全”“更可靠”等泛化表述。
+必须具体对应当前问题，不能只使用“更安全”“更可靠”等泛化表述。非方案类
+消息按其实际目的简洁汇报，不追加这一固定段落。
 
 ### Metadata
 - Source: user_feedback
 - Related Files: AGENTS.md
 - Tags: proposal, approval, communication, rationale, benefits
 - Pattern-Key: workflow.code_proposal_explains_solution_and_benefits
-- Recurrence-Count: 1
+- Recurrence-Count: 2
 - First-Seen: 2026-08-14
 - Last-Seen: 2026-08-14
 
