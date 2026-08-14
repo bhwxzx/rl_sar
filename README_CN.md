@@ -124,8 +124,10 @@ ros2 run rl_sar rl_sim_LW
 
 ## 实机部署
 
-构建、发布包校验、部署机验收、安全动作以及“先 Sim2Sim、后实机”的完整流程见
-[docs/LW_BUILD_DEPLOYMENT_CN.md](docs/LW_BUILD_DEPLOYMENT_CN.md)。
+标准成功路径见[《LW 快速部署与实机启动指南》](docs/LW_QUICK_START_CN.md)；
+构建原理、发布包校验、部署机验收、安全边界、故障排查以及“先 Sim2Sim、后
+实机”的权威说明见
+[《LW 编译与部署使用说明》](docs/LW_BUILD_DEPLOYMENT_CN.md)。
 
 ROS 2 启动入口为：
 

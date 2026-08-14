@@ -750,6 +750,7 @@ if(BUILD_TESTING)
                     ${PROJECT_ROOT_DIR}/build_LW.sh
                     ${PROJECT_ROOT_DIR}/README_CN.md
                     ${PROJECT_ROOT_DIR}/docs/LW_BUILD_DEPLOYMENT_CN.md
+                    ${PROJECT_ROOT_DIR}/docs/LW_QUICK_START_CN.md
                     ${PROJECT_ROOT_DIR}/scripts/install_build_dependencies.sh
                     ${PROJECT_ROOT_DIR}/scripts/download_inference_runtime.sh
                     ${PROJECT_ROOT_DIR}/scripts/install_pytorch_jetson.sh

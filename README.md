@@ -102,9 +102,11 @@ loading test.
 
 ## Real-robot deployment
 
-Build, bundle verification, target-host acceptance, operator safety behavior,
-and the Sim2Sim-before-real gate are documented in
-[docs/LW_BUILD_DEPLOYMENT_CN.md](docs/LW_BUILD_DEPLOYMENT_CN.md).
+Use the Chinese [quick-start guide](docs/LW_QUICK_START_CN.md) for the standard
+deployment path. Build rationale, bundle verification, target-host acceptance,
+operator safety behavior, troubleshooting, and the Sim2Sim-before-real gate are
+defined by the authoritative
+[full deployment guide](docs/LW_BUILD_DEPLOYMENT_CN.md).
 
 The ROS 2 launch entry point is:
 

@@ -12,6 +12,7 @@ BUILD_SCRIPT = Path(sys.argv.pop(1)).resolve()
 REMOVED_LW_SCRIPT = Path(sys.argv.pop(1)).resolve()
 README = Path(sys.argv.pop(1)).resolve()
 DEPLOYMENT_GUIDE = Path(sys.argv.pop(1)).resolve()
+QUICK_START_GUIDE = Path(sys.argv.pop(1)).resolve()
 DEPENDENCY_INSTALLER = Path(sys.argv.pop(1)).resolve()
 RUNTIME_DOWNLOADER = Path(sys.argv.pop(1)).resolve()
 REMOVED_JETSON_INSTALLER = Path(sys.argv.pop(1)).resolve()
@@ -40,10 +41,40 @@ class BuildWorkflowTests(unittest.TestCase):
         )
 
     def test_documentation_uses_the_single_entry_point(self) -> None:
-        for document in (README, DEPLOYMENT_GUIDE):
+        for document in (README, DEPLOYMENT_GUIDE, QUICK_START_GUIDE):
             content = document.read_text(encoding="utf-8")
             self.assertNotIn("build_LW.sh", content)
             self.assertIn("./build.sh", content)
+
+    def test_quick_start_preserves_deployment_safety_gates(self) -> None:
+        quick_start = QUICK_START_GUIDE.read_text(encoding="utf-8")
+        deployment_guide = DEPLOYMENT_GUIDE.read_text(encoding="utf-8")
+
+        shared_commands = (
+            "src/rl_sar/scripts/build_lw_deployment.sh",
+            "--verify-deployment-only",
+            "collect-host",
+            "collect-hardware",
+            "I_CONFIRM_LW_IS_SUSPENDED_AND_MOTORS_MUST_REMAIN_DISABLED",
+            "PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py",
+        )
+        for command in shared_commands:
+            self.assertIn(command, quick_start)
+            self.assertIn(command, deployment_guide)
+
+        for safety_gate in (
+            "Sim2Sim",
+            "可靠吊装",
+            "运动范围隔离",
+            "物理急停",
+            "不会使能电机",
+            "motors_disable=true",
+            "candidate-review.json",
+            "不得把它直接覆盖到当前部署包",
+        ):
+            self.assertIn(safety_gate, quick_start)
+
+        self.assertIn("LW_BUILD_DEPLOYMENT_CN.md", quick_start)
 
     def test_build_runs_dependency_setup_before_runtime_setup(self) -> None:
         content = BUILD_SCRIPT.read_text(encoding="utf-8")
