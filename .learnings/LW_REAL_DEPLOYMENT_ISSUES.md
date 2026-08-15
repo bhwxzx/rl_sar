@@ -130,7 +130,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 36 | LW-036 | P2 / medium | resolved | Validate optional actuator-network outputs on every Sim2Sim inference |
 | 37 | LW-037 | P2 / medium | resolved | Make Sim2Sim SIGTERM and normal ROS shutdown stop the render loop |
 | 38 | LW-038 | P2 / medium | resolved | Remove repeated configuration decoding and allocation from the real control cycle |
-| 39 | LW-039 | P2 / low | pending | Reject actuator-model symlinks and policy-root escapes |
+| 39 | LW-039 | P2 / low | resolved | Reject actuator-model symlinks and policy-root escapes |
 | 40 | LW-040 | P2 / low | pending | Make the polymorphic RL base destruction contract safe |
 | 41 | LW-041 | P2 / low | pending | Make high-rate Sim2Sim plot publishing explicitly opt-in |
 
@@ -3167,7 +3167,7 @@ monitor and strict build gate.
 ## [LW-039] Actuator-model policy-root containment
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-010, LW-029
 
 ### Problem
@@ -3198,6 +3198,31 @@ selected policy root while diagnostics still display the in-root lexical path.
 - Failure diagnostics identify the rejected lexical and resolved path without
   silently falling back to the compile-time policy directory.
 - Normal relocated real directories continue to load both current models.
+
+### Resolution
+
+- **Resolved**: 2026-08-15T12:37:03+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 继续以所选规范化 policy root 为唯一边界；对固定 leg/foot
+  模型相对路径逐级执行非跟随式 `symlink_status()` 检查，拒绝最终模型文件和任一
+  中间目录的符号链接。每个模型必须成功规范化、通过按路径组件比较的根目录包含
+  检查，并且最终节点是普通非链接文件后才返回。错误同时报告词法路径、解析后
+  路径（无法解析时报告明确原因）及命中的链接组件；机器人名额外拒绝 `.`、`..`
+  和带父路径的别名。未增加编译期 `POLICY_DIR` 回退，未改变模型 6→1 契约、
+  推理输出或真机路径。
+- **Changed Files**:
+  `src/rl_sar/library/core/simulation/lw_actuator_models.cpp`、
+  `src/rl_sar/test/test_lw_actuator_models.cpp`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: `test_lw_actuator_models` 与 `rl_sim_LW` 定向构建成功；
+  `lw_actuator_models` 连续 20 轮通过，覆盖指向策略根外有效 TorchScript 的直接
+  文件链接、中间目录链接、`..` 路径别名、缺失模型拒绝，以及普通搬迁目录中
+  两个当前模型的成功解析、加载和 6→1 预热。完整 Debug 构建成功并通过 43/43
+  CTest；全新 `scripts/validate_lw_strict_build.sh` 在
+  `-Wall -Wextra -Wpedantic -Werror` 下完成全部目标并通过 43/43 CTest；定向
+  `cppcheck` 和 `git diff --check` 通过。未启动 MuJoCo GUI、ROS、真机、串口或
+  电机，用户未跟踪技能目录保持未修改。
+- **Remaining Follow-ups**: none
 
 ---
 

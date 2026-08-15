@@ -11,22 +11,126 @@ namespace
 constexpr std::size_t kActuatorModelInputSize = 6;
 constexpr std::size_t kActuatorModelOutputSize = 1;
 
+bool IsWithin(
+    const std::filesystem::path& root,
+    const std::filesystem::path& candidate)
+{
+    auto root_component = root.begin();
+    auto candidate_component = candidate.begin();
+    while (root_component != root.end()
+           && candidate_component != candidate.end())
+    {
+        if (*root_component != *candidate_component)
+        {
+            return false;
+        }
+        ++root_component;
+        ++candidate_component;
+    }
+    return root_component == root.end();
+}
+
+std::string DescribeResolvedPath(
+    const std::filesystem::path& resolved_path,
+    const std::error_code& error)
+{
+    if (error)
+    {
+        return "<unresolved: " + error.message() + ">";
+    }
+    return resolved_path.string();
+}
+
+[[noreturn]] void RejectModelPath(
+    const std::string& reason,
+    const std::filesystem::path& lexical_path,
+    const std::filesystem::path& resolved_path,
+    const std::error_code& resolution_error)
+{
+    throw std::runtime_error(
+        reason + "; lexical path: " + lexical_path.string()
+        + "; resolved path: "
+        + DescribeResolvedPath(resolved_path, resolution_error));
+}
+
 std::filesystem::path RequireModelFile(
     const std::filesystem::path& policy_root,
     const std::filesystem::path& relative_path)
 {
-    const std::filesystem::path model_path =
-        (policy_root / relative_path).lexically_normal();
-    std::error_code error;
-    const bool is_model_file =
-        std::filesystem::is_regular_file(model_path, error);
-    if (error || !is_model_file)
+    const std::filesystem::path normalized_relative =
+        relative_path.lexically_normal();
+    if (relative_path.empty()
+        || relative_path.is_absolute()
+        || normalized_relative != relative_path)
     {
         throw std::runtime_error(
-            "Required LW actuator model is not a readable file: "
-            + model_path.string());
+            "Invalid relative LW actuator-model path: "
+            + relative_path.string());
     }
-    return model_path;
+    for (const auto& component : normalized_relative)
+    {
+        if (component == "." || component == "..")
+        {
+            throw std::runtime_error(
+                "Invalid relative LW actuator-model path: "
+                + relative_path.string());
+        }
+    }
+
+    const std::filesystem::path lexical_path =
+        (policy_root / normalized_relative).lexically_normal();
+    std::error_code resolution_error;
+    const std::filesystem::path resolved_path =
+        std::filesystem::canonical(lexical_path, resolution_error);
+
+    std::filesystem::path current = policy_root;
+    std::filesystem::file_status final_status;
+    for (const auto& component : normalized_relative)
+    {
+        current /= component;
+        std::error_code status_error;
+        final_status = std::filesystem::symlink_status(
+            current,
+            status_error);
+        if (status_error)
+        {
+            RejectModelPath(
+                "Required LW actuator model path cannot be inspected: "
+                    + current.string() + ": " + status_error.message(),
+                lexical_path,
+                resolved_path,
+                resolution_error);
+        }
+        if (std::filesystem::is_symlink(final_status))
+        {
+            RejectModelPath(
+                "LW actuator model path contains a symbolic link: "
+                    + current.string(),
+                lexical_path,
+                resolved_path,
+                resolution_error);
+        }
+    }
+
+    if (resolution_error
+        || !std::filesystem::is_regular_file(final_status))
+    {
+        RejectModelPath(
+            "Required LW actuator model is not a readable regular file",
+            lexical_path,
+            resolved_path,
+            resolution_error);
+    }
+    if (!IsWithin(policy_root, resolved_path))
+    {
+        RejectModelPath(
+            "LW actuator model resolves outside the selected policy root: "
+                + policy_root.string(),
+            lexical_path,
+            resolved_path,
+            resolution_error);
+    }
+    return resolved_path;
 }
 }
 
@@ -34,9 +138,13 @@ LWActuatorModelPaths ResolveLWActuatorModelPaths(
     const std::filesystem::path& policy_root,
     const std::string& robot_name)
 {
+    const std::filesystem::path robot_component(robot_name);
     if (robot_name.empty()
-        || std::filesystem::path(robot_name).is_absolute()
-        || std::filesystem::path(robot_name).filename() != robot_name)
+        || robot_component.is_absolute()
+        || robot_component.has_parent_path()
+        || robot_component == "."
+        || robot_component == ".."
+        || robot_component.filename() != robot_component)
     {
         throw std::runtime_error(
             "Invalid robot name for LW actuator models: " + robot_name);

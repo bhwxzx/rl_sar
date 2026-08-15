@@ -86,6 +86,21 @@ void CreatePlaceholder(const fs::path& path)
     Require(output.good(), "failed to create " + path.string());
 }
 
+void CreateModelFixture(
+    const fs::path& path,
+    const std::string& model_name)
+{
+    fs::create_directories(path.parent_path());
+#ifdef USE_TORCH
+    fs::copy_file(
+        fs::path(POLICY_DIR) / "LW/robot_lab/motors" / model_name,
+        path);
+#else
+    static_cast<void>(model_name);
+    CreatePlaceholder(path);
+#endif
+}
+
 class FakeTorchModel : public InferenceRuntime::Model
 {
 public:
@@ -180,20 +195,12 @@ void TestRelocatedPolicyRootSelectsBothModels()
     TemporaryDirectory temporary;
     const fs::path selected_root = temporary.path() / "relocated-policy";
     const fs::path motors = selected_root / "LW/robot_lab/motors";
-#ifdef USE_TORCH
-    fs::create_directories(motors);
-    fs::copy_file(
-        fs::path(POLICY_DIR)
-            / "LW/robot_lab/motors/leg_actuator_net.pt",
-        motors / "leg_actuator_net.pt");
-    fs::copy_file(
-        fs::path(POLICY_DIR)
-            / "LW/robot_lab/motors/foot_actuator_net.pt",
-        motors / "foot_actuator_net.pt");
-#else
-    CreatePlaceholder(motors / "leg_actuator_net.pt");
-    CreatePlaceholder(motors / "foot_actuator_net.pt");
-#endif
+    CreateModelFixture(
+        motors / "leg_actuator_net.pt",
+        "leg_actuator_net.pt");
+    CreateModelFixture(
+        motors / "foot_actuator_net.pt",
+        "foot_actuator_net.pt");
 
     const LWActuatorModelPaths paths =
         ResolveLWActuatorModelPaths(selected_root, "LW");
@@ -230,6 +237,76 @@ void TestMissingModelIsRejectedWithResolvedPath()
     RequireFailure(
         [&]() { ResolveLWActuatorModelPaths(selected_root, "LW"); },
         {"Required LW actuator model", expected_missing.string()});
+}
+
+void TestDirectModelSymlinkEscapeIsRejected()
+{
+    TemporaryDirectory temporary;
+    const fs::path selected_root = temporary.path() / "selected-policy";
+    const fs::path motors = selected_root / "LW/robot_lab/motors";
+    const fs::path external_model =
+        temporary.path() / "external-models/leg_actuator_net.pt";
+    CreateModelFixture(external_model, "leg_actuator_net.pt");
+    CreateModelFixture(
+        motors / "foot_actuator_net.pt",
+        "foot_actuator_net.pt");
+    fs::create_symlink(
+        external_model,
+        motors / "leg_actuator_net.pt");
+
+    const fs::path lexical_model =
+        fs::canonical(selected_root)
+        / "LW/robot_lab/motors/leg_actuator_net.pt";
+    const fs::path resolved_model = fs::canonical(external_model);
+    RequireFailure(
+        [&]() { ResolveLWActuatorModelPaths(selected_root, "LW"); },
+        {"symbolic link", lexical_model.string(), resolved_model.string()});
+}
+
+void TestIntermediateDirectorySymlinkEscapeIsRejected()
+{
+    TemporaryDirectory temporary;
+    const fs::path selected_root = temporary.path() / "selected-policy";
+    const fs::path external_motors =
+        temporary.path() / "external-models/motors";
+    CreateModelFixture(
+        external_motors / "leg_actuator_net.pt",
+        "leg_actuator_net.pt");
+    CreateModelFixture(
+        external_motors / "foot_actuator_net.pt",
+        "foot_actuator_net.pt");
+    fs::create_directories(selected_root / "LW/robot_lab");
+    fs::create_directory_symlink(
+        external_motors,
+        selected_root / "LW/robot_lab/motors");
+
+    const fs::path lexical_model =
+        fs::canonical(selected_root)
+        / "LW/robot_lab/motors/leg_actuator_net.pt";
+    const fs::path resolved_model =
+        fs::canonical(external_motors / "leg_actuator_net.pt");
+    RequireFailure(
+        [&]() { ResolveLWActuatorModelPaths(selected_root, "LW"); },
+        {"symbolic link", lexical_model.string(), resolved_model.string()});
+}
+
+void TestRobotNamePathAliasIsRejected()
+{
+    TemporaryDirectory temporary;
+    const fs::path selected_root = temporary.path() / "selected-policy";
+    const fs::path escaped_motors =
+        temporary.path() / "robot_lab/motors";
+    CreateModelFixture(
+        escaped_motors / "leg_actuator_net.pt",
+        "leg_actuator_net.pt");
+    CreateModelFixture(
+        escaped_motors / "foot_actuator_net.pt",
+        "foot_actuator_net.pt");
+    fs::create_directories(selected_root);
+
+    RequireFailure(
+        [&]() { ResolveLWActuatorModelPaths(selected_root, ".."); },
+        {"Invalid robot name", ".."});
 }
 
 void TestCompatibleModelUsesSixInputsAndOneOutput()
@@ -401,6 +478,9 @@ int main()
     {
         TestRelocatedPolicyRootSelectsBothModels();
         TestMissingModelIsRejectedWithResolvedPath();
+        TestDirectModelSymlinkEscapeIsRejected();
+        TestIntermediateDirectorySymlinkEscapeIsRejected();
+        TestRobotNamePathAliasIsRejected();
         TestCompatibleModelUsesSixInputsAndOneOutput();
         TestIncompatibleModelsAreRejected();
         TestRuntimeOutputsAreValidatedAfterWarmup();
