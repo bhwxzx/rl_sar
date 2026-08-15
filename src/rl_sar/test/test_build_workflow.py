@@ -28,6 +28,29 @@ class BuildWorkflowTests(unittest.TestCase):
     def test_jetson_pytorch_installer_was_removed(self) -> None:
         self.assertFalse(REMOVED_JETSON_INSTALLER.exists())
 
+    def test_obsolete_standalone_cmake_mode_was_removed(self) -> None:
+        content = BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertNotIn("run_cmake_build()", content)
+        self.assertNotIn("-m|--cmake", content)
+        self.assertNotIn("cmake_mode", content)
+        self.assertNotIn("--cmake option", content)
+        self.assertIn("-mj|--mujoco) mujoco_mode=true; shift ;;", content)
+        self.assertIn("-DUSE_CMAKE=ON -DUSE_MUJOCO=ON", content)
+
+        result = subprocess.run(
+            ["bash", str(BUILD_SCRIPT), "--help"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotIn("--cmake", result.stdout)
+        self.assertIn("--mujoco", result.stdout)
+
+        for document in (DEPLOYMENT_GUIDE, QUICK_START_GUIDE):
+            self.assertNotIn(
+                "--cmake", document.read_text(encoding="utf-8")
+            )
+
     def test_selected_builds_include_dependency_closure(self) -> None:
         content = BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn("--packages-select", content)

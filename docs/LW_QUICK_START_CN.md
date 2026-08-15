@@ -55,10 +55,9 @@ ros2 run rl_sar rl_sim_LW
 
 上述 `./build.sh` 不带参数时构建整个 ROS 工作区，是正式 Sim2Sim 验证的
 标准入口。开发期可用 `./build.sh rl_sar` 指定包及其依赖；`-c`/`--clean`
-会清理构建产物，`-m`/`--cmake` 是不含 MuJoCo 的 CMake 硬件构建，
-`-mj`/`--mujoco` 是含 MuJoCo 的 CMake 构建，完整用法可运行
-`./build.sh --help`。这些开发选项
-都不能代替上述交付前的完整工作区构建。严格构建默认并行度为 2；
+会清理构建产物，`-mj`/`--mujoco` 是含 MuJoCo 的独立 CMake 构建，完整用法
+可运行 `./build.sh --help`。该开发选项不能代替上述交付前的完整工作区构建。
+严格构建默认并行度为 2；
 资源受限或需要调整时可显式使用：
 
 ```bash

@@ -113,6 +113,53 @@ LW-041 已在中英文 README 和完整编译部署说明中记录 `--enable-plo
 
 ---
 
+## [LRN-20260815-003] knowledge_gap
+
+**Logged**: 2026-08-15T14:38:03+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+`build.sh --cmake` 当前不是可用的 LW 硬件构建，且不会可靠关闭 MuJoCo。
+
+### Details
+帮助和部署文档把 `-m`/`--cmake` 描述为“不含 MuJoCo 的 CMake 硬件构建”，
+但脚本实际只用 `-DUSE_CMAKE=ON` 配置复用的 `cmake_build`。当前
+`rl_real_LW`、ROS 调试 publisher、ROS 依赖和安装规则均位于
+`NOT USE_CMAKE` 分支，因此该模式不会生成可启动的 LW 真机程序；它主要构建
+共享库及不依赖 ROS 的测试目标。脚本也未传入 `-DUSE_MUJOCO=OFF`，所以同一
+目录曾由 `--mujoco` 配置后，再运行 `--cmake` 会继续沿用缓存中的
+`USE_MUJOCO=ON`。现有 `cmake_build/CMakeCache.txt` 即为
+`USE_CMAKE=ON`、`USE_MUJOCO=ON`，目标清单含 `rl_sim_mujoco` 而不含
+`rl_real_LW`；目录中的旧真机二进制只是历史残留，不能证明当前模式有效。
+
+### Suggested Action
+先明确是否仍需要独立的非 ROS CMake 诊断入口。若不需要，删除
+`--cmake` 及误导性文档，仅保留 ROS 开发构建、MuJoCo 构建和正式部署构建；
+若需要，则将其明确命名为非 ROS 核心/测试构建、每次显式设置
+`USE_MUJOCO=OFF`，并增加目标集合与缓存切换测试。不要继续称其为硬件部署
+构建，除非它真正生成并验证当前 `rl_real_LW` 交付物。
+
+### Metadata
+- Source: conversation
+- Related Files: build.sh, src/rl_sar/CMakeLists.txt, docs/LW_BUILD_DEPLOYMENT_CN.md, docs/LW_QUICK_START_CN.md
+- Tags: build, CMake, hardware, MuJoCo, cache, documentation
+- Pattern-Key: build.cmake_mode_matches_claimed_targets
+- Recurrence-Count: 1
+- First-Seen: 2026-08-15
+- Last-Seen: 2026-08-15
+
+### Resolution
+- **Resolved**: 2026-08-15T15:49:28+08:00
+- **Commit/PR**: 本提交
+- **Notes**: 已删除 `build.sh` 的 `-m`/`--cmake` 参数、独立执行分支、帮助
+  文本和误导性无 ROS 提示，并同步两份操作文档。`--mujoco` 及其所需的
+  `USE_CMAKE=ON`/`USE_MUJOCO=ON` 保持不变；回归测试验证删除的参数被拒绝、
+  MuJoCo 入口仍保留。
+
+---
+
 ## [LRN-20260811-003] correction
 
 **Logged**: 2026-08-11T17:57:11+08:00

@@ -96,17 +96,6 @@ validate_lw_description() {
     fi
 }
 
-run_cmake_build() {
-    print_header "[Running CMake Build]"
-    print_warning "NOTE: CMake build is for hardware deployment only, not for simulation." # 用于硬件部署，不用于仿真
-    print_separator
-
-    cmake src/rl_sar/ -B cmake_build -DUSE_CMAKE=ON
-    cmake --build cmake_build -j$(nproc 2>/dev/null || echo 4)
-
-    print_success "CMake build completed!"
-}
-
 run_mujoco_build() {
     print_header "[Running MuJoCo Build]"
     print_info "Building with MuJoCo simulator support..."
@@ -339,7 +328,6 @@ show_usage() {
     echo ""
     echo -e "${COLOR_INFO}Options:${COLOR_RESET}"
     echo -e "  -c, --clean      Clean workspace (remove symlinks and build artifacts)"
-    echo -e "  -m, --cmake      Build using CMake (for hardware deployment only)"
     echo -e "  -mj,--mujoco     Build with MuJoCo simulator support (CMake only)"
     echo -e "  -h, --help       Show this help message"
     echo ""
@@ -348,22 +336,19 @@ show_usage() {
     echo -e "  $0 package1 package2  # Build specific ROS packages"
     echo -e "  $0 -c                 # Clean all symlinks and build artifacts"
     echo -e "  $0 --clean package1   # Clean specific package and build artifacts"
-    echo -e "  $0 -m                 # Build with CMake for hardware deployment"
     echo -e "  $0 -mj                # Build with CMake and MuJoCo simulator support"
 }
 
 main() {
     local packages=()
     local clean_mode=false
-    local cmake_mode=false
     local mujoco_mode=false
 
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
             -c|--clean) clean_mode=true; shift ;;
-            -m|--cmake) cmake_mode=true; shift ;;
-            -mj|--mujoco) cmake_mode=true; mujoco_mode=true; shift ;;
+            -mj|--mujoco) mujoco_mode=true; shift ;;
             -h|--help) show_usage; exit 0 ;;
             --) shift; packages+=("$@"); break ;;
             -*) print_error "Unknown option: $1"; show_usage; exit 1 ;;
@@ -382,15 +367,6 @@ main() {
         exit 0
     fi
 
-    # Handle CMake build mode
-    if [ "$cmake_mode" = true ]; then
-        prepare_build_platform
-        setup_system_dependencies
-        setup_inference_runtime
-        run_cmake_build
-        exit 0
-    fi
-
     # Handle clean mode
     if [ "$clean_mode" = true ]; then
         clean_workspace "${packages[@]}"
@@ -400,7 +376,7 @@ main() {
     # Handle ROS build
     if [ -z "$ROS_DISTRO" ]; then
         print_error "ROS environment not detected. Please source your ROS setup.bash first."
-        print_info "For hardware deployment, use the --cmake option instead."
+        print_info "For production deployment, use src/rl_sar/scripts/build_lw_deployment.sh."
         exit 1
     fi
 
