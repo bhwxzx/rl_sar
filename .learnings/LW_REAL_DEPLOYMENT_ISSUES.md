@@ -132,7 +132,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 38 | LW-038 | P2 / medium | resolved | Remove repeated configuration decoding and allocation from the real control cycle |
 | 39 | LW-039 | P2 / low | resolved | Reject actuator-model symlinks and policy-root escapes |
 | 40 | LW-040 | P2 / low | resolved | Make the polymorphic RL base destruction contract safe |
-| 41 | LW-041 | P2 / low | pending | Make high-rate Sim2Sim plot publishing explicitly opt-in |
+| 41 | LW-041 | P2 / low | resolved | Make high-rate Sim2Sim plot publishing explicitly opt-in |
 
 ---
 
@@ -3299,7 +3299,7 @@ thread, serial, or simulation cleanup.
 ## [LW-041] Opt-in Sim2Sim plot publishing
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-014, LW-021, LW-031
 
 ### Problem
@@ -3331,6 +3331,39 @@ topic.
 - Default Sim2Sim startup performs no 500 Hz plot publication work.
 - An explicit documented opt-in restores the existing plot topic and payload.
 - Real-robot debug publishing and shared control/safety parity remain unchanged.
+
+### Resolution
+
+- **Resolved**: 2026-08-15T13:17:13+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 删除 Sim2Sim 头文件中始终启用的 `PLOT` 宏和未使用的
+  matplotlib/plot-loop 声明，新增默认关闭的 `--enable-plot` 运行时开关；
+  启用时默认 100 Hz，并允许通过 `--plot-rate-hz <integer>` 选择 1–200 Hz。
+  频率参数必须与开关同时使用，缺失、非整数、越界或重复冲突值在启动时
+  明确拒绝，参数顺序不受限制。默认模式不分配绘图快照缓冲、不创建 publisher
+  或 timer，也不安装控制周期快照回调；显式启用后恢复既有
+  `/LW_joint_states` topic 和 payload，启动日志输出有效 topic/频率。100 ms
+  operator-status timer 保持独立，真机 Plot/debug 路径及共享控制、安全逻辑
+  不变。
+- **Changed Files**: `README.md`、`README_CN.md`、
+  `docs/LW_BUILD_DEPLOYMENT_CN.md`、`docs/LW_QUICK_START_CN.md`、
+  `src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/include/rl_sim_LW.hpp`、
+  `src/rl_sar/library/core/simulation/lw_sim_plot_config.hpp`、
+  `src/rl_sar/src/rl_sim_LW.cpp`、
+  `src/rl_sar/test/test_lw_sim_lifecycle_integration.py`、
+  `src/rl_sar/test/test_lw_sim_plot_config.cpp`、
+  `.learnings/LEARNINGS.md`、`.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: `test_lw_sim_plot_config` 与 `lw_sim_lifecycle_integration` 各连续
+  20 轮通过，覆盖默认关闭、显式启用、1–200 Hz 边界、无效或冲突参数拒绝、
+  绘图资源按需创建和 operator-status 独立性。完整 Debug 构建成功并通过
+  45/45 CTest；全新 `scripts/validate_lw_strict_build.sh` 在
+  `-Wall -Wextra -Wpedantic -Werror` 下完成全部目标并通过 45/45
+  CTest；定向 `cppcheck`、Python lifecycle integration 和 `git diff --check`
+  通过。README、完整部署说明和快速开始文档中的 Plot 参数名称、默认值、
+  范围和约束已交叉核对。未启动 MuJoCo GUI、ROS 节点、真机、串口或电机，
+  用户未跟踪技能目录保持未修改。
+- **Remaining Follow-ups**: none
 
 ---
 

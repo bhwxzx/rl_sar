@@ -1,7 +1,6 @@
 #ifndef RL_SIM_LW_HPP
 #define RL_SIM_LW_HPP
 
-#define PLOT
 // #define ENABLE_FORWARD_LATENCY
 // #define ADD_ANGVEL_NOISE
 // #define ADD_JOINTVEL_NOISE
@@ -20,6 +19,7 @@
 #include "lw_runtime_core.hpp"
 #include "lw_safety_policy.hpp"
 #include "lw_signal_shutdown.hpp"
+#include "lw_sim_plot_config.hpp"
 #include "fsm_LW.hpp"
 
 #include "LW_sdk.hpp"
@@ -30,10 +30,8 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 
 #include "joystick.hh"
-#include "matplotlibcpp.h"
 #include <mujoco/mujoco.h>
 #include "mujoco_utils.hpp"
-namespace plt = matplotlibcpp;
 
 class RL_Real : public RL
 {
@@ -75,7 +73,6 @@ private:
     std::shared_ptr<LoopFunc> loop_joystick;
     std::shared_ptr<LoopFunc> loop_control;
     std::shared_ptr<LoopFunc> loop_rl;
-    std::shared_ptr<LoopFunc> loop_plot;
 
     // mujoco
     mjvCamera cam;
@@ -116,9 +113,18 @@ private:
     // rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_subscriber_;
     // void ImuCallback(const sensor_msgs::msg::Imu::SharedPtr imu_msg);
 
-    // plot
+    // Optional high-rate Sim2Sim plot telemetry. The buffer, publisher, timer,
+    // and control-cycle callback are absent unless explicitly enabled.
+    struct SimDebugSnapshot
+    {
+        RobotState<float> robot_state;
+        RobotCommand<float> robot_command;
+        LWControlSnapshot control;
+    };
+    LWSimPlotConfiguration plot_configuration_;
+    std::unique_ptr<LWSnapshotBuffer<SimDebugSnapshot>> plot_snapshot_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr jointstate_plot_publisher_;
-    rclcpp::TimerBase::SharedPtr timer_;
+    rclcpp::TimerBase::SharedPtr plot_timer_;
     rclcpp::TimerBase::SharedPtr operator_status_timer_;
     void jointstate_plot_callback(void);
     void OperatorStatusCallback();
@@ -140,14 +146,6 @@ private:
 
     // others
     void disable_robot(void);
-    struct SimDebugSnapshot
-    {
-        RobotState<float> robot_state;
-        RobotCommand<float> robot_command;
-        LWControlSnapshot control;
-    };
-
-    LWSnapshotBuffer<SimDebugSnapshot> debug_snapshot_;
 
 };
 

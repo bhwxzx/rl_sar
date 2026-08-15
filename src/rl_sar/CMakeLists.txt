@@ -472,6 +472,14 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/test/test_lw_sim_lifecycle_integration.py
     )
 
+    add_executable(test_lw_sim_plot_config
+        test/test_lw_sim_plot_config.cpp
+    )
+    target_include_directories(test_lw_sim_plot_config PRIVATE
+        library/core/simulation
+    )
+    add_test(NAME lw_sim_plot_config COMMAND test_lw_sim_plot_config)
+
     add_executable(test_loop_lifecycle
         test/test_loop_lifecycle.cpp
     )

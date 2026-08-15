@@ -128,6 +128,20 @@ ros2 pkg prefix rl_sar
 可能请求 sudo 权限和网络访问；具体清单见
 [README_CN.md](../README_CN.md#获取代码与依赖)。
 
+`build.sh` 的项目参数如下，可用 `./build.sh --help` 查看同一清单：
+
+| 形式 | 含义 |
+| --- | --- |
+| `./build.sh [PACKAGE_NAMES...]` | 不带包名时构建整个 ROS 工作区；带包名时构建指定包及其依赖 |
+| `./build.sh -c` / `./build.sh --clean [PACKAGE_NAMES...]` | 清理全部或指定包的工作区链接和构建产物 |
+| `./build.sh -m` / `./build.sh --cmake` | 不含 MuJoCo 的 CMake 硬件构建 |
+| `./build.sh -mj` / `./build.sh --mujoco` | 含 MuJoCo 的 CMake 构建 |
+| `./build.sh -h` / `./build.sh --help` | 显示用法后退出 |
+
+`--clean` 是显式清理操作；`--cmake` 和 `--mujoco` 是开发/诊断构建，都不能代替
+本文后续由 `build_lw_deployment.sh` 生成和验收的正式部署包。交付前的
+Sim2Sim 验证也必须回到不带包名的完整工作区构建。
+
 在 Jetson 上，`./build.sh` 会自动检查 Linux/aarch64、L4T/Tegra 和 Jetson
 CUDA 标志，并在日志中输出 `Jetson mode: true`。只有容器等环境隐藏了这些
 标志时才使用 `export IS_JETSON=true`；该强制模式在非 Linux/aarch64 主机上
@@ -162,6 +176,11 @@ scripts/validate_lw_strict_build.sh
 该脚本使用全新临时目录，以 `-Wall -Wextra -Wpedantic -Werror` 完整构建维护
 目标并运行全部 CTest。MuJoCo simulate、joystick 和硬件 SDK 等 vendored 依赖
 使用独立编译目标与系统头边界；门禁不会修改或全局豁免维护代码的警告。
+默认并行度为 2；需要调整时必须传入正整数环境变量，例如：
+
+```bash
+LW_STRICT_BUILD_JOBS=4 scripts/validate_lw_strict_build.sh
+```
 
 ### 第三步：在开发机完成 Sim2Sim 验证
 
@@ -172,6 +191,24 @@ source /opt/ros/humble/setup.bash
 source "$RL_SAR_ROOT/install/setup.bash"
 ros2 run rl_sar rl_sim_LW
 ```
+
+Sim2Sim 默认不创建高频 Plot publisher、wall timer 或控制快照缓冲。如需临时观察
+既有 `/LW_joint_states` payload，可显式启用默认 100 Hz 的绘图遥测：
+
+```bash
+ros2 run rl_sar rl_sim_LW --enable-plot
+```
+
+也可指定 1–200 Hz 的整数频率：
+
+```bash
+ros2 run rl_sar rl_sim_LW --enable-plot --plot-rate-hz 50
+```
+
+`--plot-rate-hz` 未与 `--enable-plot` 同时使用，或取值缺失、非整数、超出范围、
+重复且冲突时，Sim2Sim 会明确拒绝启动。常规观察建议 50 Hz，默认 100 Hz 用于
+普通诊断，200 Hz 仅用于短时逐控制周期分析。该开关只控制 Sim2Sim Plot，不影响
+100 ms operator-status 输出，也不改变真机的独立调试 publisher。
 
 需要可选执行器网络时，策略根必须同时包含四套主策略以及两个 `.pt` 模型：
 
@@ -186,6 +223,8 @@ ros2 run rl_sar rl_sim_LW \
 启动日志会分别显示最终绝对路径；任一文件缺失、无法加载，或不满足 6 维输入和
 单值有限输出契约时，Sim2Sim 会明确报错并终止。未指定
 `--use_actuator_net` 时，这两个模型仍是可选资产。
+`--policy-root`、`--use_actuator_net`、`--enable-plot` 和 `--plot-rate-hz`
+可在同一条 Sim2Sim 命令中组合，各自保持上述校验和默认值。
 
 关闭 MuJoCo 窗口或按 `Ctrl+C` 都会进入同一条正常线程关闭路径：先请求渲染循环
 退出，再关闭 ROS，并按顺序等待业务线程和物理线程结束。`SIGINT` 在任何工作
@@ -278,6 +317,13 @@ bash "$RL_SAR_ROOT/scripts/validate_inference_runtime.sh" \
     onnx "$RL_SAR_ROOT/library/inference_runtime/onnxruntime" "$(uname -m)"
 ```
 
+校验脚本的完整位置参数形式是
+`<onnx|libtorch> <runtime-directory> [architecture]`。架构可省略，默认使用
+`uname -m`，支持 `x86_64`/`amd64` 和 `aarch64`/`arm64`；正式 LW
+部署仅携带 ONNX Runtime，因此必须使用上述
+`onnx` 及当前机器架构的完整调用。`libtorch` 只用于单独校验开发机上的
+LibTorch 运行时，不能用它替代正式部署前的 ONNX 校验。
+
 还需要保证 `git`、`cmake`、`colcon`、C++ 编译器及
 [README_CN.md](../README_CN.md#获取代码与依赖) 中的依赖可用。
 
@@ -350,6 +396,10 @@ src/rl_sar/scripts/build_lw_deployment.sh \
     "$DEPLOY_PREFIX" \
     "$SOURCE_COMMIT"
 ```
+
+脚本的位置参数形式是 `<empty-output-prefix> [commit]`。实现中省略提交时
+会使用 `HEAD`，但正式部署必须显式传入已经完成 Sim2Sim 验证的完整
+`SOURCE_COMMIT`，不允许依赖当前分支或工作树状态。输出前缀必须不存在或为空。
 
 脚本会自动完成以下工作：
 
@@ -472,6 +522,16 @@ done
 ```bash
 PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py
 ```
+
+该 launch 只声明两个项目自定义参数：
+
+| 参数 | 默认值 | 详细边界 |
+| --- | --- | --- |
+| `enable_keyboard:=<boolean>` | `true` | 只接受 `true`/`false`；见下文“真机终端键盘” |
+| `enable_debug_publisher:=<boolean>` | `false` | 只接受 `true`/`false`；见下文“可选调试话题” |
+
+两个参数可同时指定。通过 `ros2 launch rl_sar rl_real_LW.launch.py --show-args`
+可只读核对当前部署包的声明和默认值，不会启动节点。
 
 必须保留 `PYTHONDONTWRITEBYTECODE=1`。正式部署只允许清单绑定的
 `rl_real_LW.launch.py`，禁止 Python 在同一目录生成未经验证的
@@ -598,6 +658,10 @@ Linux joystick 编号的逻辑名称；不同品牌、连接方式或驱动可�
 ros2 launch fdilink_ahrs ahrs_driver.launch.py
 ```
 
+当前 `ahrs_driver.launch.py` 没有声明项目自定义 launch 参数；
+`ros2 launch fdilink_ahrs ahrs_driver.launch.py --show-args` 会报告“No arguments”。
+不应在这条命令后追加自行猜测的串口或话题参数。
+
 在另一个同样加载当前部署前缀的终端检查：
 
 ```bash
@@ -680,6 +744,10 @@ control_loop_fatal_lateness: 0.0
 `control_loop_require_realtime: false`；这三项只能在单独的物理安全验证和部署权限
 评审后人工决定。输出的其他值也只是吊装环境候选，不是自动生效的最终配置。
 
+`profile_lw_runtime_config.py` 及其 `collect-host`、`collect-hardware`、
+`analyze` 子命令都支持 `-h`/`--help`。帮助模式在参数解析阶段退出，
+不会运行 profiler、初始化 ROS 或访问 IMU、串口和电机。
+
 #### 第一阶段：无硬件 CPU 和调度测量
 
 在目标部署机的新终端中加载本次部署前缀。以下命令不会初始化 ROS、IMU、手柄、
@@ -711,6 +779,12 @@ python3 "$LW_PROFILE_TOOL" collect-host \
 `--duration-seconds`；累计丢周期数只在该条件下参与排序，不能混用不同时长的
 历史报告。
 
+`collect-host` 的 `--duration-seconds` 必须为正数，默认 30；
+`--realtime-priorities` 接受逗号分隔的非负整数。获得批准后可追加
+`--require-realtime`：包装脚本只对正数优先级向 profiler 传递该开关，使
+`SCHED_FIFO` 应用失败的该组测量直接终止；优先级 0 仍使用
+`SCHED_OTHER`。
+
 #### 第二阶段：吊装硬件观察
 
 硬件阶段必须同时满足：机器人可靠吊装、运动范围隔离、现场人员掌握物理急停、
@@ -733,6 +807,25 @@ python3 "$LW_PROFILE_TOOL" collect-hardware \
     --realtime-priority 0 \
     --confirmation I_CONFIRM_LW_IS_SUSPENDED_AND_MOTORS_MUST_REMAIN_DISABLED
 ```
+
+`collect-hardware` 的项目参数和默认值如下：
+
+| 参数 | 默认值 | 约束 |
+| --- | --- | --- |
+| `--duration-seconds` | `60` | 必须为正数 |
+| `--cpu` | 无，必填 | `-1` 表示不绑定，其它值必须为非负整数 |
+| `--realtime-priority` | `0` | 必须为非负整数 |
+| `--require-realtime` | 关闭 | 只能与正数 `--realtime-priority` 同时使用 |
+| `--right-port` | `/dev/ttyLegRight` | 右电机板串口 |
+| `--left-port` | `/dev/ttyLegLeft` | 左电机板串口 |
+| `--imu-topic` | `/imu` | 独立 AHRS 驱动的原始 IMU 话题 |
+| `--ahrs-topic` | `/euler_angles` | 独立 AHRS 驱动的欧拉角话题 |
+| `--confirmation` | 无，必填 | 必须与上述确认字符串逐字匹配 |
+
+只有稳定设备别名或话题配置已被单独评审，且报告中的测量对象与最终
+部署完全一致时，才可覆盖端口或话题。不得为绕过设备准备错误而临时指向
+其它串口或话题。添加 `--require-realtime` 时必须同时使用已批准的正数
+`--realtime-priority`，否则 profiler 会明确拒绝启动。
 
 **明确结论：执行上述 `collect-hardware` 命令的整个测算过程中，测算程序不会使能
 电机。** 它不会向左右电机板串口发送电机使能包或普通控制包；四个策略只用于
@@ -773,6 +866,13 @@ python3 "$LW_PROFILE_TOOL" analyze \
     --max-safe-control-gap-ms <评审确定的最大控制间断毫秒> \
     --minimum-hardware-samples 1000
 ```
+
+`--reports` 接受一个或多个报告路径；本流程要求同一部署的全部 host 报告和
+一份 hardware 报告。四个 `--max-safe-*-ms` 参数在通用接口中可省略，省略时
+相应候选会保持现有值并标记待评审；但本正式实机候选流程必须全部填写
+为由机械与控制安全负责人确定的有限正数。`0`、负数、`NaN` 和无穷值均
+会被拒绝。`--minimum-hardware-samples` 必须为正整数，默认 1000。
+`--output` 指定的文件不得已经存在。
 
 分析器按截止时间丢失、最大晚到、最大执行时间和推理尾延迟排序 host 报告；电机
 反馈和可信 IMU 候选覆盖相应的 P50/P99.9/最大帧间隔及结束帧龄，配对候选覆盖

@@ -53,6 +53,47 @@ source "$RL_SAR_ROOT/install/setup.bash"
 ros2 run rl_sar rl_sim_LW
 ```
 
+上述 `./build.sh` 不带参数时构建整个 ROS 工作区，是正式 Sim2Sim 验证的
+标准入口。开发期可用 `./build.sh rl_sar` 指定包及其依赖；`-c`/`--clean`
+会清理构建产物，`-m`/`--cmake` 是不含 MuJoCo 的 CMake 硬件构建，
+`-mj`/`--mujoco` 是含 MuJoCo 的 CMake 构建，完整用法可运行
+`./build.sh --help`。这些开发选项
+都不能代替上述交付前的完整工作区构建。严格构建默认并行度为 2；
+资源受限或需要调整时可显式使用：
+
+```bash
+LW_STRICT_BUILD_JOBS=4 scripts/validate_lw_strict_build.sh
+```
+
+上述默认命令不创建 Sim2Sim Plot publisher、timer 或快照缓冲。需要观察
+`/LW_joint_states` 时，显式启用 Plot（默认 100 Hz）：
+
+```bash
+ros2 run rl_sar rl_sim_LW --enable-plot
+```
+
+也可选择 1–200 Hz 的整数频率，例如常规观察使用 50 Hz：
+
+```bash
+ros2 run rl_sar rl_sim_LW --enable-plot --plot-rate-hz 50
+```
+
+`--plot-rate-hz` 必须与 `--enable-plot` 同时使用；缺失、非整数、越界或重复
+冲突值会使 Sim2Sim 明确拒绝启动。
+
+如需改用非编译期策略目录，使用 `--policy-root PATH`；如需启用可选的
+TorchScript 执行器网络，追加 `--use_actuator_net`。同时使用的示例为：
+
+```bash
+ros2 run rl_sar rl_sim_LW \
+    --policy-root /absolute/path/to/policy \
+    --use_actuator_net
+```
+
+有效策略根必须包含四套 ONNX 策略；启用执行器网络时还必须包含
+`LW/robot_lab/motors/{leg,foot}_actuator_net.pt`。任一所需模型缺失或契约
+不兼容都会使启动失败。这两个参数可独立使用，也可与 Plot 参数组合。
+
 至少确认四个 ONNX 策略均为本次候选版本，腿式、轮式和两个形态转换都能完整
 运行，没有加载错误、NaN、越界、持续发散、明显跳变或控制周期异常。关闭仿真后
 提交所有获批的代码、配置、模型和描述资源：
@@ -88,6 +129,13 @@ src/rl_sar/scripts/build_lw_deployment.sh \
     "$SOURCE_COMMIT"
 ```
 
+`validate_inference_runtime.sh` 的完整形式为
+`<onnx|libtorch> <runtime-directory> [architecture]`；本正式部署路径必须保持
+上述 `onnx` 和当前机器架构校验；支持的架构名为 `x86_64`/`amd64` 和
+`aarch64`/`arm64`。`build_lw_deployment.sh` 的形式为
+`<empty-output-prefix> [commit]`；脚本虽允许省略提交并使用 `HEAD`，但本可追溯部署
+流程必须显式传入已验证的完整 `SOURCE_COMMIT`。
+
 构建脚本必须成功验收原部署前缀及其迁移副本。随后在未加载其他工作区的新终端
 重新执行第 2 节变量块，再执行：
 
@@ -113,6 +161,8 @@ ldd "$DEPLOY_PREFIX/lib/fdilink_ahrs/ahrs_driver_node"
 
 参数测算产生的是供人工评审的候选，不会自动修改 `base.yaml`，也不能替代
 Sim2Sim、物理急停或 STM32 侧失能确认。
+包装工具及 `collect-host`、`collect-hardware`、`analyze` 子命令都支持
+`-h`/`--help`；帮助模式只显示参数后退出，不运行 profiler 或访问硬件。
 
 ### 5.1 无硬件 CPU 和调度测量
 
@@ -136,6 +186,13 @@ python3 "$LW_PROFILE_TOOL" collect-host \
     --realtime-priorities 0
 ```
 
+`--cpus allowed` 会测量当前进程允许的全部逻辑 CPU；也可使用
+`--cpus=-1,0,1` 选择不绑定对照组和指定 CPU。`--realtime-priorities`
+接受逗号分隔的非负整数；只有部署负责人已批准正数优先级时，才可加入
+`--require-realtime` 要求该正数优先级的 `SCHED_FIFO` 应用失败即中止。
+`--duration-seconds` 必须为正数，默认 30；本流程显式写出默认值以固定
+可比较的采样时长。
+
 输出目录必须不存在或为空。未经部署负责人批准，不要加入正数实时优先级。
 
 ### 5.2 吊装硬件观察
@@ -154,6 +211,9 @@ python3 "$LW_PROFILE_TOOL" collect-host \
 ros2 launch fdilink_ahrs ahrs_driver.launch.py
 ```
 
+当前 `ahrs_driver.launch.py` 没有项目自定义 launch 参数，因此这条命令不应
+追加串口或话题覆盖值。
+
 在另一个终端重新执行第 2 节变量块以及 5.1 开头的 `source`、`LW_PROFILER`、
 `LW_PROFILE_TOOL`、`LW_POLICY_ROOT` 和 `LW_PROFILE_DIR` 赋值，再执行以下命令；
 确认字符串必须逐字匹配：
@@ -168,6 +228,20 @@ python3 "$LW_PROFILE_TOOL" collect-hardware \
     --realtime-priority 0 \
     --confirmation I_CONFIRM_LW_IS_SUSPENDED_AND_MOTORS_MUST_REMAIN_DISABLED
 ```
+
+`collect-hardware` 还支持以下可选设置：
+
+| 参数 | 默认值 | 约束 |
+| --- | --- | --- |
+| `--right-port` | `/dev/ttyLegRight` | 右电机板串口 |
+| `--left-port` | `/dev/ttyLegLeft` | 左电机板串口 |
+| `--imu-topic` | `/imu` | 独立 AHRS 驱动的原始 IMU 话题 |
+| `--ahrs-topic` | `/euler_angles` | 独立 AHRS 驱动的欧拉角话题 |
+| `--require-realtime` | 关闭 | 只能与正数 `--realtime-priority` 同时使用 |
+
+只有在稳定设备别名或话题配置已单独评审、且测量对象与最终部署一致时，
+才能追加端口或话题覆盖参数。`--duration-seconds` 必须为正数，默认 60；
+`--cpu` 必须是 `-1` 或非负整数，`--realtime-priority` 必须是非负整数。
 
 执行 `collect-hardware` 的整个测算过程中，程序不会使能电机；唯一允许进入两个
 电机板串口的命令是 `motors_disable=true`。它先完成双侧初始失能写入，再启动
@@ -194,8 +268,9 @@ MAX_SAFE_CONTROL_GAP_MS=REPLACE_WITH_REVIEWED_VALUE
         "$MAX_SAFE_TRUSTED_IMU_TIMEOUT_MS" \
         "$MAX_SAFE_IMU_AHRS_PAIR_AGE_MS" \
         "$MAX_SAFE_CONTROL_GAP_MS"; do
-        if [[ ! "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-            echo "四个 max-safe 值必须由安全负责人填写为非负数" >&2
+        if [[ ! "$value" =~ ^[0-9]+([.][0-9]+)?$ \
+              || "$value" =~ ^0+([.]0+)?$ ]]; then
+            echo "四个 max-safe 值必须由安全负责人填写为有限正数" >&2
             exit 2
         fi
     done
@@ -211,6 +286,11 @@ MAX_SAFE_CONTROL_GAP_MS=REPLACE_WITH_REVIEWED_VALUE
         --minimum-hardware-samples 1000
 )
 ```
+
+`--reports` 接受一个或多个报告，但本流程要求同一部署的全部 host 报告和
+一份 hardware 报告。四个 `--max-safe-*-ms` 在程序接口中可省略，但本实机
+候选评审流程要求全部填写为由安全负责人确定的有限正数。
+`--minimum-hardware-samples` 必须是正整数，默认 1000；输出文件不得已经存在。
 
 `candidate-review.json` 仅供评审。不得把它直接覆盖到当前部署包。需要采用候选时：
 
@@ -238,6 +318,28 @@ MAX_SAFE_CONTROL_GAP_MS=REPLACE_WITH_REVIEWED_VALUE
 ```bash
 PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py
 ```
+
+真机 launch 只提供两个项目自定义参数：
+
+| 参数 | 默认值 | 用途 |
+| --- | --- | --- |
+| `enable_keyboard:=<boolean>` | `true` | 只接受 `true`/`false`；是否从控制终端读取真机键盘 |
+| `enable_debug_publisher:=<boolean>` | `false` | 只接受 `true`/`false`；是否创建 250 Hz `/LW_joint_states` 调试 publisher |
+
+无交互终端的 systemd、容器或后台运行必须显式关闭键盘：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py enable_keyboard:=false
+```
+
+关闭键盘后必须事先准备独立可控恢复方式、可靠机械支撑和物理急停。只有受控
+短时调试才启用 publisher：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py enable_debug_publisher:=true
+```
+
+调试结束后应恢复默认关闭。两个参数可同时指定。
 
 必须保留 `PYTHONDONTWRITEBYTECODE=1`，否则 Python 可能在清单约束的生产 launch
 目录生成 `__pycache__`，完整性检查会安全拒绝启动。正常 launch 会访问真实

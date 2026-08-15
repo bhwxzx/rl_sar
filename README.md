@@ -82,6 +82,18 @@ source install/setup.bash
 ros2 run rl_sar rl_sim_LW
 ```
 
+High-rate Sim2Sim plot telemetry is disabled by default. Enable the existing
+`/LW_joint_states` payload at 100 Hz with `--enable-plot`, or select an integer
+rate from 1 through 200 Hz:
+
+```bash
+ros2 run rl_sar rl_sim_LW --enable-plot --plot-rate-hz 50
+```
+
+`--plot-rate-hz` requires `--enable-plot`; invalid or conflicting values fail
+startup instead of being ignored. Use 50 Hz for routine visualization, 100 Hz
+for normal diagnostics, and reserve 200 Hz for short control-cycle analysis.
+
 Optional TorchScript actuator models can be enabled with:
 
 ```bash

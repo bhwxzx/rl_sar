@@ -119,6 +119,17 @@ source install/setup.bash
 ros2 run rl_sar rl_sim_LW
 ```
 
+Sim2Sim 高频绘图遥测默认关闭。使用 `--enable-plot` 可按默认 100 Hz 恢复
+`/LW_joint_states`，也可以指定 1–200 Hz 的整数频率：
+
+```bash
+ros2 run rl_sar rl_sim_LW --enable-plot --plot-rate-hz 50
+```
+
+`--plot-rate-hz` 必须与 `--enable-plot` 同时使用；无效或冲突的频率会让启动明确
+失败。常规观察建议 50 Hz，普通诊断使用默认 100 Hz，200 Hz 仅用于短时逐控制
+周期分析。
+
 仿真器加载 `src/rl_sar_zoo/LW_description/mjcf/scene.xml`。terrain 场景与高度图
 位于同一已跟踪包中，并由无界面的 MuJoCo 模型加载测试覆盖。
 

@@ -43,7 +43,13 @@ bool LWOperatorModeHasProgress(LWOperatorMode mode)
 // // ============================================================================
 
 RL_Real::RL_Real(int argc, char **argv)
+    : plot_configuration_(ParseLWSimPlotConfiguration(argc, argv))
 {
+    if (plot_configuration_.enabled)
+    {
+        plot_snapshot_ =
+            std::make_unique<LWSnapshotBuffer<SimDebugSnapshot>>();
+    }
     runtime_core_.bind(
         *this,
         [this](const LWSafetyDecision& decision, const std::string& reason)
@@ -226,14 +232,19 @@ RL_Real::RL_Real(int argc, char **argv)
     this->operator_status_timer_ = ros2_node->create_wall_timer(
         100ms,
         std::bind(&RL_Real::OperatorStatusCallback, this));
-#ifdef PLOT
-    this->jointstate_plot_publisher_ = ros2_node->create_publisher<sensor_msgs::msg::JointState>(
-        "/LW_joint_states", rclcpp::SystemDefaultsQoS()
-    );
-    this->timer_ = ros2_node->create_wall_timer(
-        2ms, std::bind(&RL_Real::jointstate_plot_callback, this)
-    );
-#endif
+    if (plot_configuration_.enabled)
+    {
+        this->jointstate_plot_publisher_ =
+            ros2_node->create_publisher<sensor_msgs::msg::JointState>(
+                "/LW_joint_states",
+                rclcpp::SystemDefaultsQoS());
+        this->plot_timer_ = ros2_node->create_wall_timer(
+            LWSimPlotPeriod(plot_configuration_),
+            std::bind(&RL_Real::jointstate_plot_callback, this));
+        std::cout << LOGGER::INFO
+                  << "[Sim2Sim] Plot publishing enabled: topic=/LW_joint_states, rate="
+                  << plot_configuration_.rate_hz << " Hz" << std::endl;
+    }
 #ifdef CSV_LOGGER
     this->CSVInit(this->robot_name);
 #endif
@@ -280,8 +291,12 @@ void RL_Real::RefreshMuJoCoPointersLocked() noexcept
 
 void RL_Real::jointstate_plot_callback(void)
 {
+    if (!plot_snapshot_ || !jointstate_plot_publisher_)
+    {
+        return;
+    }
     SimDebugSnapshot snapshot;
-    if (!debug_snapshot_.read(snapshot))
+    if (!plot_snapshot_->read(snapshot))
     {
         return;
     }
@@ -583,29 +598,33 @@ void RL_Real::disable_lw_robot(void)
 
 void RL_Real::RobotControl()
 {
-    runtime_core_.runControlCycle(
-        LWControlCycleHooks{
-            [this]()
-            {
-                ApplyPendingInput();
-                ApplyJoystickFaultGate();
-            },
-            [this]() { KeyboardInterface(); },
-            []() { return true; },
-            []() { return true; },
-            [this]() { ApplySimulationControls(); },
-            [this]() { UpdateActuatorNetwork(); },
-            [this]()
-            {
-                debug_snapshot_.publish(
-                    SimDebugSnapshot{
-                        robot_state,
-                        robot_command,
-                        {control.x,
-                         control.y,
-                         control.yaw,
-                         control.gait_frequency}});
-            }});
+    LWControlCycleHooks hooks{
+        [this]()
+        {
+            ApplyPendingInput();
+            ApplyJoystickFaultGate();
+        },
+        [this]() { KeyboardInterface(); },
+        []() { return true; },
+        []() { return true; },
+        [this]() { ApplySimulationControls(); },
+        [this]() { UpdateActuatorNetwork(); },
+        {}};
+    if (plot_snapshot_)
+    {
+        hooks.after_command_delivery = [this]()
+        {
+            plot_snapshot_->publish(
+                SimDebugSnapshot{
+                    robot_state,
+                    robot_command,
+                    {control.x,
+                     control.y,
+                     control.yaw,
+                     control.gait_frequency}});
+        };
+    }
+    runtime_core_.runControlCycle(hooks);
 }
 
 void RL_Real::ApplySimulationControls()

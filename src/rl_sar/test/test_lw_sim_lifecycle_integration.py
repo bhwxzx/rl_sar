@@ -6,6 +6,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SIM_SOURCE = ROOT / "src" / "rl_sim_LW.cpp"
+SIM_HEADER = ROOT / "include" / "rl_sim_LW.hpp"
 MUJOCO_UTILS = (
     ROOT / "library" / "thirdparty" / "mujoco_simulate" / "mujoco_utils.hpp"
 )
@@ -137,6 +138,69 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
         self.assertNotIn("POLICY_DIR", actuator_block)
         self.assertIn("Loading leg actuator model:", actuator_block)
         self.assertIn("Loading foot actuator model:", actuator_block)
+
+    def test_plot_publishing_is_explicit_and_operator_status_is_independent(
+        self,
+    ) -> None:
+        source = SIM_SOURCE.read_text(encoding="utf-8")
+        header = SIM_HEADER.read_text(encoding="utf-8")
+        constructor = source[
+            source.index("RL_Real::RL_Real(") : source.index("RL_Real::~RL_Real()")
+        ]
+        control = source[
+            source.index("void RL_Real::RobotControl()") : source.index(
+                "void RL_Real::ApplySimulationControls()"
+            )
+        ]
+        callback = source[
+            source.index("void RL_Real::jointstate_plot_callback") : source.index(
+                "void RL_Real::OperatorStatusCallback()"
+            )
+        ]
+
+        self.assertNotIn("#define PLOT", header)
+        self.assertNotIn("#ifdef PLOT", source)
+        self.assertNotIn("matplotlibcpp", header)
+        self.assertNotIn("loop_plot", header)
+        self.assertIn(
+            "std::unique_ptr<LWSnapshotBuffer<SimDebugSnapshot>> plot_snapshot_",
+            header,
+        )
+        self.assertIn(
+            "plot_configuration_(ParseLWSimPlotConfiguration(argc, argv))",
+            constructor,
+        )
+        allocation = constructor.index("plot_snapshot_ =")
+        allocation_guard = constructor.rfind(
+            "if (plot_configuration_.enabled)", 0, allocation
+        )
+        self.assertGreaterEqual(allocation_guard, 0)
+
+        operator_timer = constructor.index("this->operator_status_timer_")
+        publisher = constructor.index("this->jointstate_plot_publisher_")
+        plot_guard = constructor.rfind(
+            "if (plot_configuration_.enabled)", 0, publisher
+        )
+        self.assertLess(operator_timer, plot_guard)
+        self.assertLess(plot_guard, publisher)
+        self.assertIn('"/LW_joint_states"', constructor[publisher:])
+        self.assertIn("LWSimPlotPeriod(plot_configuration_)", constructor[publisher:])
+
+        self.assertIn("if (plot_snapshot_)", control)
+        self.assertIn("hooks.after_command_delivery =", control)
+        self.assertIn("plot_snapshot_->publish(", control)
+        self.assertNotIn("debug_snapshot_", source)
+
+        self.assertIn("plot_snapshot_->read(snapshot)", callback)
+        self.assertIn("jointstate_plot_publisher_->publish(msg)", callback)
+        for payload_name in (
+            "right_hip_now",
+            "right_hip_target",
+            "l_foot_x",
+            "cmd_vel_x",
+            "base_q_w",
+        ):
+            self.assertIn(payload_name, callback)
 
     def test_actuator_network_and_mujoco_torques_are_transactional(self) -> None:
         source = SIM_SOURCE.read_text(encoding="utf-8")

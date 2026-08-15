@@ -35,6 +35,44 @@
 
 ---
 
+## [LRN-20260815-001] correction
+
+**Logged**: 2026-08-15T13:30:22+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: docs
+
+### Summary
+新增运行参数时必须同步检查完整说明、README 和面向操作者的快速开始文档。
+
+### Details
+LW-041 已在中英文 README 和完整编译部署说明中记录 `--enable-plot`
+与 `--plot-rate-hz`，但遗漏了实际 Sim2Sim 交付流程直接引用的
+`docs/LW_QUICK_START_CN.md`。只核对主 README 和详细文档不足以保证
+操作者能在标准成功路径中发现新参数。
+
+### Suggested Action
+每次新增或修改用户可见的运行时参数，在完成前使用参数名全局检索，
+并逐项核对 README、完整使用说明、快速开始及其它实际操作入口的命令、
+默认值、取值范围和组合约束。
+
+### Metadata
+- Source: user_feedback
+- Related Files: docs/LW_QUICK_START_CN.md, docs/LW_BUILD_DEPLOYMENT_CN.md, README.md, README_CN.md
+- Tags: LW, CLI, documentation, quick-start, synchronization
+- Pattern-Key: docs.runtime_parameter_operator_entrypoints
+- Recurrence-Count: 1
+- First-Seen: 2026-08-15
+- Last-Seen: 2026-08-15
+
+### Resolution
+- **Resolved**: 2026-08-15T13:30:22+08:00
+- **Commit/PR**: 本提交
+- **Notes**: 已在 LW 快速开始的 Sim2Sim 标准流程中补充默认关闭、
+  `--enable-plot`、`--plot-rate-hz`、1–200 Hz 范围及错误参数拒绝语义。
+
+---
+
 ## [LRN-20260811-003] correction
 
 **Logged**: 2026-08-11T17:57:11+08:00
