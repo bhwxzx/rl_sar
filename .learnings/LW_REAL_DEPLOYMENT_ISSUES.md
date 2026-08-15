@@ -1271,7 +1271,8 @@ remove generic simulation/core facilities needed for future robot additions.
   Non-LW policies, FSMs, real adapters, SDKs/submodules, examples, inactive build
   wiring, and the legacy multi-robot zoo downloader were removed. Generic FSM,
   inference, loop, control, MuJoCo, joystick, message, and controller extension
-  infrastructure remains documented in `docs/LW_REPOSITORY_SCOPE.md`.
+  infrastructure remains documented in `README.md`, and the retained LW-only
+  boundary is continuously enforced by `test_lw_repository_scope.py`.
 - `src/rl_sar_zoo/LW_description` is now ordinary parent-repository content,
   based on zoo commit `349d14a700ecf248b3cdbec5e7bac30882b66e62` with upstream and license
   provenance recorded. Its 22-file SHA-256 manifest passes, no nested Git

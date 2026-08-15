@@ -1,190 +1,204 @@
 # rl_sar — LW
 
-`rl_sar` currently supports the LW robot for reinforcement-learning policy
-Sim2Sim verification and physical deployment. The repository keeps generic
-FSM, inference, control-loop, and simulation interfaces so another robot can
-be added deliberately without restoring legacy robot implementations.
-
-[中文文档](README_CN.md)
+`rl_sar` 当前仅支持 LW 机器人，用于强化学习策略的 Sim2Sim 验证与实机部署。
+仓库保留通用 FSM、推理、控制循环和仿真接口，以便以后在明确扩大产品范围时添加
+新机器人，而无需恢复旧机器人实现。
 
 > [!CAUTION]
-> Real-robot operation can cause falls, equipment damage, or injury. Complete
-> the documented Sim2Sim and deployment checks first, use mechanical support
-> and a physical emergency stop, and keep an exclusion area around the robot.
+> 实机运行可能造成机器人跌倒、设备损坏或人员受伤。必须先完成文档规定的
+> Sim2Sim 和部署验收，准备机械支撑与物理急停，并保持安全隔离区域。
 
-## Current support
+## 当前支持范围
 
-| Robot | Policy runtime | Sim2Sim | Real robot |
+| 机器人 | 策略运行时 | Sim2Sim | 实机 |
 |---|---|---|---|
 | LW | ONNX Runtime | MuJoCo / `rl_sim_LW` | ROS 2 / `rl_real_LW` |
 
-The four tracked LW policies are:
+当前跟踪四套正式 LW 策略：
 
 - `policy/LW/robot_lab/leg_loco`
 - `policy/LW/robot_lab/wheel_loco`
 - `policy/LW/robot_lab/leg_to_wheel`
 - `policy/LW/robot_lab/wheel_to_leg`
 
-## Checkout and dependencies
+## 获取代码与依赖
 
-Clone with the remaining joystick submodule:
+克隆仓库时初始化保留的手柄子模块：
 
 ```bash
 git clone --recursive https://github.com/bhwxzx/rl_sar.git
 cd rl_sar
 ```
 
-The LW robot description is tracked directly in
-`src/rl_sar_zoo/LW_description`; builds do not download a separate multi-robot
-zoo. `scripts/validate_lw_description.sh` verifies its content manifest.
+LW 描述已直接跟踪在 `src/rl_sar_zoo/LW_description` 中；构建过程不会下载
+外部多机器人 zoo。`scripts/validate_lw_description.sh` 会校验其内容清单。
 
-The supported development path uses ROS 2 Foxy or Humble on Linux. Core build
-dependencies include a C++17 compiler, CMake, yaml-cpp, Eigen, Boost, TBB,
-OpenSSL, GLFW, ROS 2, and the inference/MuJoCo runtimes managed by the project
-setup scripts.
+开发环境支持 Linux 上的 ROS 2 Foxy/Humble。主要依赖包括 C++17 编译器、
+CMake、yaml-cpp、Eigen、Boost、TBB、OpenSSL、GLFW、ROS 2，以及由项目脚本
+管理的推理与 MuJoCo 运行时。
 
-Inference archives are restricted to the reviewed Linux platform/version
-matrix in `scripts/inference_runtime_archives.json`. The complete archive
-SHA-256, extracted candidate structure, and ELF architecture must pass before
-installation. A valid existing runtime with missing or different provenance is
-preserved and requires an explicit reviewed upgrade; Python `torch` and
-`onnxruntime` packages are independent of this project runtime directory.
+首次执行 `./build.sh` 时会检查 Debian/Ubuntu 系统包、当前 ROS 发行版组件、
+推理运行时和仿真运行时。缺少系统包时会通过 `sudo apt-get` 自动安装，缺少
+推理运行时或 MuJoCo 时会由项目脚本下载；因此首次构建需要网络并可能提示输入
+sudo 密码。普通 x86_64 开发机构建会准备 LibTorch 和 ONNX Runtime；Jetson
+真机构建只准备实际使用的 ONNX Runtime。可用下面的命令只查看系统包清单：
 
-## Development build
+推理下载器只接受仓库清单固定的 Linux 平台、版本、官方 URL 和 SHA-256，归档
+摘要、解压候选结构及 ELF 架构全部通过后才安装。已有的有效运行时若版本或来源
+不匹配会被保留并使构建停止，不会静默升级或降级；系统 Python 环境中的
+`torch`/`onnxruntime` 不属于该目录，不受影响。
 
-Source ROS 2 and build from the repository root:
+这里的 LibTorch 是 C++ 版 PyTorch，供 Sim2Sim 可选的
+`--use_actuator_net` 加载 `.pt` 执行器模型。训练脚本使用的 Python `torch`
+不是编译依赖，不由 `build.sh` 通过 pip 修改用户 Python 环境。启用执行器网络时，
+两个模型只会从 `--policy-root` 选定目录下的
+`LW/robot_lab/motors/{leg,foot}_actuator_net.pt` 加载；缺失或契约不兼容会使
+Sim2Sim 启动失败，不会回退到编译期策略目录。
+
+```bash
+ROS_DISTRO=humble scripts/install_build_dependencies.sh --print-packages
+```
+
+## 开发构建
+
+在仓库根目录加载 ROS 2 后构建：
 
 ```bash
 source /opt/ros/humble/setup.bash
 ./build.sh
 ```
 
-The build validates the vendored LW description locally; it never clones or
-updates robot descriptions from the network.
+构建只校验本地已跟踪的 LW 描述，不会从网络克隆或更新机器人描述。
+指定包时会自动包含其工作区依赖，例如 `./build.sh fdilink_ahrs` 会先构建
+`serial`，`./build.sh rl_sar` 会包含其声明的 IMU/串口依赖。
 
-Before committing maintained C++ changes, run the warning-clean validation:
+提交维护代码前应运行严格警告门禁：
 
 ```bash
 scripts/validate_lw_strict_build.sh
 ```
 
-It performs a fresh Debug build and the full CTest suite with
-`-Wall -Wextra -Wpedantic -Werror` on maintained LW targets. Vendored MuJoCo,
-joystick, and hardware-SDK sources and headers are isolated from this warning
-policy; their diagnostics cannot hide failures in maintained code.
+脚本会创建临时 Debug 构建目录，以
+`-Wall -Wextra -Wpedantic -Werror` 编译全部维护目标并运行完整 CTest，结束后
+清理临时目录。vendored MuJoCo、joystick 和硬件 SDK 源码/头文件使用独立目标与
+系统头边界，不会用第三方警告掩盖维护代码错误。
+
+### Jetson 构建
+
+默认不需要手工声明平台。构建入口、推理运行时脚本和 CMake 会在
+Linux/aarch64 上检查 `/etc/nv_tegra_release`、`nvidia-l4t-core`、Tegra
+系统库和 Jetson CUDA target，并输出统一的 `Jetson mode` 结果。建议真机使用
+JetPack 6.2.2、Ubuntu 22.04 和 ROS 2 Humble。
+
+LW 的 Jetson 真机和正式部署路径是 ONNX-only：首次构建自动下载 Linux
+aarch64 ONNX Runtime，不安装或链接 PyTorch/LibTorch，也不启用 CUDA/TensorRT
+推理。下载脚本和 CMake 会读取核心动态库的 ELF 架构；AArch64 设备会拒绝
+x86-64 库，x86-64 主机也会拒绝 AArch64 库。因此不能把开发机的
+`library/inference_runtime` 复制到 Jetson，应由 Jetson 自己运行 `./build.sh`
+准备运行时。
+
+只有自动检测所需的系统标志不可见时才应显式覆盖：
+
+```bash
+export IS_JETSON=true   # 强制按 Jetson 构建，只允许原生 Linux/aarch64
+./build.sh
+```
+
+需要在 aarch64 非 Jetson 主机上明确禁用时可设置
+`IS_JETSON=false`。变量只能使用 `true` 或 `false`；普通构建应保持未设置并
+使用自动检测。
 
 ## Sim2Sim
 
-After building and sourcing the workspace:
+构建并加载工作区后运行：
 
 ```bash
 source install/setup.bash
 ros2 run rl_sar rl_sim_LW
 ```
 
-High-rate Sim2Sim plot telemetry is disabled by default. Enable the existing
-`/LW_joint_states` payload at 100 Hz with `--enable-plot`, or select an integer
-rate from 1 through 200 Hz:
+Sim2Sim 高频绘图遥测默认关闭。使用 `--enable-plot` 可按默认 100 Hz 恢复
+`/LW_joint_states`，也可以指定 1–200 Hz 的整数频率：
 
 ```bash
 ros2 run rl_sar rl_sim_LW --enable-plot --plot-rate-hz 50
 ```
 
-`--plot-rate-hz` requires `--enable-plot`; invalid or conflicting values fail
-startup instead of being ignored. Use 50 Hz for routine visualization, 100 Hz
-for normal diagnostics, and reserve 200 Hz for short control-cycle analysis.
+`--plot-rate-hz` 必须与 `--enable-plot` 同时使用；无效或冲突的频率会让启动明确
+失败。常规观察建议 50 Hz，普通诊断使用默认 100 Hz，200 Hz 仅用于短时逐控制
+周期分析。
 
-Optional TorchScript actuator models can be enabled with:
+仿真器加载 `src/rl_sar_zoo/LW_description/mjcf/scene.xml`。terrain 场景与高度图
+位于同一已跟踪包中，并由无界面的 MuJoCo 模型加载测试覆盖。
 
-```bash
-ros2 run rl_sar rl_sim_LW \
-    --policy-root /absolute/path/to/policy \
-    --use_actuator_net
-```
+## 实机部署
 
-Both actuator models are resolved exclusively below the selected policy root
-at `LW/robot_lab/motors/{leg,foot}_actuator_net.pt`. Startup reports both
-resolved paths and fails if either model is missing, cannot load, or violates
-the expected six-input/one-output contract.
+标准成功路径见[《LW 快速部署与实机启动指南》](docs/LW_QUICK_START_CN.md)；
+构建原理、发布包校验、部署机验收、安全边界、故障排查以及“先 Sim2Sim、后
+实机”的权威说明见
+[《LW 编译与部署使用说明》](docs/LW_BUILD_DEPLOYMENT_CN.md)。
 
-The simulator loads
-`src/rl_sar_zoo/LW_description/mjcf/scene.xml`. The terrain scene and its
-height map are tracked in the same package and are covered by a headless model
-loading test.
-
-## Real-robot deployment
-
-Use the Chinese [quick-start guide](docs/LW_QUICK_START_CN.md) for the standard
-deployment path. Build rationale, bundle verification, target-host acceptance,
-operator safety behavior, troubleshooting, and the Sim2Sim-before-real gate are
-defined by the authoritative
-[full deployment guide](docs/LW_BUILD_DEPLOYMENT_CN.md).
-
-The ROS 2 launch entry point is:
+ROS 2 启动入口为：
 
 ```bash
 source install/setup.bash
 PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py
 ```
 
-Keep `PYTHONDONTWRITEBYTECODE=1`: the verified production launch directory is
-an exact manifest-bound file set and must not acquire an unverified bytecode
-cache.
+必须保留 `PYTHONDONTWRITEBYTECODE=1`：正式 launch 目录是清单绑定的精确文件
+集合，不能在启动时生成未经验证的字节码缓存。
 
-Real-robot debug telemetry is disabled by default. For controlled diagnostics,
-enable `/LW_joint_states` at the default 50 Hz or choose an integer rate from
-1 through 200 Hz:
+该入口默认从控制终端 `/dev/tty` 启用真机键盘；数字键 `9` 可按 FSM 当前状态
+请求 `GetDown`，且手柄断联锁存不会清除该键盘通道。无交互终端的受控部署必须
+显式使用 `enable_keyboard:=false`，并按部署文档准备替代恢复和机械支撑措施。
+当前键盘、手柄、速度摇杆、状态前提和 Sim2Sim 专用按键的完整说明见
+[当前键盘和手柄映射](docs/LW_BUILD_DEPLOYMENT_CN.md#当前键盘和手柄映射)。
+
+真机 `/LW_joint_states` 调试遥测默认关闭。受控调试时可按默认 50 Hz 启用，或用
+`debug_publish_rate_hz:=<1–200 的整数>` 指定频率：
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py \
     enable_debug_publisher:=true debug_publish_rate_hz:=50
 ```
 
-The control loop never waits for this optional consumer; contended or
-superseded debug samples may be dropped, and unchanged source frames are not
-republished with a fresh timestamp.
+控制循环不会等待该可选消费者；发生争用或新帧覆盖时允许丢弃调试样本，且不会
+给未变化的控制源帧重复刷新时间戳。
 
-Do not start the real node without completing the hardware-side checks in the
-deployment guide.
+未完成部署文档中的硬件侧检查时，不得启动实机节点。
 
-## Repository boundaries
+## 仓库边界
 
-- `policy/LW/`: current policy configurations and models.
-- `src/rl_sar/fsm_robot/fsm_LW.hpp`: current robot FSM and factory.
-- `src/rl_sar/src/rl_real_LW.cpp`: real-robot entry point.
-- `src/rl_sar/src/rl_sim_LW.cpp`: LW Sim2Sim entry point.
-- `src/rl_sar/library/thirdparty/robot_sdk/lfr/LW_sdk/`: LW hardware SDK.
-- `src/rl_sar_zoo/LW_description/`: vendored LW URDF, MJCF, meshes, and terrain.
-- `src/rl_sar/library/core/`: shared control, inference, FSM, loop, and safety
-  infrastructure retained for bounded future extension.
+- `policy/LW/`：当前策略配置和模型。
+- `src/rl_sar/fsm_robot/fsm_LW.hpp`：当前机器人 FSM 与工厂。
+- `src/rl_sar/src/rl_real_LW.cpp`：实机入口。
+- `src/rl_sar/src/rl_sim_LW.cpp`：LW Sim2Sim 入口。
+- `src/rl_sar/library/thirdparty/robot_sdk/lfr/LW_sdk/`：LW 硬件 SDK。
+- `src/rl_sar_zoo/LW_description/`：已内置的 LW URDF、MJCF、mesh 和 terrain。
+- `src/rl_sar/library/core/`：为未来受控扩展保留的通用控制、推理、FSM、循环和
+  安全基础设施。
 
-The detailed remove/retain inventory is recorded in
-[docs/LW_REPOSITORY_SCOPE.md](docs/LW_REPOSITORY_SCOPE.md).
+当前仓库边界由 `lw_repository_scope` 自动测试持续校验。
 
-## Adding a future robot
+## 添加未来机器人
 
-Adding a robot is an explicit product-scope change. A complete addition should:
+添加机器人属于明确的产品范围变更，一次完整扩展应当：
 
-1. add one `policy/<robot>/` tree with validated configuration and versioned
-   models;
-2. add a reproducible `<robot>_description` package with provenance and no
-   nested Git metadata;
-3. add `fsm_<robot>.hpp`, register its factory with `REGISTER_FSM_FACTORY`, and
-   include it from `fsm_all.hpp`;
-4. add a robot-specific real or simulation adapter without putting hardware
-   behavior in the generic FSM/SDK core;
-5. add only the required SDK dependencies and CMake targets;
-6. extend configuration, transition, safety, repository-scope, clean-build,
-   and deployment tests before declaring support.
+1. 新增一个 `policy/<robot>/` 树，并提供经过校验的配置和版本化模型；
+2. 新增可复现的 `<robot>_description` 包，记录来源且不得包含嵌套 Git 元数据；
+3. 新增 `fsm_<robot>.hpp`，使用 `REGISTER_FSM_FACTORY` 注册，并从
+   `fsm_all.hpp` 引入；
+4. 新增机器人专用实机或仿真适配层，不把硬件行为塞进通用 FSM/SDK 核心；
+5. 只增加该机器人实际需要的 SDK 依赖和 CMake 目标；
+6. 扩展配置、状态转换、安全、仓库范围、干净构建及部署测试后才能声明支持。
 
-## License and provenance
+## 许可证与来源
 
-The parent repository is licensed under Apache-2.0; see [LICENSE](LICENSE).
-The vendored LW description records its source repositories, imported commit,
-package license declaration, and preserved local changes in
-[src/rl_sar_zoo/README.md](src/rl_sar_zoo/README.md).
+父仓库采用 Apache-2.0，见 [LICENSE](LICENSE)。LW 描述的来源仓库、导入提交、
+包内许可证声明和保留的本地修改记录在
+[src/rl_sar_zoo/README.md](src/rl_sar_zoo/README.md)。
 
-The project retains the upstream generic framework attribution to
-[`fan-ziqi/rl_sar`](https://github.com/fan-ziqi/rl_sar), the LW zoo fork at
-[`bhwxzx/rl_sar_zoo`](https://github.com/bhwxzx/rl_sar_zoo), and the joystick
-submodule from [`drewnoakes/joystick`](https://github.com/drewnoakes/joystick).
+项目保留对通用框架上游
+[`fan-ziqi/rl_sar`](https://github.com/fan-ziqi/rl_sar)、LW zoo 分支
+[`bhwxzx/rl_sar_zoo`](https://github.com/bhwxzx/rl_sar_zoo) 以及手柄子模块
+[`drewnoakes/joystick`](https://github.com/drewnoakes/joystick) 的来源说明。

@@ -73,6 +73,46 @@ LW-041 已在中英文 README 和完整编译部署说明中记录 `--enable-plo
 
 ---
 
+## [LRN-20260815-002] correction
+
+**Logged**: 2026-08-15T14:26:04+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+当前项目只面向中文使用者，根 README 和项目操作文档无需维持英文副本。
+
+### Details
+在评估是否用中文替换根 `README.md` 时，曾默认建议保留英文版以服务国际使用
+者。用户明确补充：当前项目只针对中文使用者，且 `docs/` 中的项目操作文档均
+为中文。因此正确的仓库约定是以中文 `README.md` 作为唯一根入口；不应仅为
+假设的英文受众继续维护重复的英文 README。迁移时仍需同步现有
+`README_CN.md` 引用、语言切换链接和构建测试参数，避免悬空路径或重复内容。
+
+### Suggested Action
+将现有中文 README 内容迁移到 `README.md`，删除英文版和不再需要的
+`README_CN.md`，同步更新文档及测试中对 `README_CN.md` 的引用，并验证仓库
+不再存在旧文件名或失效的语言切换链接。
+
+### Metadata
+- Source: user_feedback
+- Related Files: README.md, README_CN.md, docs/LW_BUILD_DEPLOYMENT_CN.md, src/rl_sar/CMakeLists.txt
+- Tags: documentation, Chinese, audience, README, localization
+- Pattern-Key: docs.project_audience_chinese_only
+- Recurrence-Count: 1
+- First-Seen: 2026-08-15
+- Last-Seen: 2026-08-15
+
+### Resolution
+- **Resolved**: 2026-08-15T14:26:04+08:00
+- **Commit/PR**: 本提交
+- **Notes**: 中文内容已迁移为唯一根 `README.md`，英文根 README 和重复的
+  `README_CN.md` 已移除；部署文档及构建测试引用已同步，旧文件名和语言切换
+  链接全局检查无残留，相关构建与测试通过。
+
+---
+
 ## [LRN-20260811-003] correction
 
 **Logged**: 2026-08-11T17:57:11+08:00

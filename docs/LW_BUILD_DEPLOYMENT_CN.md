@@ -126,7 +126,7 @@ ros2 pkg prefix rl_sar
 `fdilink_ahrs` 或 `rl_sar` 时，colcon 会先构建其声明的 `serial` 和 IMU
 依赖。首次运行会自动检查并安装缺失的 Debian/Ubuntu、ROS、推理和仿真依赖，
 可能请求 sudo 权限和网络访问；具体清单见
-[README_CN.md](../README_CN.md#获取代码与依赖)。
+[README.md](../README.md#获取代码与依赖)。
 
 `build.sh` 的项目参数如下，可用 `./build.sh --help` 查看同一清单：
 
@@ -325,7 +325,7 @@ bash "$RL_SAR_ROOT/scripts/validate_inference_runtime.sh" \
 LibTorch 运行时，不能用它替代正式部署前的 ONNX 校验。
 
 还需要保证 `git`、`cmake`、`colcon`、C++ 编译器及
-[README_CN.md](../README_CN.md#获取代码与依赖) 中的依赖可用。
+[README.md](../README.md#获取代码与依赖) 中的依赖可用。
 
 > [!NOTE]
 > 正式部署清单会校验 LW 可执行文件、模型、配置，以及项目自带的

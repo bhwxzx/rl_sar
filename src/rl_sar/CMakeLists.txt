@@ -779,7 +779,7 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/test/test_build_workflow.py
                     ${PROJECT_ROOT_DIR}/build.sh
                     ${PROJECT_ROOT_DIR}/build_LW.sh
-                    ${PROJECT_ROOT_DIR}/README_CN.md
+                    ${PROJECT_ROOT_DIR}/README.md
                     ${PROJECT_ROOT_DIR}/docs/LW_BUILD_DEPLOYMENT_CN.md
                     ${PROJECT_ROOT_DIR}/docs/LW_QUICK_START_CN.md
                     ${PROJECT_ROOT_DIR}/scripts/install_build_dependencies.sh
