@@ -230,6 +230,11 @@ RL_Real::RL_Real(
         ros2_node->declare_parameter<bool>(
             "enable_debug_publisher",
             false);
+    const std::int64_t debug_publish_rate_hz =
+        ros2_node->declare_parameter<std::int64_t>(
+            "debug_publish_rate_hz",
+            LW_DEBUG_DEFAULT_RATE_HZ);
+    (void)LWDebugPublishPeriod(debug_publish_rate_hz);
     this->debug_publisher_ = LWDebugPublisher::CreateIfEnabled(
         enable_debug_publisher,
         ros2_node,
@@ -239,11 +244,12 @@ RL_Real::RL_Real(
             this->params.Get<std::vector<int>>("wheel_indices"),
             this->params.Get<std::vector<float>>("rl_kp"),
             this->params.Get<std::vector<float>>("rl_kd"),
-            4ms});
+            debug_publish_rate_hz});
     if (this->debug_publisher_)
     {
         std::cout << LOGGER::INFO
-                  << "[Debug] Publishing /LW_joint_states at 250 Hz"
+                  << "[Debug] Publishing /LW_joint_states at "
+                  << debug_publish_rate_hz << " Hz"
                   << std::endl;
     }
 #ifdef CSV_LOGGER

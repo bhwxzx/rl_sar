@@ -523,14 +523,15 @@ done
 PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py
 ```
 
-该 launch 只声明两个项目自定义参数：
+该 launch 只声明三个项目自定义参数：
 
 | 参数 | 默认值 | 详细边界 |
 | --- | --- | --- |
 | `enable_keyboard:=<boolean>` | `true` | 只接受 `true`/`false`；见下文“真机终端键盘” |
 | `enable_debug_publisher:=<boolean>` | `false` | 只接受 `true`/`false`；见下文“可选调试话题” |
+| `debug_publish_rate_hz:=<integer>` | `50` | 只接受 1–200；见下文“可选调试话题” |
 
-两个参数可同时指定。通过 `ros2 launch rl_sar rl_real_LW.launch.py --show-args`
+三个参数可同时指定。通过 `ros2 launch rl_sar rl_real_LW.launch.py --show-args`
 可只读核对当前部署包的声明和默认值，不会启动节点。
 
 必须保留 `PYTHONDONTWRITEBYTECODE=1`。正式部署只允许清单绑定的
@@ -685,15 +686,19 @@ AHRS 事件作为一次性授权，并只接受授权时效内紧随其后、角
 ### 可选调试话题
 
 正式启动默认不创建高频调试 publisher 或定时器，也不会在控制线程中复制调试
-快照。如需临时观察当前/目标关节、IMU 和速度指令，可显式启用 250 Hz 的
-`/LW_joint_states` 话题：
+快照。如需临时观察当前/目标关节、IMU 和速度指令，可显式启用默认 50 Hz 的
+`/LW_joint_states` 话题；`debug_publish_rate_hz` 只接受 1–200 的整数：
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py enable_debug_publisher:=true
+PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py \
+  enable_debug_publisher:=true debug_publish_rate_hz:=50
 ```
 
-该话题仅用于受控调试和绘图；每条消息使用同一个控制周期的完整快照，并在
-发布时刷新时间戳。调试结束后应恢复默认关闭状态，避免不必要的 ROS 发布负载。
+即使 publisher 关闭，频率参数仍会在 worker 启动前校验，但不会创建调试资源或
+复制快照。该话题仅用于受控调试和绘图；控制线程使用非阻塞交接，争用时丢弃
+调试样本。发布端只发布尚未发出的最新控制源帧，每条消息使用同一个控制周期的
+完整快照并在发布时刷新时间戳，不会把未变化的旧帧重新标记为新遥测。调试结束
+后应恢复默认关闭状态，避免不必要的 ROS 发布负载。
 
 ### 实机控制循环的默认保护行为
 

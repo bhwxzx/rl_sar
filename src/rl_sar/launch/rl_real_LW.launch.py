@@ -10,6 +10,7 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
 
     enable_debug_publisher = LaunchConfiguration('enable_debug_publisher')
+    debug_publish_rate_hz = LaunchConfiguration('debug_publish_rate_hz')
     enable_keyboard = LaunchConfiguration('enable_keyboard')
 
     fdilink_ahrs_launch = GroupAction(
@@ -31,6 +32,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'enable_debug_publisher': enable_debug_publisher,
+            'debug_publish_rate_hz': debug_publish_rate_hz,
             'enable_keyboard': enable_keyboard,
         }],
     )
@@ -44,7 +46,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'enable_debug_publisher',
             default_value='false',
-            description='Enable the 250 Hz /LW_joint_states debug publisher',
+            description='Enable the /LW_joint_states debug publisher',
+        ),
+        DeclareLaunchArgument(
+            'debug_publish_rate_hz',
+            default_value='50',
+            description='Debug publish rate in Hz (integer from 1 through 200)',
         ),
         fdilink_ahrs_launch,
         rl_real_LW_node,

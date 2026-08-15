@@ -40,7 +40,7 @@ LWDebugPublisherConfig makeConfig(const std::string& topic_name)
         {8, 9},
         std::vector<float>(10, 2.0f),
         std::vector<float>(10, 0.5f),
-        std::chrono::hours(1)};
+        1};
     config.topic_name = topic_name;
     return config;
 }
@@ -136,6 +136,32 @@ int main(int argc, char** argv)
 {
     try
     {
+        require(
+            LW_DEBUG_DEFAULT_RATE_HZ == 50,
+            "default debug publish rate changed");
+        require(
+            LWDebugPublishPeriod(1) == 1s,
+            "1 Hz debug publish period is incorrect");
+        require(
+            LWDebugPublishPeriod(50) == 20ms,
+            "50 Hz debug publish period is incorrect");
+        require(
+            LWDebugPublishPeriod(200) == 5ms,
+            "200 Hz debug publish period is incorrect");
+        for (const std::int64_t invalid_rate : {-1, 0, 201})
+        {
+            bool rejected = false;
+            try
+            {
+                (void)LWDebugPublishPeriod(invalid_rate);
+            }
+            catch (const std::invalid_argument&)
+            {
+                rejected = true;
+            }
+            require(rejected, "invalid debug publish rate was accepted");
+        }
+
         rclcpp::init(argc, argv);
         auto node = std::make_shared<rclcpp::Node>("test_lw_debug_publisher");
         const std::string topic_name =
@@ -144,7 +170,7 @@ int main(int argc, char** argv)
         auto disabled = LWDebugPublisher::CreateIfEnabled(false, node, {});
         require(!disabled, "disabled debug publisher was constructed");
         require(
-            node->count_publishers(topic_name) == 0,
+            node->count_publishers("/LW_joint_states") == 0,
             "disabled mode created a ROS publisher");
 
         std::vector<sensor_msgs::msg::JointState> messages;
@@ -162,9 +188,14 @@ int main(int argc, char** argv)
         require(enabled != nullptr, "enabled debug publisher was not constructed");
         require(!enabled->publishOnce(), "publisher emitted without a snapshot");
 
-        enabled->publishSnapshot(makeSnapshot(10.0f));
+        require(
+            enabled->publishSnapshot(makeSnapshot(10.0f)),
+            "first debug snapshot handoff failed");
         const auto first_before = node->get_clock()->now();
         require(enabled->publishOnce(), "first debug publish failed");
+        require(
+            !enabled->publishOnce(),
+            "unchanged debug snapshot was published more than once");
         const auto first_after = node->get_clock()->now();
         spinUntilReceived(node, messages, 1);
         verifyMessage(messages[0], 10.0f);
@@ -174,7 +205,9 @@ int main(int argc, char** argv)
             "first message timestamp was not refreshed at publish time");
 
         std::this_thread::sleep_for(2ms);
-        enabled->publishSnapshot(makeSnapshot(20.0f));
+        require(
+            enabled->publishSnapshot(makeSnapshot(20.0f)),
+            "second debug snapshot handoff failed");
         const auto second_before = node->get_clock()->now();
         require(enabled->publishOnce(), "second debug publish failed");
         const auto second_after = node->get_clock()->now();

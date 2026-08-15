@@ -133,6 +133,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 39 | LW-039 | P2 / low | resolved | Reject actuator-model symlinks and policy-root escapes |
 | 40 | LW-040 | P2 / low | resolved | Make the polymorphic RL base destruction contract safe |
 | 41 | LW-041 | P2 / low | resolved | Make high-rate Sim2Sim plot publishing explicitly opt-in |
+| 42 | LW-042 | P2 / medium | resolved | Make real debug telemetry nonblocking, source-fresh, and rate-bounded |
 
 ---
 
@@ -3363,6 +3364,106 @@ topic.
   通过。README、完整部署说明和快速开始文档中的 Plot 参数名称、默认值、
   范围和约束已交叉核对。未启动 MuJoCo GUI、ROS 节点、真机、串口或电机，
   用户未跟踪技能目录保持未修改。
+- **Remaining Follow-ups**: none
+
+---
+
+## [LW-042] Nonblocking, source-fresh real debug telemetry
+
+**Priority**: P2 / medium
+**Status**: resolved
+**Dependencies**: LW-007, LW-011, LW-014, LW-038
+
+### Problem
+
+The opt-in real-robot debug publisher is absent from the default control path,
+but its enabled path does not fully satisfy the nonblocking contract recorded
+for LW-014. The 200 Hz control callback calls `publishSnapshot()`, which uses
+the blocking `LWSnapshotBuffer::publish()` while the ROS timer reads through
+the same mutex. A preempted reader can therefore delay the control thread.
+
+The publisher timer is also fixed at 4 ms (250 Hz), faster than the 5 ms
+(200 Hz) source control cycle. The buffer carries no source sequence or capture
+time, and `publishOnce()` can read the same snapshot repeatedly while assigning
+a new publication timestamp each time. Consumers can consequently see repeated
+control data as apparently fresh 250 Hz samples, with avoidable ROS work during
+real-hardware debugging. The launch interface exposes only an enable switch,
+and the existing test drives `publishOnce()` manually with a one-hour timer, so
+it does not cover contention, duplicate suppression, or the production rate.
+
+### Evidence
+
+- `policy/LW/base.yaml:1-3`
+- `src/rl_sar/src/rl_real_LW.cpp:229-247`
+- `src/rl_sar/src/rl_real_LW.cpp:541-593`
+- `src/rl_sar/library/core/debug/lw_debug_publisher.cpp:137-160`
+- `src/rl_sar/library/core/safety/lw_runtime_sync.hpp:14-43`
+- `src/rl_sar/launch/rl_real_LW.launch.py:39-48`
+- `src/rl_sar/test/test_lw_debug_publisher.cpp:35-44`
+- `src/rl_sar/test/test_lw_debug_publisher.cpp:158-187`
+
+### Intended Scope
+
+- Add a documented integer ROS/launch parameter for the real debug publication
+  rate, defaulting to 50 Hz and accepting 1 through 200 Hz. Keep the existing
+  enable switch default off and report the effective topic/rate when enabled.
+- Make the control-side snapshot handoff strictly nonblocking; contention must
+  drop a debug snapshot rather than wait on a timer-held mutex.
+- Attach a monotonic source sequence (and capture-time metadata if needed) to
+  each accepted snapshot, and publish only a source frame newer than the last
+  published frame so an old sample is not restamped as new telemetry.
+- Preserve the existing `/LW_joint_states` topic, payload mapping, coherent
+  snapshot boundary, depth-one real-time publisher, and per-message timestamp.
+- Add focused configuration, contention, freshness, lifecycle, and launch tests
+  without starting a real node or accessing ROS hardware, serial ports, or
+  motors. Synchronize all operator-facing parameter documentation.
+
+### Acceptance Criteria
+
+- With real debug disabled, no debug publisher, timer, snapshot handoff, or
+  control-cycle copy exists, regardless of the configured inactive rate.
+- With real debug enabled, the 200 Hz control callback never waits for the debug
+  consumer; lock contention is observable only as a dropped debug sample.
+- The effective debug rate is explicitly configurable from 1 through 200 Hz,
+  defaults to 50 Hz, and invalid values fail startup before worker loops begin.
+- A timer callback publishes each accepted source sequence at most once; it does
+  not repeatedly restamp an unchanged control snapshot as fresh data.
+- The existing topic and payload remain compatible, and shared control, safety,
+  startup-disable, operator-status, and Sim2Sim behavior remain unchanged.
+
+### Resolution
+
+- **Resolved**: 2026-08-15T14:18:41+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 为真机 launch/ROS 节点新增默认 50 Hz、只接受 1–200
+  整数的 `debug_publish_rate_hz` 参数，并在任何 worker 启动前无条件校验；保持
+  `enable_debug_publisher` 默认关闭，关闭时不创建 publisher、timer 或快照交接，
+  也不在控制周期复制调试数据。启用时将控制侧快照交接改为 `tryPublish()`，锁
+  争用立即丢弃调试帧而不等待；成功交接的帧携带单调源序号，timer 只发布比上次
+  已发序号更新的最新帧，避免给未变化数据重复刷新时间戳。保留既有
+  `/LW_joint_states`、26 字段 payload、depth-one realtime publisher、完整快照
+  边界和发布时钟时间戳；Sim2Sim、控制、安全、启动失能和 operator-status
+  行为不变。四份操作文档已同步参数、边界和丢帧语义。
+- **Changed Files**: `README.md`、`README_CN.md`、
+  `docs/LW_BUILD_DEPLOYMENT_CN.md`、`docs/LW_QUICK_START_CN.md`、
+  `src/rl_sar/include/rl_real_LW.hpp`、
+  `src/rl_sar/launch/rl_real_LW.launch.py`、
+  `src/rl_sar/library/core/debug/lw_debug_publisher.cpp`、
+  `src/rl_sar/library/core/debug/lw_debug_publisher.hpp`、
+  `src/rl_sar/src/rl_real_LW.cpp`、
+  `src/rl_sar/test/test_lw_debug_publisher.cpp`、
+  `src/rl_sar/test/test_lw_real_startup_disable_integration.py`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: `lw_debug_publisher`、`lw_runtime_sync` 和
+  `lw_real_startup_disable_integration` 各连续 20 轮通过，覆盖默认关闭、
+  1/50/200 Hz 有效边界、负数/0/201 无效边界、非阻塞 `tryPublish` 接线、同一
+  源帧至多发布一次、新源帧继续发布、payload 和时间戳兼容，以及参数校验早于
+  worker 启动。完整 Debug 构建成功并通过 45/45 CTest；全新
+  `scripts/validate_lw_strict_build.sh` 在 `-Wall -Wextra -Wpedantic -Werror`
+  下完成全部目标并通过 45/45 CTest。定向 `cppcheck`、Python 语法、launch
+  `--show-args`、四份文档参数交叉核对和 `git diff --check` 通过。未启动真机
+  节点、AHRS、串口、电机或 MuJoCo GUI；用户未跟踪技能目录
+  保持未修改。
 - **Remaining Follow-ups**: none
 
 ---

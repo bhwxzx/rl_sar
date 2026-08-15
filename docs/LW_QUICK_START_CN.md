@@ -319,12 +319,13 @@ MAX_SAFE_CONTROL_GAP_MS=REPLACE_WITH_REVIEWED_VALUE
 PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py
 ```
 
-真机 launch 只提供两个项目自定义参数：
+真机 launch 只提供三个项目自定义参数：
 
 | 参数 | 默认值 | 用途 |
 | --- | --- | --- |
 | `enable_keyboard:=<boolean>` | `true` | 只接受 `true`/`false`；是否从控制终端读取真机键盘 |
-| `enable_debug_publisher:=<boolean>` | `false` | 只接受 `true`/`false`；是否创建 250 Hz `/LW_joint_states` 调试 publisher |
+| `enable_debug_publisher:=<boolean>` | `false` | 只接受 `true`/`false`；是否创建 `/LW_joint_states` 调试 publisher |
+| `debug_publish_rate_hz:=<integer>` | `50` | 只接受 1–200；调试 publisher 频率，关闭 publisher 时仍校验参数但不创建资源 |
 
 无交互终端的 systemd、容器或后台运行必须显式关闭键盘：
 
@@ -336,10 +337,12 @@ PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py enable_keyboar
 短时调试才启用 publisher：
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py enable_debug_publisher:=true
+PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py \
+  enable_debug_publisher:=true debug_publish_rate_hz:=50
 ```
 
-调试结束后应恢复默认关闭。两个参数可同时指定。
+调试 publisher 只发布新的控制源帧，发生争用或新帧覆盖时允许丢弃样本，不会
+阻塞 200 Hz 控制循环。调试结束后应恢复默认关闭。三个参数可同时指定。
 
 必须保留 `PYTHONDONTWRITEBYTECODE=1`，否则 Python 可能在清单约束的生产 launch
 目录生成 `__pycache__`，完整性检查会安全拒绝启动。正常 launch 会访问真实

@@ -156,6 +156,17 @@ PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py
 当前键盘、手柄、速度摇杆、状态前提和 Sim2Sim 专用按键的完整说明见
 [当前键盘和手柄映射](docs/LW_BUILD_DEPLOYMENT_CN.md#当前键盘和手柄映射)。
 
+真机 `/LW_joint_states` 调试遥测默认关闭。受控调试时可按默认 50 Hz 启用，或用
+`debug_publish_rate_hz:=<1–200 的整数>` 指定频率：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py \
+    enable_debug_publisher:=true debug_publish_rate_hz:=50
+```
+
+控制循环不会等待该可选消费者；发生争用或新帧覆盖时允许丢弃调试样本，且不会
+给未变化的控制源帧重复刷新时间戳。
+
 未完成部署文档中的硬件侧检查时，不得启动实机节点。
 
 ## 仓库边界

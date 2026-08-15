@@ -43,10 +43,7 @@ void ValidateConfig(const LWDebugPublisherConfig& config)
     {
         throw std::invalid_argument("invalid LW debug publisher configuration sizes");
     }
-    if (config.publish_period <= std::chrono::nanoseconds::zero())
-    {
-        throw std::invalid_argument("LW debug publish period must be positive");
-    }
+    (void)LWDebugPublishPeriod(config.publish_rate_hz);
     if (config.topic_name.empty())
     {
         throw std::invalid_argument("LW debug topic name must not be empty");
@@ -72,6 +69,18 @@ bool IsWheel(int index, const std::vector<int>& wheel_indices)
     return index == wheel_indices[0] || index == wheel_indices[1];
 }
 } // namespace
+
+std::chrono::nanoseconds LWDebugPublishPeriod(std::int64_t publish_rate_hz)
+{
+    if (publish_rate_hz < LW_DEBUG_MIN_RATE_HZ
+        || publish_rate_hz > LW_DEBUG_MAX_RATE_HZ)
+    {
+        throw std::invalid_argument(
+            "LW debug publish rate must be an integer from 1 through 200 Hz");
+    }
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::seconds(1)) / publish_rate_hz;
+}
 
 std::unique_ptr<LWDebugPublisher> LWDebugPublisher::CreateIfEnabled(
     bool enabled,
@@ -104,7 +113,7 @@ LWDebugPublisher::LWDebugPublisher(
         publisher_);
     initializeMessage();
     timer_ = node_->create_wall_timer(
-        config_.publish_period,
+        LWDebugPublishPeriod(config_.publish_rate_hz),
         [this]() { publishOnce(); });
 }
 
@@ -134,29 +143,38 @@ void LWDebugPublisher::initializeMessage()
     realtime_publisher_->unlock();
 }
 
-void LWDebugPublisher::publishSnapshot(const LWDebugSnapshot& snapshot)
+bool LWDebugPublisher::publishSnapshot(const LWDebugSnapshot& snapshot)
 {
-    snapshot_.publish(snapshot);
+    const SequencedSnapshot sequenced_snapshot{
+        next_snapshot_sequence_,
+        snapshot};
+    if (!snapshot_.tryPublish(sequenced_snapshot))
+    {
+        return false;
+    }
+    ++next_snapshot_sequence_;
+    return true;
 }
 
 bool LWDebugPublisher::publishOnce()
 {
+    SequencedSnapshot sequenced_snapshot;
+    if (!snapshot_.read(sequenced_snapshot)
+        || sequenced_snapshot.sequence <= last_published_sequence_)
+    {
+        return false;
+    }
+
     if (!realtime_publisher_->trylock())
     {
         return false;
     }
 
-    LWDebugSnapshot snapshot;
-    if (!snapshot_.read(snapshot))
-    {
-        realtime_publisher_->unlock();
-        return false;
-    }
-
     auto& message = realtime_publisher_->msg_;
-    populateMessage(message, snapshot);
+    populateMessage(message, sequenced_snapshot.snapshot);
     message.header.stamp = node_->get_clock()->now();
     realtime_publisher_->unlockAndPublish();
+    last_published_sequence_ = sequenced_snapshot.sequence;
     return true;
 }
 

@@ -131,6 +131,19 @@ Keep `PYTHONDONTWRITEBYTECODE=1`: the verified production launch directory is
 an exact manifest-bound file set and must not acquire an unverified bytecode
 cache.
 
+Real-robot debug telemetry is disabled by default. For controlled diagnostics,
+enable `/LW_joint_states` at the default 50 Hz or choose an integer rate from
+1 through 200 Hz:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py \
+    enable_debug_publisher:=true debug_publish_rate_hz:=50
+```
+
+The control loop never waits for this optional consumer; contended or
+superseded debug samples may be dropped, and unchanged source frames are not
+republished with a fresh timestamp.
+
 Do not start the real node without completing the hardware-side checks in the
 deployment guide.
 

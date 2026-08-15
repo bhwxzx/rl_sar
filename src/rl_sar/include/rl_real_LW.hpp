@@ -133,7 +133,7 @@ private:
     void AhrsCallback(const geometry_msgs::msg::Vector3::SharedPtr ahrs_msg);
 
     // Optional debug publication. A null component means no snapshot copies,
-    // publisher, or 250 Hz timer exist in the production control path.
+    // publisher, or debug timer exist in the production control path.
     std::unique_ptr<LWDebugPublisher> debug_publisher_;
     rclcpp::TimerBase::SharedPtr runtime_diagnostics_timer_;
     void RuntimeDiagnosticsCallback();

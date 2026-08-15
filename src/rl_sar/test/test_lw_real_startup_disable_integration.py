@@ -8,9 +8,44 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 REAL_SOURCE = ROOT / "src" / "rl_real_LW.cpp"
 REAL_HEADER = ROOT / "include" / "rl_real_LW.hpp"
 REAL_LAUNCH = ROOT / "launch" / "rl_real_LW.launch.py"
+DEBUG_PUBLISHER = ROOT / "library" / "core" / "debug" / "lw_debug_publisher.cpp"
 
 
 class RealStartupDisableIntegrationTests(unittest.TestCase):
+    def test_debug_telemetry_is_rate_bounded_nonblocking_and_source_fresh(self) -> None:
+        source = REAL_SOURCE.read_text(encoding="utf-8")
+        launch = REAL_LAUNCH.read_text(encoding="utf-8")
+        publisher = DEBUG_PUBLISHER.read_text(encoding="utf-8")
+        constructor = source[
+            source.index("RL_Real::RL_Real(") : source.index("RL_Real::~RL_Real()")
+        ]
+
+        self.assertIn(
+            'declare_parameter<std::int64_t>(\n'
+            '            "debug_publish_rate_hz"',
+            constructor,
+        )
+        validation = constructor.index("LWDebugPublishPeriod(debug_publish_rate_hz)")
+        creation = constructor.index("LWDebugPublisher::CreateIfEnabled(")
+        worker_start = constructor.index("this->loop_control->start();")
+        self.assertLess(validation, creation)
+        self.assertLess(creation, worker_start)
+
+        self.assertIn("snapshot_.tryPublish(sequenced_snapshot)", publisher)
+        self.assertNotIn("snapshot_.publish(", publisher)
+        self.assertIn(
+            "sequenced_snapshot.sequence <= last_published_sequence_", publisher
+        )
+
+        self.assertIn(
+            "debug_publish_rate_hz = LaunchConfiguration('debug_publish_rate_hz')",
+            launch,
+        )
+        self.assertIn("'debug_publish_rate_hz': debug_publish_rate_hz", launch)
+        declaration = launch[launch.index("'debug_publish_rate_hz',") :]
+        self.assertIn("default_value='50'", declaration)
+        self.assertIn("integer from 1 through 200", declaration)
+
     def test_fdilink_topics_are_guarded_without_modifying_driver(self) -> None:
         source = REAL_SOURCE.read_text(encoding="utf-8")
         header = REAL_HEADER.read_text(encoding="utf-8")
