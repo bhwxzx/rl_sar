@@ -44,7 +44,7 @@ public:
         char **argv,
         const std::string& policy_root,
         LWStartupDisableGuard& startup_disable);
-    ~RL_Real();
+    ~RL_Real() noexcept override;
 
     std::shared_ptr<rclcpp::Node> ros2_node;
 

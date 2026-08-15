@@ -240,7 +240,7 @@ RL_Real::RL_Real(int argc, char **argv)
 
 }
 
-RL_Real::~RL_Real()
+RL_Real::~RL_Real() noexcept
 {
     runtime_core_.reportSafetyEvent(LWSafetyEvent::NormalShutdown);
     this->loop_control->shutdown();

@@ -862,6 +862,16 @@ if(BUILD_TESTING)
     )
     add_test(NAME lw_allocation_bound COMMAND test_lw_allocation_bound)
 
+    add_executable(test_lw_rl_destruction
+        test/test_lw_rl_destruction.cpp
+    )
+    target_link_libraries(test_lw_rl_destruction PRIVATE
+        rl_sdk
+        observation_buffer
+        ${YAML_CPP_LIBRARIES}
+    )
+    add_test(NAME lw_rl_destruction COMMAND test_lw_rl_destruction)
+
     add_executable(test_lw_safety_policy
         test/test_lw_safety_policy.cpp
     )

@@ -270,7 +270,7 @@ RL_Real::RL_Real(
     }
 }
 
-RL_Real::~RL_Real()
+RL_Real::~RL_Real() noexcept
 {
     runtime_core_.reportSafetyEvent(LWSafetyEvent::NormalShutdown);
     // Close the gate before joining so no new enable command can race with the

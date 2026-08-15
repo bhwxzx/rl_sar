@@ -39,7 +39,7 @@ class RL_Real : public RL
 {
 public:
     RL_Real(int argc, char **argv);
-    ~RL_Real();
+    ~RL_Real() noexcept override;
 
     std::shared_ptr<rclcpp::Node> ros2_node;
     std::unique_ptr<mj::Simulate> sim;

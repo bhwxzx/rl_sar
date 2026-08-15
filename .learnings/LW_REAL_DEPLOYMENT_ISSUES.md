@@ -131,7 +131,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 37 | LW-037 | P2 / medium | resolved | Make Sim2Sim SIGTERM and normal ROS shutdown stop the render loop |
 | 38 | LW-038 | P2 / medium | resolved | Remove repeated configuration decoding and allocation from the real control cycle |
 | 39 | LW-039 | P2 / low | resolved | Reject actuator-model symlinks and policy-root escapes |
-| 40 | LW-040 | P2 / low | pending | Make the polymorphic RL base destruction contract safe |
+| 40 | LW-040 | P2 / low | resolved | Make the polymorphic RL base destruction contract safe |
 | 41 | LW-041 | P2 / low | pending | Make high-rate Sim2Sim plot publishing explicitly opt-in |
 
 ---
@@ -3229,7 +3229,7 @@ selected policy root while diagnostics still display the in-root lexical path.
 ## [LW-040] Safe polymorphic RL destruction contract
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-015, LW-024, LW-031
 
 ### Problem
@@ -3263,6 +3263,36 @@ thread, serial, or simulation cleanup.
 - The change does not alter runtime behavior, object ownership, or extension
   registration beyond the approved destruction contract.
 - Strict warning, lifecycle, and full CTest suites remain green.
+
+### Resolution
+
+- **Resolved**: 2026-08-15T12:51:07+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 将多态 `RL` 基类的公开析构函数改为
+  `virtual noexcept = default`，真实和 Sim2Sim 的 `RL_Real` 析构函数显式声明为
+  `noexcept override`，不改变析构函数体、对象创建方式、所有权或扩展注册。新增
+  独立编译/运行时测试，静态验证虚析构和 `noexcept` 契约，并通过
+  `std::unique_ptr<RL>` 销毁轻量派生探针，确认派生析构函数体及派生成员清理均
+  完整执行。既有真实节点关门、worker 停止、最终失能顺序和 Sim2Sim worker、
+  物理生命周期停止顺序保持不变。
+- **Changed Files**: `src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/include/rl_real_LW.hpp`、
+  `src/rl_sar/include/rl_sim_LW.hpp`、
+  `src/rl_sar/library/core/rl_sdk/rl_sdk.hpp`、
+  `src/rl_sar/src/rl_real_LW.cpp`、
+  `src/rl_sar/src/rl_sim_LW.cpp`、
+  `src/rl_sar/test/test_lw_rl_destruction.cpp`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: `test_lw_rl_destruction`、`rl_real_LW` 和 `rl_sim_LW`
+  定向构建成功；`lw_rl_destruction`、`lw_signal_shutdown`、
+  `lw_sim_lifecycle_integration`、`lw_mujoco_lifecycle` 和
+  `lw_real_startup_disable_integration` 各连续 20 轮通过，验证基类所有权虚派发、
+  派生成员清理，以及真实/Sim2Sim 原有有界停止顺序。完整 Debug 构建成功并通过
+  44/44 CTest；全新 `scripts/validate_lw_strict_build.sh` 在
+  `-Wall -Wextra -Wpedantic -Werror` 下完成全部目标并通过 44/44 CTest；定向
+  `cppcheck` 和 `git diff --check` 通过。未启动 ROS 节点、MuJoCo GUI、真机、
+  串口或电机，用户未跟踪技能目录保持未修改。
+- **Remaining Follow-ups**: none
 
 ---
 

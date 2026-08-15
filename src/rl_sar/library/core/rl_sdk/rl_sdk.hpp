@@ -334,8 +334,8 @@ struct Observations
 class RL
 {
 public:
-    RL() {};
-    ~RL() {};
+    RL() = default;
+    virtual ~RL() noexcept = default;
 
     YamlParams params;
     Observations<float> obs;
