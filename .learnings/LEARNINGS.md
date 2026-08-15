@@ -35,6 +35,117 @@
 
 ---
 
+## [LRN-20260815-006] correction
+
+**Logged**: 2026-08-15T19:24:36+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+现有 ROS 2 话题已满足数据接口时，录包与查看需求应优先文档化现有工具链，不应擅自扩大为新 launch 入口。
+
+### Details
+针对 Sim2Sim `/LW_joint_states` 需要 rosbag2 持久化并由 PlotJuggler 查看，初始
+方案建议新增同时管理仿真和 recorder 的 launch。用户明确收缩范围：保留当前
+publisher 和命令行接口，仅把 `ros2 bag record`、bag 检查以及 PlotJuggler
+启动命令写入现有操作文档。
+
+### Suggested Action
+遇到已有标准 ROS 2 工具能够完成的操作流程，先按用户要求补齐最小文档闭环；
+只有用户明确需要一键编排或现有手工流程证明不可靠时，再提出新脚本或 launch。
+
+### Metadata
+- Source: user_feedback
+- Related Files: README.md, docs/LW_QUICK_START_CN.md, docs/LW_BUILD_DEPLOYMENT_CN.md
+- Tags: documentation, scope, rosbag2, PlotJuggler, Sim2Sim
+- Pattern-Key: workflow.prefer_documented_ros_tools_over_new_entrypoint
+- Recurrence-Count: 1
+- First-Seen: 2026-08-15
+- Last-Seen: 2026-08-15
+
+### Resolution
+- **Resolved**: 2026-08-15T19:24:36+08:00
+- **Commit/PR**: 本提交
+- **Notes**: 仅在三个现有 Sim2Sim 操作入口补充手工录包、检查和 PlotJuggler 打开流程；未新增 launch、依赖、测试或运行时代码。
+
+---
+
+## [LRN-20260815-007] correction
+
+**Logged**: 2026-08-15T19:35:24+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: docs
+
+### Summary
+当前真机录包文档只应描述控制机第二终端这一条受支持流程。
+
+### Details
+真机 debug 录包说明曾建议优先在独立监控计算机录制，并只要求 ROS 2 环境和
+`ROS_DOMAIN_ID` 一致。用户指出当前环境似乎无法跨机录制。仓库没有跟踪
+Fast DDS/Cyclone DDS 的跨机发现配置、防火墙规则或跨机验收流程；相同 domain
+并不足以保证不同主机能发现 `/LW_joint_states`。当前主机虽设置
+`ROS_LOCALHOST_ONLY=0`，这也只能说明本机未主动限制为 loopback，不能证明网络
+组播、路由、防火墙和另一台主机配置均满足要求。用户进一步明确，操作文档中
+不保留任何独立监控机或跨机录制说明。
+
+### Suggested Action
+默认文档只写在控制机第二终端短时录制，并要求确认磁盘空间、限制采集时长以及
+把 bag 存放在 `DEPLOY_PREFIX` 之外；删除所有独立监控机、跨机 DDS 和远程录制
+提示，不提供未经项目验证的可选路径。
+
+### Metadata
+- Source: user_feedback
+- Related Files: README.md, docs/LW_QUICK_START_CN.md, docs/LW_BUILD_DEPLOYMENT_CN.md
+- Tags: ROS2, DDS, rosbag2, networking, documentation, real-robot
+- Pattern-Key: docs.cross_host_ros2_requires_verified_dds
+- Recurrence-Count: 1
+- First-Seen: 2026-08-15
+- Last-Seen: 2026-08-15
+
+### Resolution
+- **Resolved**: 2026-08-15T19:41:00+08:00
+- **Commit/PR**: 本提交
+- **Notes**: 三份操作文档现只描述控制机第二终端录制；独立监控机、跨机 DDS、远程录制和相关 `ROS_DOMAIN_ID` 提示均已删除，命令语法及相关 CTest 通过。
+
+---
+
+## [LRN-20260815-008] correction
+
+**Logged**: 2026-08-15T19:46:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+项目终端由 `.bashrc` 自动加载 ROS 2 环境，操作文档无需重复要求录包终端加载环境。
+
+### Details
+Sim2Sim 和真机 rosbag2 说明曾要求新终端“加载 ROS 2、本工作区或相同部署环境”。
+用户明确当前项目会在 `.bashrc` 中配置这些环境，新终端自动加载；继续保留该类
+提示只会增加冗余并引出不必要的环境解释。
+
+### Suggested Action
+涉及第二终端的项目操作步骤直接给出录包命令，不再重复 `source` 或“加载相同
+环境”的说明；只有任务明确涉及未配置的新机器或隔离 shell 时才单独说明环境准备。
+
+### Metadata
+- Source: user_feedback
+- Related Files: README.md, docs/LW_QUICK_START_CN.md, docs/LW_BUILD_DEPLOYMENT_CN.md
+- Tags: ROS2, bashrc, documentation, rosbag2, environment
+- Pattern-Key: docs.bashrc_provides_ros_environment
+- Recurrence-Count: 1
+- First-Seen: 2026-08-15
+- Last-Seen: 2026-08-15
+
+### Resolution
+- **Resolved**: 2026-08-15T19:46:00+08:00
+- **Commit/PR**: 本提交
+- **Notes**: 三份文档的 Sim2Sim 和真机录包流程现只要求打开另一个或第二个终端，不再显示 ROS 2、工作区或部署环境加载说明。
+
+---
+
 ## [LRN-20260815-005] best_practice
 
 **Logged**: 2026-08-15T17:45:00+08:00

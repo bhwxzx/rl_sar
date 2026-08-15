@@ -128,6 +128,27 @@ ros2 run rl_sar rl_sim_LW --enable-plot --plot-rate-hz 50
 失败。常规观察建议 50 Hz，普通诊断使用默认 100 Hz，200 Hz 仅用于短时逐控制
 周期分析。
 
+`--enable-plot` 只负责发布 `/LW_joint_states`，不会把数据写入磁盘。需要供
+PlotJuggler 离线查看时，在另一个终端中录制：
+
+```bash
+mkdir -p bags
+bag_dir="bags/lw_sim_$(date +%Y%m%d-%H%M%S)"
+ros2 bag record \
+    --output "$bag_dir" \
+    /LW_joint_states
+```
+
+录制完成后先在 `ros2 bag record` 终端按 `Ctrl+C`，确保 bag 正常写入
+`metadata.yaml`，然后检查并启动 PlotJuggler：
+
+```bash
+ros2 bag info "$bag_dir"
+ros2 run plotjuggler plotjuggler
+```
+
+在 PlotJuggler 中使用 ROS 2 Bag 数据加载器打开 `$bag_dir` 对应的 bag。
+
 仿真器加载 `src/rl_sar_zoo/LW_description/mjcf/scene.xml`。terrain 场景与高度图
 位于同一已跟踪包中，并由无界面的 MuJoCo 模型加载测试覆盖。
 
@@ -164,6 +185,29 @@ PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py \
 
 控制循环不会等待该可选消费者；发生争用或新帧覆盖时允许丢弃调试样本，且不会
 给未变化的控制源帧重复刷新时间戳。
+
+需要保存真机调试数据时，在同一控制机的第二个终端中录制。输出目录必须位于
+受完整性保护的 `DEPLOY_PREFIX` 之外：
+
+```bash
+LW_BAG_ROOT="/absolute/writable/path/outside/DEPLOY_PREFIX"
+mkdir -p "$LW_BAG_ROOT"
+bag_dir="$LW_BAG_ROOT/lw_real_$(date +%Y%m%d-%H%M%S)"
+ros2 bag record \
+    --output "$bag_dir" \
+    /LW_joint_states
+```
+
+正常采集结束时先在录包终端按 `Ctrl+C`，再检查并启动 PlotJuggler：
+
+```bash
+ros2 bag info "$bag_dir"
+ros2 run plotjuggler plotjuggler
+```
+
+录制会在控制机上产生磁盘 I/O，应先确认磁盘空间并限制采集时长。rosbag2 故障
+不会停止机器人，异常情况下必须优先急停和失能，不能为保存 bag 延迟安全操作。
+调试结束后恢复默认关闭 publisher。
 
 未完成部署文档中的硬件侧检查时，不得启动实机节点。
 

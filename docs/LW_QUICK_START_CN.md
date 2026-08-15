@@ -81,6 +81,27 @@ ros2 run rl_sar rl_sim_LW --enable-plot --plot-rate-hz 50
 `--plot-rate-hz` 必须与 `--enable-plot` 同时使用；缺失、非整数、越界或重复
 冲突值会使 Sim2Sim 明确拒绝启动。
 
+Plot 开关只发布 `/LW_joint_states`，不会自动保存数据。需要用 PlotJuggler
+离线分析时，保持上述 Sim2Sim 运行，并在另一个终端中执行：
+
+```bash
+mkdir -p bags
+bag_dir="bags/lw_sim_$(date +%Y%m%d-%H%M%S)"
+ros2 bag record \
+    --output "$bag_dir" \
+    /LW_joint_states
+```
+
+完成采集后先在录包终端按 `Ctrl+C`，等待 rosbag2 正常生成 `metadata.yaml`。
+随后检查 bag 并启动 PlotJuggler：
+
+```bash
+ros2 bag info "$bag_dir"
+ros2 run plotjuggler plotjuggler
+```
+
+在 PlotJuggler 中选择 ROS 2 Bag 数据加载器并打开 `$bag_dir` 对应的 bag。
+
 如需改用非编译期策略目录，使用 `--policy-root PATH`；如需启用可选的
 TorchScript 执行器网络，追加 `--use_actuator_net`。同时使用的示例为：
 
@@ -343,6 +364,34 @@ PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py \
 
 调试 publisher 只发布新的控制源帧，发生争用或新帧覆盖时允许丢弃样本，不会
 阻塞 200 Hz 控制循环。调试结束后应恢复默认关闭。三个参数可同时指定。
+
+需要保存 `/LW_joint_states` 供 PlotJuggler 离线分析时，在同一控制机的第二个
+终端中执行。将 `LW_BAG_ROOT` 替换为可写的绝对路径，且该路径必须位于受完整性
+保护的 `DEPLOY_PREFIX` 之外：
+
+```bash
+LW_BAG_ROOT="/absolute/writable/path/outside/DEPLOY_PREFIX"
+mkdir -p "$LW_BAG_ROOT"
+bag_dir="$LW_BAG_ROOT/lw_real_$(date +%Y%m%d-%H%M%S)"
+ros2 bag record \
+  --output "$bag_dir" \
+  /LW_joint_states
+```
+
+正常采集结束时先在录包终端按 `Ctrl+C`，等待 rosbag2 写入
+`metadata.yaml`，然后检查 bag 并启动 PlotJuggler：
+
+```bash
+ros2 bag info "$bag_dir"
+ros2 run plotjuggler plotjuggler
+```
+
+在 PlotJuggler 中选择 ROS 2 Bag 数据加载器并打开 `$bag_dir` 对应的 bag。录制会
+在控制机上产生磁盘 I/O，必须先确认磁盘空间并限制采集时长。rosbag2 是外部
+订阅者，录制失败或磁盘写满不会停止机器人；调试 publisher 也允许因争用丢弃
+样本，因此 bag 不代表无损控制周期日志。机器人异常时必须优先执行物理急停和
+失能，不能为保存 bag 延迟安全操作。调试完成后恢复默认关闭
+`enable_debug_publisher`。
 
 必须保留 `PYTHONDONTWRITEBYTECODE=1`，否则 Python 可能在清单约束的生产 launch
 目录生成 `__pycache__`，完整性检查会安全拒绝启动。正常 launch 会访问真实

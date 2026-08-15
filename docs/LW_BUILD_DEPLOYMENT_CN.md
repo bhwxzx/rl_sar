@@ -216,6 +216,31 @@ ros2 run rl_sar rl_sim_LW --enable-plot --plot-rate-hz 50
 普通诊断，200 Hz 仅用于短时逐控制周期分析。该开关只控制 Sim2Sim Plot，不影响
 100 ms operator-status 输出，也不改变真机的独立调试 publisher。
 
+这里的 Plot 功能只发布 `/LW_joint_states`，不会在 Sim2Sim 进程内写入 rosbag。
+需要保存数据供 PlotJuggler 离线分析时，保持 Sim2Sim 运行，并在另一个终端中
+执行：
+
+```bash
+mkdir -p bags
+bag_dir="bags/lw_sim_$(date +%Y%m%d-%H%M%S)"
+ros2 bag record \
+    --output "$bag_dir" \
+    /LW_joint_states
+```
+
+采集结束时先在录包终端按 `Ctrl+C`，等待 rosbag2 完成索引并写入
+`metadata.yaml`；不要直接关闭终端或强制杀死 recorder。随后确认 bag 内容并
+启动 PlotJuggler：
+
+```bash
+ros2 bag info "$bag_dir"
+ros2 run plotjuggler plotjuggler
+```
+
+在 PlotJuggler 中选择 ROS 2 Bag 数据加载器，打开 `$bag_dir` 对应的 bag 后即可
+从 `/LW_joint_states` 中选择所需曲线。记录命令显式限定该话题，不会把工作区内
+其它 ROS 2 话题一并写入。
+
 需要可选执行器网络时，策略根必须同时包含四套主策略以及两个 `.pt` 模型：
 
 ```bash
@@ -705,6 +730,38 @@ PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py \
 调试样本。发布端只发布尚未发出的最新控制源帧，每条消息使用同一个控制周期的
 完整快照并在发布时刷新时间戳，不会把未变化的旧帧重新标记为新遥测。调试结束
 后应恢复默认关闭状态，避免不必要的 ROS 发布负载。
+
+需要保存 `/LW_joint_states` 供 PlotJuggler 离线分析时，在同一控制机的第二个
+终端中录制。将 `LW_BAG_ROOT` 替换为容量充足的可写绝对路径；该路径必须位于
+`DEPLOY_PREFIX` 之外，禁止向受清单保护的正式部署目录写入 bag：
+
+```bash
+LW_BAG_ROOT="/absolute/writable/path/outside/DEPLOY_PREFIX"
+mkdir -p "$LW_BAG_ROOT"
+bag_dir="$LW_BAG_ROOT/lw_real_$(date +%Y%m%d-%H%M%S)"
+ros2 bag record \
+    --output "$bag_dir" \
+    /LW_joint_states
+```
+
+正常采集结束时先在录包终端按 `Ctrl+C`，等待 rosbag2 完成索引并写入
+`metadata.yaml`，然后检查 bag 并启动 PlotJuggler：
+
+```bash
+ros2 bag info "$bag_dir"
+ros2 run plotjuggler plotjuggler
+```
+
+在 PlotJuggler 中选择 ROS 2 Bag 数据加载器，打开 `$bag_dir` 对应的 bag 后从
+`/LW_joint_states` 中选择所需曲线。记录命令显式限定该话题，不会把其它 ROS 2
+话题一并写入。
+
+录制会在控制机上产生磁盘 I/O，开始前应确认可用空间并限制采集时长。rosbag2
+是外部订阅者，recorder 异常退出、写入失败或磁盘写满都不会停止机器人，操作者
+必须单独监控录制状态。调试 publisher 允许因争用或新帧覆盖而丢弃样本，因此
+bag 不代表无损控制周期日志。正常结束应使用 `Ctrl+C` 完成 bag 收尾；机器人
+出现异常时必须优先执行物理急停和失能，不能为保存 bag 延迟安全操作。采集结束
+后恢复默认关闭 `enable_debug_publisher`。
 
 ### 实机控制循环的默认保护行为
 
