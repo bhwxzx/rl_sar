@@ -1,8 +1,6 @@
 cmake_minimum_required(VERSION 3.5)
 project(serial)
 
-# Find catkin
-#find_package(catkin REQUIRED)
 if(NOT CMAKE_CXX_STANDARD)
     set(CMAKE_CXX_STANDARD 14)
 endif()
@@ -60,4 +58,3 @@ install(
 
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()
-

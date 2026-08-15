@@ -51,12 +51,6 @@ endfunction()
 # System environment detection
 set(SYSTEM_TYPE ${CMAKE_SYSTEM_NAME})
 
-if($ENV{ROS_DISTRO} MATCHES "noetic")
-    add_compile_definitions(USE_ROS1)
-elseif($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-    add_compile_definitions(USE_ROS2)
-endif()
-
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -112,35 +106,13 @@ add_definitions(-DCMAKE_CURRENT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_definitions(-DPOLICY_DIR="${PROJECT_ROOT_DIR}/policy")
 add_definitions(-DBOOST_BIND_GLOBAL_PLACEHOLDERS)
 
-if($ENV{ROS_DISTRO} MATCHES "noetic")
-    find_package(catkin REQUIRED COMPONENTS
-        controller_manager
-        genmsg
-        joint_state_controller
-        robot_state_publisher
-        roscpp
-        # gazebo_ros
-        std_msgs
-        tf
-        geometry_msgs
-        robot_msgs
-        robot_joint_controller
-        rospy
-    )
-    catkin_package(
-        CATKIN_DEPENDS
-        robot_joint_controller
-        rospy
-    )
-elseif($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-    find_package(ament_cmake REQUIRED)
-    find_package(ament_index_cpp REQUIRED)
-    find_package(rclcpp REQUIRED)
-    find_package(geometry_msgs REQUIRED)
-    find_package(sensor_msgs REQUIRED)
-    find_package(realtime_tools REQUIRED)
-    ament_package()
-endif()
+find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(realtime_tools REQUIRED)
+ament_package()
 add_compile_options(${GAZEBO_CXX_FLAGS})
 # find_package(gazebo REQUIRED)
 
@@ -425,29 +397,27 @@ if(BUILD_TESTING)
         )
         target_link_libraries(test_lw_signal_shutdown PRIVATE Threads::Threads)
         add_test(NAME lw_signal_shutdown COMMAND test_lw_signal_shutdown)
-        if("$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
-            add_executable(test_lw_ros_shutdown
-                test/test_lw_ros_shutdown.cpp
-            )
-            target_include_directories(test_lw_ros_shutdown PRIVATE
-                library/core/simulation
-            )
-            target_link_libraries(test_lw_ros_shutdown Threads::Threads)
-            ament_target_dependencies(test_lw_ros_shutdown rclcpp)
-            add_test(
-                NAME lw_ros_shutdown_normal
-                COMMAND test_lw_ros_shutdown normal
-            )
-            add_test(
-                NAME lw_ros_shutdown_sigterm
-                COMMAND test_lw_ros_shutdown sigterm
-            )
-            set_tests_properties(
-                lw_ros_shutdown_normal
-                lw_ros_shutdown_sigterm
-                PROPERTIES TIMEOUT 10
-            )
-        endif()
+        add_executable(test_lw_ros_shutdown
+            test/test_lw_ros_shutdown.cpp
+        )
+        target_include_directories(test_lw_ros_shutdown PRIVATE
+            library/core/simulation
+        )
+        target_link_libraries(test_lw_ros_shutdown Threads::Threads)
+        ament_target_dependencies(test_lw_ros_shutdown rclcpp)
+        add_test(
+            NAME lw_ros_shutdown_normal
+            COMMAND test_lw_ros_shutdown normal
+        )
+        add_test(
+            NAME lw_ros_shutdown_sigterm
+            COMMAND test_lw_ros_shutdown sigterm
+        )
+        set_tests_properties(
+            lw_ros_shutdown_normal
+            lw_ros_shutdown_sigterm
+            PROPERTIES TIMEOUT 10
+        )
     endif()
     add_test(
         NAME lw_sim_lifecycle_integration
@@ -591,41 +561,35 @@ if(SYSTEM_TYPE STREQUAL "Linux")
     lw_silence_vendor_warnings(lw_joystick_vendor)
 endif()
 
-if("$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
-    add_library(
+add_library(
+    lw_debug_publisher
+    library/core/debug/lw_debug_publisher.cpp
+)
+target_include_directories(lw_debug_publisher PUBLIC
+    library/core/debug
+    library/core/safety
+    library/thirdparty/robot_sdk/lfr/LW_sdk
+)
+ament_target_dependencies(lw_debug_publisher
+    rclcpp
+    sensor_msgs
+    realtime_tools
+)
+
+if(BUILD_TESTING)
+    add_executable(
+        test_lw_debug_publisher
+        test/test_lw_debug_publisher.cpp
+    )
+    target_link_libraries(
+        test_lw_debug_publisher
         lw_debug_publisher
-        library/core/debug/lw_debug_publisher.cpp
     )
-    target_include_directories(lw_debug_publisher PUBLIC
-        library/core/debug
-        library/core/safety
-        library/thirdparty/robot_sdk/lfr/LW_sdk
-    )
-    ament_target_dependencies(lw_debug_publisher
+    ament_target_dependencies(test_lw_debug_publisher
         rclcpp
         sensor_msgs
-        realtime_tools
     )
-
-    if(BUILD_TESTING)
-        add_executable(
-            test_lw_debug_publisher
-            test/test_lw_debug_publisher.cpp
-        )
-        target_link_libraries(
-            test_lw_debug_publisher
-            lw_debug_publisher
-        )
-        ament_target_dependencies(test_lw_debug_publisher
-            rclcpp
-            sensor_msgs
-        )
-        add_test(NAME lw_debug_publisher COMMAND test_lw_debug_publisher)
-    endif()
-endif()
-
-if($ENV{ROS_DISTRO} MATCHES "noetic")
-    include_directories(${catkin_INCLUDE_DIRS})
+    add_test(NAME lw_debug_publisher COMMAND test_lw_debug_publisher)
 endif()
 
 include_directories(
@@ -670,9 +634,7 @@ target_include_directories(lw_actuator_models PUBLIC
     library/core/simulation
 )
 target_link_libraries(lw_actuator_models PUBLIC inference_runtime)
-if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-    install(TARGETS inference_runtime DESTINATION lib/${PROJECT_NAME})
-endif()
+install(TARGETS inference_runtime DESTINATION lib/${PROJECT_NAME})
 
 # library for LW motion loader
 add_library(motion_loader_lw library/core/motion_loader/motion_loader_lw.cpp)
@@ -737,7 +699,7 @@ if(BUILD_TESTING)
             NAME lw_runtime_dependencies
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/test/test_lw_runtime_dependencies.py
-                    ${CMAKE_CURRENT_SOURCE_DIR}/package.ros2.xml
+                    ${CMAKE_CURRENT_SOURCE_DIR}/package.xml
                     ${PROJECT_ROOT_DIR}/src/fdilink_ahrs_ROS2/package.xml
         )
         add_test(
@@ -970,22 +932,17 @@ if(BUILD_TESTING)
                 ${PROJECT_ROOT_DIR}
     )
 endif()
-if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-    install(TARGETS rl_sdk DESTINATION lib/${PROJECT_NAME})
-endif()
+install(TARGETS rl_sdk DESTINATION lib/${PROJECT_NAME})
 
 # library for observation buffer
 add_library(observation_buffer library/core/observation_buffer/observation_buffer.cpp)
-if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-    install(TARGETS observation_buffer DESTINATION lib/${PROJECT_NAME})
-endif()
+install(TARGETS observation_buffer DESTINATION lib/${PROJECT_NAME})
 
 # executable for rl sim LW
 if(SYSTEM_TYPE STREQUAL "Linux"
    AND NOT IS_JETSON
    AND NOT LW_PRODUCTION_DEPLOYMENT)
-    if("$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
-        set(MUJOCO_DIR "${PROJECT_ROOT_DIR}/library/mujoco")
+    set(MUJOCO_DIR "${PROJECT_ROOT_DIR}/library/mujoco")
 
         # Linux/Windows use standard structure
         if(NOT EXISTS "${MUJOCO_DIR}/include/mujoco/mujoco.h")
@@ -1102,13 +1059,11 @@ if(SYSTEM_TYPE STREQUAL "Linux"
         )
         install(TARGETS rl_sim_LW DESTINATION lib/${PROJECT_NAME})
         message(STATUS "MuJoCo configured: ${MUJOCO_DIR}")
-    endif()
 endif()
 
 # executable for rl real LW
 if(SYSTEM_TYPE STREQUAL "Linux")
-    if("$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
-        add_executable(rl_real_LW 
+    add_executable(rl_real_LW
             src/rl_real_LW.cpp
         )
         add_executable(
@@ -1197,25 +1152,16 @@ if(SYSTEM_TYPE STREQUAL "Linux")
                         --policy-root ${PROJECT_ROOT_DIR}/policy
             )
         endif()
-    endif()
 endif()
 
 # executable for actuator net
-if($ENV{ROS_DISTRO} MATCHES "noetic")
-    catkin_install_python(PROGRAMS
-        scripts/actuator_net.py
-        DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-    )
-elseif($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-    install(PROGRAMS
-        scripts/actuator_net.py
-        scripts/profile_lw_runtime_config.py
-        DESTINATION lib/${PROJECT_NAME}
-    )
-endif()
+install(PROGRAMS
+    scripts/actuator_net.py
+    scripts/profile_lw_runtime_config.py
+    DESTINATION lib/${PROJECT_NAME}
+)
 
-if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-    if(LW_PRODUCTION_DEPLOYMENT)
+if(LW_PRODUCTION_DEPLOYMENT)
         install(
             FILES launch/rl_real_LW.launch.py
             DESTINATION share/${PROJECT_NAME}/launch
@@ -1259,7 +1205,6 @@ if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
             DIRECTORY ${PROJECT_ROOT_DIR}/policy
             DESTINATION share/${PROJECT_NAME}/${dir}
         )
-    endif()
 endif()
 
 # ========================

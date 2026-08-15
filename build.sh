@@ -110,34 +110,16 @@ run_ros_build() {
     # Detect incompatible artifacts
     detect_incompatible_build_artifacts
 
-    # Clean existing symlinks
-    clean_existing_symlinks "${packages[@]}"
-
-    # Colcon must see every dual-ROS package before resolving dependency closure.
-    create_symlinks_for_all_packages
-
     # Execute build
     if [ ${#packages[@]} -eq 0 ]; then
-        if [[ "$ROS_DISTRO" == "noetic" ]]; then
-            print_header "[Using catkin build]"
-            print_info "Building all packages..."
-            catkin build
-        else
-            print_header "[Using colcon build]"
-            print_info "Building all packages..."
-            colcon build --symlink-install
-        fi
+        print_header "[Using colcon build]"
+        print_info "Building all packages..."
+        colcon build --symlink-install
     else
-        if [[ "$ROS_DISTRO" == "noetic" ]]; then
-            print_header "[Using catkin build]"
-            print_info "Building specific packages: $package_list"
-            catkin build "${packages[@]}"
-        else
-            print_header "[Using colcon build]"
-            print_info "Building specific packages: $package_list"
-            colcon build --symlink-install \
-                --packages-up-to "${packages[@]}"
-        fi
+        print_header "[Using colcon build]"
+        print_info "Building specific packages: $package_list"
+        colcon build --symlink-install \
+            --packages-up-to "${packages[@]}"
     fi
 
     print_success "ROS build completed!"
@@ -151,33 +133,24 @@ clean_all_workspace() {
     print_header "[Cleaning Workspace]"
 
     print_info "The following will be cleaned:"
-    echo "  - All package.xml symlinks in directory src/"
     echo "  - directory build/"
     echo "  - directory cmake_build/"
-    echo "  - directory devel/"
     echo "  - directory install/"
     echo "  - directory log/"
     echo "  - directory logs/"
-    echo "  - directory .catkin_tools/"
 
-    if ! ask_confirmation "Are you sure you want to clean ALL symlinks and build artifacts?"; then
+    if ! ask_confirmation "Are you sure you want to clean ALL build artifacts?"; then
         print_warning "Clean operation cancelled."
         exit 0
     fi
-
-    print_info "Removing all package.xml symlinks..."
-    find "$WORKSPACE_ROOT/src" -name "package.xml" -type l -delete
-    print_success "Removed all symlinks"
 
     print_info "Cleaning build artifacts..."
     rm -rf -- \
         "$WORKSPACE_ROOT/build" \
         "$WORKSPACE_ROOT/cmake_build" \
-        "$WORKSPACE_ROOT/devel" \
         "$WORKSPACE_ROOT/install" \
         "$WORKSPACE_ROOT/log" \
-        "$WORKSPACE_ROOT/logs" \
-        "$WORKSPACE_ROOT/.catkin_tools"
+        "$WORKSPACE_ROOT/logs"
 
     print_success "Clean completed!"
 }
@@ -287,7 +260,7 @@ clean_ros2_packages() {
         echo "  - build/$package_name"
         echo "  - install/$package_name"
     done
-    print_info "Shared log directories and package.xml symlinks will be preserved."
+    print_info "Shared log directories and source package.xml files will be preserved."
 
     if ! ask_confirmation "Proceed with this package-scoped cleanup?"; then
         print_warning "Clean operation cancelled."
@@ -305,27 +278,6 @@ clean_ros2_packages() {
     print_success "Selected ROS 2 package cleanup completed!"
 }
 
-clean_ros1_packages() {
-    local requested=("$@")
-
-    if ! command -v catkin >/dev/null 2>&1; then
-        print_error "catkin_tools is required for ROS 1 package cleanup."
-        return 1
-    fi
-    print_header "[Cleaning Selected ROS 1 Packages]"
-    print_info "Requested packages and their reverse dependencies will be cleaned: ${requested[*]}"
-    if ! catkin clean --dry-run --yes --dependents "${requested[@]}"; then
-        print_error "ROS 1 package cleanup preflight failed; no files were removed."
-        return 1
-    fi
-    if ! ask_confirmation "Proceed with this package-scoped cleanup?"; then
-        print_warning "Clean operation cancelled."
-        return 0
-    fi
-    catkin clean --yes --dependents "${requested[@]}"
-    print_success "Selected ROS 1 package cleanup completed!"
-}
-
 clean_selected_packages() {
     local packages=("$@")
     local package_name=""
@@ -337,22 +289,8 @@ clean_selected_packages() {
         fi
     done
 
-    if [ -z "${ROS_DISTRO:-}" ]; then
-        print_error "ROS environment not detected. Source ROS before cleaning selected packages."
-        return 1
-    fi
-    case "$ROS_DISTRO" in
-        noetic)
-            clean_ros1_packages "${packages[@]}"
-            ;;
-        foxy|humble)
-            clean_ros2_packages "${packages[@]}"
-            ;;
-        *)
-            print_error "Unsupported ROS distribution for package cleanup: $ROS_DISTRO"
-            return 1
-            ;;
-    esac
+    validate_ros2_environment "Source ROS 2 before cleaning selected packages."
+    clean_ros2_packages "${packages[@]}"
 }
 
 clean_workspace() {
@@ -365,45 +303,32 @@ clean_workspace() {
     fi
 }
 
-clean_existing_symlinks() {
-    local packages=("$@")
-
-    print_header "[Cleaning Existing Symlinks]"
-
-    if [ ${#packages[@]} -eq 0 ]; then
-        print_info "Removing all existing package.xml symlinks..."
-        find src -name "package.xml" -type l -delete
-        print_success "Removed all existing symlinks"
-    else
-        print_info "Removing existing symlinks for specified packages..."
-        removed_packages=()
-        for package_name in "${packages[@]}"; do
-            package_dir=$(find src -name "$package_name" -type d | head -n 1)
-            if [ -n "$package_dir" ] && [ -L "$package_dir/package.xml" ]; then
-                rm -f "$package_dir/package.xml"
-                removed_packages+=("$package_name")
-            fi
-        done
-
-        if [ ${#removed_packages[@]} -gt 0 ]; then
-            print_success "Removed existing symlinks from: ${removed_packages[*]}"
-        else
-            print_warning "No existing symlinks found"
-        fi
-    fi
-}
-
 # ========================
 # ROS Specific Functions
 # ========================
 
+validate_ros2_environment() {
+    local missing_message="$1"
+
+    if [ -z "${ROS_DISTRO:-}" ]; then
+        print_error "ROS 2 environment not detected. $missing_message"
+        return 1
+    fi
+    case "$ROS_DISTRO" in
+        foxy|humble)
+            ;;
+        *)
+            print_error "Unsupported ROS distribution: $ROS_DISTRO"
+            print_info "This workspace supports ROS 2 Foxy and Humble only."
+            return 1
+            ;;
+    esac
+}
+
 detect_incompatible_build_artifacts() {
     print_header "[Checking for Incompatible Build Artifacts]"
 
-    local needs_cleanup=false
-
-    if [[ "$ROS_DISTRO" != "noetic"
-       && -f "$WORKSPACE_ROOT/install/.colcon_install_layout" ]]; then
+    if [ -f "$WORKSPACE_ROOT/install/.colcon_install_layout" ]; then
         local install_layout=""
         IFS= read -r install_layout \
             < "$WORKSPACE_ROOT/install/.colcon_install_layout" || true
@@ -413,70 +338,7 @@ detect_incompatible_build_artifacts() {
             return 1
         fi
     fi
-
-    # Check for ROS1 artifacts when using ROS2
-    if [[ "$ROS_DISTRO" != "noetic" ]]; then
-        if [ -d "devel" ] || [ -d ".catkin_tools" ]; then
-            print_warning "Found ROS1 build artifacts (devel/ or .catkin_tools/) while using ROS2. Cleaning workspace..."
-            needs_cleanup=true
-        fi
-    fi
-
-    # Check for ROS2 artifacts when using ROS1
-    if [[ "$ROS_DISTRO" == "noetic" ]]; then
-        if [ -d "install" ] || [ -d "log" ]; then
-            print_warning "Found ROS2 build artifacts (install/ or log/) while using ROS1. Cleaning workspace..."
-            needs_cleanup=true
-        fi
-    fi
-
-    if [ "$needs_cleanup" = true ]; then
-        clean_workspace
-    else
-        print_success "No incompatible build artifacts found"
-    fi
-}
-
-create_symlinks_for_package() {
-    local package_dir="$1"
-    local package_name=$(basename "$package_dir")
-
-    if [ -d "$package_dir" ]; then
-        if [ -f "$package_dir/package.ros1.xml" ] && [ -f "$package_dir/package.ros2.xml" ]; then
-            [ -e "$package_dir/package.xml" ] && rm -f "$package_dir/package.xml"
-
-            if [[ "$ROS_DISTRO" == "noetic" ]]; then
-                ln -s package.ros1.xml "$package_dir/package.xml"
-                return 0
-            elif [[ "$ROS_DISTRO" == "foxy" || "$ROS_DISTRO" == "humble" ]]; then
-                ln -s package.ros2.xml "$package_dir/package.xml"
-                return 0
-            else
-                print_error "Unknown ROS version: $ROS_DISTRO"
-                return 1
-            fi
-        fi
-    fi
-    return 1
-}
-
-create_symlinks_for_all_packages() {
-    print_header "[Creating Symlinks for All Packages]"
-
-    created_packages=()
-    while IFS= read -r -d '' package_dir; do
-        package_dir=$(dirname "$package_dir")
-        package_name=$(basename "$package_dir")
-        if create_symlinks_for_package "$package_dir"; then
-            created_packages+=("$package_name")
-        fi
-    done < <(find src -name "package.ros1.xml" -print0)
-
-    if [ ${#created_packages[@]} -gt 0 ]; then
-        print_success "Created symlinks for: ${created_packages[*]}"
-    else
-        print_warning "No packages with dual ROS support found"
-    fi
+    print_success "No incompatible build artifacts found"
 }
 
 # ========================
@@ -493,9 +355,9 @@ show_usage() {
     echo -e "  -h, --help       Show this help message"
     echo ""
     echo -e "${COLOR_INFO}Examples:${COLOR_RESET}"
-    echo -e "  $0                    # Build all ROS packages"
-    echo -e "  $0 package1 package2  # Build specific ROS packages"
-    echo -e "  $0 -c                 # Clean all symlinks and build artifacts"
+    echo -e "  $0                    # Build all ROS 2 packages"
+    echo -e "  $0 package1 package2  # Build specific ROS 2 packages"
+    echo -e "  $0 -c                 # Clean all build artifacts"
     echo -e "  $0 --clean package1   # Clean a package and packages which depend on it"
 }
 
@@ -520,9 +382,8 @@ main() {
         exit 0
     fi
 
-    # Handle ROS build
-    if [ -z "$ROS_DISTRO" ]; then
-        print_error "ROS environment not detected. Please source your ROS setup.bash first."
+    # Handle ROS 2 build
+    if ! validate_ros2_environment "Please source your ROS 2 setup.bash first."; then
         print_info "For production deployment, use src/rl_sar/scripts/build_lw_deployment.sh."
         exit 1
     fi

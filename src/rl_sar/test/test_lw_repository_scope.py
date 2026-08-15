@@ -20,6 +20,12 @@ REMOVED_ROBOTS = {
     "tita",
 }
 
+ROS2_PACKAGE_DIRECTORIES = (
+    "src/rl_sar",
+    "src/robot_joint_controller",
+    "src/robot_msgs",
+)
+
 
 def require(condition: bool, message: str, errors: list[str]) -> None:
     if not condition:
@@ -125,6 +131,40 @@ def main() -> int:
             "legacy zoo downloader still exists", errors)
     require((root / "scripts/validate_lw_description.sh").is_file(),
             "LW description validator is missing", errors)
+
+    for relative_directory in ROS2_PACKAGE_DIRECTORIES:
+        package_directory = root / relative_directory
+        package_manifest = package_directory / "package.xml"
+        require(package_manifest.is_file(),
+                f"{relative_directory}/package.xml is missing", errors)
+        require(not package_manifest.is_symlink(),
+                f"{relative_directory}/package.xml must be a regular file", errors)
+        for legacy_manifest in ("package.ros1.xml", "package.ros2.xml"):
+            require(not (package_directory / legacy_manifest).exists(),
+                    f"legacy manifest remains: {relative_directory}/{legacy_manifest}",
+                    errors)
+
+    require(not (root / "src/robot_joint_controller/ros").exists(),
+            "ROS 1 controller sources are still present", errors)
+    require(not (root / "src/rl_sar/launch/gazebo.launch").exists(),
+            "ROS 1 Gazebo launch file is still present", errors)
+
+    ros2_only_files = [
+        root / "build.sh",
+        root / "src/fdilink_ahrs_ROS2/CMakeLists.txt",
+        root / "src/rl_sar/CMakeLists.txt",
+        root / "src/rl_sar/include/rl_sim.hpp",
+        root / "src/rl_sar/src/rl_sim.cpp",
+        root / "src/robot_joint_controller/CMakeLists.txt",
+        root / "src/robot_msgs/CMakeLists.txt",
+    ]
+    legacy_ros_pattern = re.compile(
+        r"\b(?:catkin|noetic|USE_ROS1|package\.ros1\.xml|package\.ros2\.xml)\b",
+        flags=re.IGNORECASE,
+    )
+    for path in ros2_only_files:
+        if legacy_ros_pattern.search(path.read_text(encoding="utf-8")):
+            errors.append(f"ROS 1 compatibility remains in {path.relative_to(root)}")
 
     implementation_files = [
         root / "src/rl_sar/CMakeLists.txt",

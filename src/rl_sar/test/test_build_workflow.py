@@ -38,15 +38,10 @@ class BuildWorkflowTests(unittest.TestCase):
         for package in self.CLEAN_PACKAGES:
             package_dir = workspace / "src" / package
             package_dir.mkdir(parents=True)
-            (package_dir / "package.ros1.xml").write_text(
+            (package_dir / "package.xml").write_text(
                 f"<package><name>{package}</name></package>\n",
                 encoding="utf-8",
             )
-            (package_dir / "package.ros2.xml").write_text(
-                f"<package><name>{package}</name></package>\n",
-                encoding="utf-8",
-            )
-            (package_dir / "package.xml").symlink_to("package.ros2.xml")
             for artifact_root in ("build", "install"):
                 artifact = workspace / artifact_root / package
                 artifact.mkdir(parents=True)
@@ -85,21 +80,12 @@ class BuildWorkflowTests(unittest.TestCase):
             encoding="utf-8",
         )
         fake_colcon.chmod(0o755)
-        fake_catkin = fake_bin / "catkin"
-        fake_catkin.write_text(
-            "#!/bin/sh\n"
-            "set -e\n"
-            "printf '%s\\n' \"$*\" >> \"$RL_SAR_FAKE_CATKIN_LOG\"\n",
-            encoding="utf-8",
-        )
-        fake_catkin.chmod(0o755)
 
         environment = os.environ.copy()
         environment.update(
             {
                 "PATH": f"{fake_bin}:{environment['PATH']}",
                 "ROS_DISTRO": "humble",
-                "RL_SAR_FAKE_CATKIN_LOG": str(workspace / "catkin.log"),
             }
         )
         return environment
@@ -164,11 +150,14 @@ class BuildWorkflowTests(unittest.TestCase):
         self.assertNotIn("--merge-install", content)
         self.assertIn("colcon build --symlink-install", content)
         self.assertIn('--packages-up-to "${packages[@]}"', content)
+        self.assertNotIn("catkin", content.lower())
+        self.assertNotIn("package.ros1.xml", content)
+        self.assertNotIn("package.ros2.xml", content)
 
         build_function = content[content.index("run_ros_build()") :]
         build_function = build_function[: build_function.index("# Clean Functions")]
         self.assertLess(
-            build_function.index("create_symlinks_for_all_packages"),
+            build_function.index("detect_incompatible_build_artifacts"),
             build_function.index("--packages-up-to"),
         )
 
@@ -186,7 +175,8 @@ class BuildWorkflowTests(unittest.TestCase):
         quick_start = QUICK_START_GUIDE.read_text(encoding="utf-8")
         for document in (deployment, quick_start):
             self.assertIn("isolated", document)
-            self.assertIn("merged", document)
+            self.assertNotIn("merged install", document.lower())
+            self.assertNotIn("--merge-install", document)
             self.assertIn("./build.sh --clean", document)
         self.assertIn("./build.sh --clean serial", deployment)
         self.assertIn("./build.sh --clean rl_sar", quick_start)
@@ -213,7 +203,9 @@ class BuildWorkflowTests(unittest.TestCase):
             self.assertTrue((workspace / "log/keep.txt").is_file())
             self.assertTrue((workspace / "cmake_build/keep.txt").is_file())
             for package in self.CLEAN_PACKAGES:
-                self.assertTrue((workspace / "src" / package / "package.xml").is_symlink())
+                manifest = workspace / "src" / package / "package.xml"
+                self.assertTrue(manifest.is_file())
+                self.assertFalse(manifest.is_symlink())
 
     def test_selected_clean_rejects_unknown_package_before_deletion(self) -> None:
         with tempfile.TemporaryDirectory(
@@ -289,7 +281,7 @@ class BuildWorkflowTests(unittest.TestCase):
                 self.assertTrue((workspace / "build" / package / "keep.txt").is_file())
                 self.assertTrue((workspace / "install" / package / "keep.txt").is_file())
 
-    def test_ros1_selected_clean_uses_catkin_dependents(self) -> None:
+    def test_non_ros2_environment_is_rejected_before_cleaning(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="lw-package-clean-test-"
         ) as temporary:
@@ -298,31 +290,28 @@ class BuildWorkflowTests(unittest.TestCase):
             environment["ROS_DISTRO"] = "noetic"
 
             result = self.run_clean(
-                workspace, ["--clean", "rl_sar"], environment, "y\n"
-            )
-
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            calls = (workspace / "catkin.log").read_text(encoding="utf-8")
-            self.assertIn(
-                "clean --dry-run --yes --dependents rl_sar", calls
-            )
-            self.assertIn("clean --yes --dependents rl_sar", calls)
-
-    def test_ros1_selected_clean_rejects_option_injection(self) -> None:
-        with tempfile.TemporaryDirectory(
-            prefix="lw-package-clean-test-"
-        ) as temporary:
-            workspace = Path(temporary) / "workspace"
-            environment = self.create_clean_fixture(workspace)
-            environment["ROS_DISTRO"] = "noetic"
-
-            result = self.run_clean(
-                workspace, ["--clean", "--", "--force"], environment
+                workspace, ["--clean", "rl_sar"], environment
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("Invalid package name '--force'", result.stdout)
-            self.assertFalse((workspace / "catkin.log").exists())
+            self.assertIn("supports ROS 2 Foxy and Humble only", result.stdout)
+            for package in self.CLEAN_PACKAGES:
+                self.assertTrue((workspace / "build" / package / "keep.txt").is_file())
+                self.assertTrue((workspace / "install" / package / "keep.txt").is_file())
+
+    def test_non_ros2_build_is_rejected_before_dependency_setup(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="lw-package-clean-test-"
+        ) as temporary:
+            workspace = Path(temporary) / "workspace"
+            environment = self.create_clean_fixture(workspace)
+            environment["ROS_DISTRO"] = "noetic"
+
+            result = self.run_clean(workspace, [], environment)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("supports ROS 2 Foxy and Humble only", result.stdout)
+            self.assertNotIn("Dependency installer not found", result.stdout)
             for package in self.CLEAN_PACKAGES:
                 self.assertTrue((workspace / "build" / package / "keep.txt").is_file())
                 self.assertTrue((workspace / "install" / package / "keep.txt").is_file())
@@ -343,9 +332,23 @@ class BuildWorkflowTests(unittest.TestCase):
                 self.assertFalse((workspace / artifact).exists())
             for package in self.CLEAN_PACKAGES:
                 package_dir = workspace / "src" / package
-                self.assertFalse((package_dir / "package.xml").exists())
-                self.assertTrue((package_dir / "package.ros1.xml").is_file())
-                self.assertTrue((package_dir / "package.ros2.xml").is_file())
+                manifest = package_dir / "package.xml"
+                self.assertTrue(manifest.is_file())
+                self.assertFalse(manifest.is_symlink())
+
+    def test_ros2_packages_use_standard_manifests(self) -> None:
+        repository_root = BUILD_SCRIPT.parent
+        for relative_package in (
+            "src/rl_sar",
+            "src/robot_joint_controller",
+            "src/robot_msgs",
+        ):
+            package_dir = repository_root / relative_package
+            manifest = package_dir / "package.xml"
+            self.assertTrue(manifest.is_file())
+            self.assertFalse(manifest.is_symlink())
+            self.assertFalse((package_dir / "package.ros1.xml").exists())
+            self.assertFalse((package_dir / "package.ros2.xml").exists())
 
     def test_documentation_uses_the_single_entry_point(self) -> None:
         for document in (README, DEPLOYMENT_GUIDE, QUICK_START_GUIDE):

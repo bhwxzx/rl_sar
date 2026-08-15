@@ -35,6 +35,44 @@
 
 ---
 
+## [LRN-20260815-005] best_practice
+
+**Logged**: 2026-08-15T17:45:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+ROS 2-only 工作区应直接跟踪普通 `package.xml`，构建清理不得通过切换清单链接来改写源码状态。
+
+### Details
+同时保留 `package.ros1.xml`、`package.ros2.xml` 并让 `package.xml` 成为动态链接，
+会把 ROS 版本选择引入源码树状态：全量清理必须特殊保护或重建链接，包级构建也
+可能遗留与当前环境不匹配的清单。项目明确只支持 ROS 2 后，应把 ROS 2 清单内容
+固化为普通 `package.xml`，删除版本切换逻辑，并让全量与包级清理只处理生成物。
+这样 `colcon` 始终读取稳定清单，`git status` 不会因构建或清理发生源码类型变化。
+
+### Suggested Action
+ROS 2-only 项目统一使用 Ament CMake 和普通 `package.xml`；测试同时断言清单不是
+符号链接、旧版清单不存在、全量及包级清理均保留源码清单，并从空构建树执行一次
+全量 isolated Colcon 构建验证迁移结果。
+
+### Metadata
+- Source: task_outcome
+- Related Files: build.sh, src/rl_sar/package.xml, src/robot_joint_controller/package.xml, src/robot_msgs/package.xml
+- Tags: ROS2, colcon, package-manifest, clean, source-safety
+- Pattern-Key: build.ros2_only_standard_manifest
+- Recurrence-Count: 1
+- First-Seen: 2026-08-15
+- Last-Seen: 2026-08-15
+
+### Resolution
+- **Resolved**: 2026-08-15T17:45:00+08:00
+- **Commit/PR**: 未提交（按用户要求保留工作区修改）
+- **Notes**: 三个双清单包已改为普通 ROS 2 `package.xml`，清理逻辑不再触碰源码清单；工作流测试、空树全量构建、CTest 和严格构建均通过。
+
+---
+
 ## [LRN-20260815-001] correction
 
 **Logged**: 2026-08-15T13:30:22+08:00

@@ -226,8 +226,8 @@ std::vector<float> RL::ComputeObservation()
         }
         else if (observation == "ang_vel")
         {
-            // In ROS1 Gazebo, the coordinate system for angular velocity is in the world coordinate system.
-            // In ROS2 Gazebo, mujoco and real robot, the coordinate system for angular velocity is in the body coordinate system.
+            // Legacy Gazebo integrations may report angular velocity in the world frame.
+            // Current Gazebo, MuJoCo, and real-robot paths use the body frame.
             if (this->ang_vel_axis == "body")
             {
                 obs_list.push_back(this->obs.ang_vel * this->params.Get<float>("ang_vel_scale"));
