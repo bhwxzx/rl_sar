@@ -51,26 +51,11 @@ endfunction()
 # System environment detection
 set(SYSTEM_TYPE ${CMAKE_SYSTEM_NAME})
 
-set(USE_CMAKE OFF CACHE BOOL "Use Cmake build system")
-if(USE_CMAKE)
-    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+if($ENV{ROS_DISTRO} MATCHES "noetic")
+    add_compile_definitions(USE_ROS1)
+elseif($ENV{ROS_DISTRO} MATCHES "foxy|humble")
+    add_compile_definitions(USE_ROS2)
 endif()
-
-if(NOT USE_CMAKE)
-    if($ENV{ROS_DISTRO} MATCHES "noetic")
-        add_compile_definitions(USE_ROS1)
-    elseif($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-        add_compile_definitions(USE_ROS2)
-    endif()
-else()
-    message(WARNING "ROS_DISTRO not set, assuming non-ROS mode")
-    add_compile_definitions(USE_CMAKE)
-endif()
-
-# MuJoCo simulator option
-set(USE_MUJOCO OFF CACHE BOOL "Build with MuJoCo simulator support")
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -127,39 +112,37 @@ add_definitions(-DCMAKE_CURRENT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_definitions(-DPOLICY_DIR="${PROJECT_ROOT_DIR}/policy")
 add_definitions(-DBOOST_BIND_GLOBAL_PLACEHOLDERS)
 
-if(NOT USE_CMAKE)
-    if($ENV{ROS_DISTRO} MATCHES "noetic")
-        find_package(catkin REQUIRED COMPONENTS
-            controller_manager
-            genmsg
-            joint_state_controller
-            robot_state_publisher
-            roscpp
-            # gazebo_ros
-            std_msgs
-            tf
-            geometry_msgs
-            robot_msgs
-            robot_joint_controller
-            rospy
-        )
-        catkin_package(
-            CATKIN_DEPENDS
-            robot_joint_controller
-            rospy
-        )
-    elseif($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-        find_package(ament_cmake REQUIRED)
-        find_package(ament_index_cpp REQUIRED)
-        find_package(rclcpp REQUIRED)
-        find_package(geometry_msgs REQUIRED)
-        find_package(sensor_msgs REQUIRED)
-        find_package(realtime_tools REQUIRED)
-        ament_package()
-    endif()
-    add_compile_options(${GAZEBO_CXX_FLAGS})
-    # find_package(gazebo REQUIRED)
+if($ENV{ROS_DISTRO} MATCHES "noetic")
+    find_package(catkin REQUIRED COMPONENTS
+        controller_manager
+        genmsg
+        joint_state_controller
+        robot_state_publisher
+        roscpp
+        # gazebo_ros
+        std_msgs
+        tf
+        geometry_msgs
+        robot_msgs
+        robot_joint_controller
+        rospy
+    )
+    catkin_package(
+        CATKIN_DEPENDS
+        robot_joint_controller
+        rospy
+    )
+elseif($ENV{ROS_DISTRO} MATCHES "foxy|humble")
+    find_package(ament_cmake REQUIRED)
+    find_package(ament_index_cpp REQUIRED)
+    find_package(rclcpp REQUIRED)
+    find_package(geometry_msgs REQUIRED)
+    find_package(sensor_msgs REQUIRED)
+    find_package(realtime_tools REQUIRED)
+    ament_package()
 endif()
+add_compile_options(${GAZEBO_CXX_FLAGS})
+# find_package(gazebo REQUIRED)
 
 # Inference Runtime
 
@@ -442,7 +425,7 @@ if(BUILD_TESTING)
         )
         target_link_libraries(test_lw_signal_shutdown PRIVATE Threads::Threads)
         add_test(NAME lw_signal_shutdown COMMAND test_lw_signal_shutdown)
-        if(NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
+        if("$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
             add_executable(test_lw_ros_shutdown
                 test/test_lw_ros_shutdown.cpp
             )
@@ -608,7 +591,7 @@ if(SYSTEM_TYPE STREQUAL "Linux")
     lw_silence_vendor_warnings(lw_joystick_vendor)
 endif()
 
-if(NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
+if("$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
     add_library(
         lw_debug_publisher
         library/core/debug/lw_debug_publisher.cpp
@@ -641,10 +624,8 @@ if(NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
     endif()
 endif()
 
-if(NOT USE_CMAKE)
-    if($ENV{ROS_DISTRO} MATCHES "noetic")
-        include_directories(${catkin_INCLUDE_DIRS})
-    endif()
+if($ENV{ROS_DISTRO} MATCHES "noetic")
+    include_directories(${catkin_INCLUDE_DIRS})
 endif()
 
 include_directories(
@@ -689,10 +670,8 @@ target_include_directories(lw_actuator_models PUBLIC
     library/core/simulation
 )
 target_link_libraries(lw_actuator_models PUBLIC inference_runtime)
-if(NOT USE_CMAKE)
-    if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-        install(TARGETS inference_runtime DESTINATION lib/${PROJECT_NAME})
-    endif()
+if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
+    install(TARGETS inference_runtime DESTINATION lib/${PROJECT_NAME})
 endif()
 
 # library for LW motion loader
@@ -991,26 +970,21 @@ if(BUILD_TESTING)
                 ${PROJECT_ROOT_DIR}
     )
 endif()
-if(NOT USE_CMAKE)
-    if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-        install(TARGETS rl_sdk DESTINATION lib/${PROJECT_NAME})
-    endif()
+if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
+    install(TARGETS rl_sdk DESTINATION lib/${PROJECT_NAME})
 endif()
 
 # library for observation buffer
 add_library(observation_buffer library/core/observation_buffer/observation_buffer.cpp)
-if(NOT USE_CMAKE)
-    if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-        install(TARGETS observation_buffer DESTINATION lib/${PROJECT_NAME})
-    endif()
+if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
+    install(TARGETS observation_buffer DESTINATION lib/${PROJECT_NAME})
 endif()
 
 # executable for rl sim LW
 if(SYSTEM_TYPE STREQUAL "Linux"
    AND NOT IS_JETSON
    AND NOT LW_PRODUCTION_DEPLOYMENT)
-    if(NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
-        add_compile_definitions(USE_MUJOCO)
+    if("$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
         set(MUJOCO_DIR "${PROJECT_ROOT_DIR}/library/mujoco")
 
         # Linux/Windows use standard structure
@@ -1133,7 +1107,7 @@ endif()
 
 # executable for rl real LW
 if(SYSTEM_TYPE STREQUAL "Linux")
-    if(NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
+    if("$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
         add_executable(rl_real_LW 
             src/rl_real_LW.cpp
         )
@@ -1227,184 +1201,65 @@ if(SYSTEM_TYPE STREQUAL "Linux")
 endif()
 
 # executable for actuator net
-if(NOT USE_CMAKE)
-    if($ENV{ROS_DISTRO} MATCHES "noetic")
-        catkin_install_python(PROGRAMS
-            scripts/actuator_net.py
-            DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-        )
-    elseif($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-        install(PROGRAMS
-            scripts/actuator_net.py
-            scripts/profile_lw_runtime_config.py
-            DESTINATION lib/${PROJECT_NAME}
-        )
-    endif()
+if($ENV{ROS_DISTRO} MATCHES "noetic")
+    catkin_install_python(PROGRAMS
+        scripts/actuator_net.py
+        DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+    )
+elseif($ENV{ROS_DISTRO} MATCHES "foxy|humble")
+    install(PROGRAMS
+        scripts/actuator_net.py
+        scripts/profile_lw_runtime_config.py
+        DESTINATION lib/${PROJECT_NAME}
+    )
 endif()
 
-if(NOT USE_CMAKE)
-    if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-        if(LW_PRODUCTION_DEPLOYMENT)
+if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
+    if(LW_PRODUCTION_DEPLOYMENT)
+        install(
+            FILES launch/rl_real_LW.launch.py
+            DESTINATION share/${PROJECT_NAME}/launch
+        )
+        set(LW_DEPLOYMENT_POLICY_FILES
+            LW/base.yaml
+            LW/robot_lab/leg_loco/config.yaml
+            LW/robot_lab/leg_loco/policy.onnx
+            LW/robot_lab/leg_to_wheel/config.yaml
+            LW/robot_lab/leg_to_wheel/leg_to_wheel_transform_60hz.csv
+            LW/robot_lab/leg_to_wheel/policy.onnx
+            LW/robot_lab/wheel_loco/config.yaml
+            LW/robot_lab/wheel_loco/policy.onnx
+            LW/robot_lab/wheel_to_leg/config.yaml
+            LW/robot_lab/wheel_to_leg/policy.onnx
+            LW/robot_lab/wheel_to_leg/wheel_to_leg_transform_60hz.csv
+        )
+        foreach(LW_POLICY_FILE IN LISTS LW_DEPLOYMENT_POLICY_FILES)
+            get_filename_component(
+                LW_POLICY_DIRECTORY "${LW_POLICY_FILE}" DIRECTORY)
             install(
-                FILES launch/rl_real_LW.launch.py
-                DESTINATION share/${PROJECT_NAME}/launch
+                FILES "${PROJECT_ROOT_DIR}/policy/${LW_POLICY_FILE}"
+                DESTINATION
+                    "share/${PROJECT_NAME}/deployment/LW/policy/${LW_POLICY_DIRECTORY}"
             )
-            set(LW_DEPLOYMENT_POLICY_FILES
-                LW/base.yaml
-                LW/robot_lab/leg_loco/config.yaml
-                LW/robot_lab/leg_loco/policy.onnx
-                LW/robot_lab/leg_to_wheel/config.yaml
-                LW/robot_lab/leg_to_wheel/leg_to_wheel_transform_60hz.csv
-                LW/robot_lab/leg_to_wheel/policy.onnx
-                LW/robot_lab/wheel_loco/config.yaml
-                LW/robot_lab/wheel_loco/policy.onnx
-                LW/robot_lab/wheel_to_leg/config.yaml
-                LW/robot_lab/wheel_to_leg/policy.onnx
-                LW/robot_lab/wheel_to_leg/wheel_to_leg_transform_60hz.csv
-            )
-            foreach(LW_POLICY_FILE IN LISTS LW_DEPLOYMENT_POLICY_FILES)
-                get_filename_component(
-                    LW_POLICY_DIRECTORY "${LW_POLICY_FILE}" DIRECTORY)
-                install(
-                    FILES "${PROJECT_ROOT_DIR}/policy/${LW_POLICY_FILE}"
-                    DESTINATION
-                        "share/${PROJECT_NAME}/deployment/LW/policy/${LW_POLICY_DIRECTORY}"
-                )
-            endforeach()
-            configure_file(
-                cmake/install_lw_deployment.cmake.in
-                "${CMAKE_CURRENT_BINARY_DIR}/install_lw_deployment.cmake"
-                @ONLY
-            )
-            install(
-                SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/install_lw_deployment.cmake"
-            )
-        else()
-            install(
-                DIRECTORY launch worlds
-                DESTINATION share/${PROJECT_NAME}/${dir}
-            )
-            install(
-                DIRECTORY ${PROJECT_ROOT_DIR}/policy
-                DESTINATION share/${PROJECT_NAME}/${dir}
-            )
-        endif()
-    endif()
-endif()
-
-# ========================
-# mujoco
-# ========================
-if(USE_MUJOCO)
-    add_compile_definitions(USE_MUJOCO)
-    set(MUJOCO_DIR "${PROJECT_ROOT_DIR}/library/mujoco")
-
-    # Check MuJoCo installation (different paths for different platforms)
-    if(SYSTEM_TYPE STREQUAL "Darwin")
-        # macOS uses framework structure
-        if(NOT EXISTS "${MUJOCO_DIR}/Headers/mujoco.h")
-            message(FATAL_ERROR "MuJoCo not found. Please run: bash scripts/download_mujoco.sh")
-        endif()
-
-        # Create compatible include structure in build directory for macOS
-        # This allows <mujoco/mujoco.h> to work on macOS where headers are in Headers/ directory
-        set(MUJOCO_COMPAT_INCLUDE_DIR "${CMAKE_BINARY_DIR}/mujoco_include")
-        file(MAKE_DIRECTORY "${MUJOCO_COMPAT_INCLUDE_DIR}/mujoco")
-        file(GLOB MUJOCO_HEADERS "${MUJOCO_DIR}/Headers/*.h")
-        file(COPY ${MUJOCO_HEADERS} DESTINATION "${MUJOCO_COMPAT_INCLUDE_DIR}/mujoco")
-
-        set(MUJOCO_INCLUDE_DIR "${MUJOCO_COMPAT_INCLUDE_DIR}")
-        set(MUJOCO_LIB_DIR "${MUJOCO_DIR}/Versions/Current")
+        endforeach()
+        configure_file(
+            cmake/install_lw_deployment.cmake.in
+            "${CMAKE_CURRENT_BINARY_DIR}/install_lw_deployment.cmake"
+            @ONLY
+        )
+        install(
+            SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/install_lw_deployment.cmake"
+        )
     else()
-        # Linux/Windows use standard structure
-        if(NOT EXISTS "${MUJOCO_DIR}/include/mujoco/mujoco.h")
-            message(FATAL_ERROR "MuJoCo not found. Please run: bash scripts/download_mujoco.sh")
-        endif()
-        set(MUJOCO_INCLUDE_DIR "${MUJOCO_DIR}/include")
-        set(MUJOCO_LIB_DIR "${MUJOCO_DIR}/lib")
-    endif()
-
-    # Add MuJoCo library path to global RPATH
-    set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${MUJOCO_LIB_DIR}")
-    message(STATUS "Added MuJoCo to RPATH: ${MUJOCO_LIB_DIR}")
-
-    # Find GLFW
-    find_package(glfw3 REQUIRED)
-
-    # Platform-specific library names
-    if(SYSTEM_TYPE STREQUAL "Linux")
-        set(MUJOCO_LIB_NAME "libmujoco.so.3.2.7")
-    elseif(SYSTEM_TYPE STREQUAL "Darwin")
-        set(MUJOCO_LIB_NAME "libmujoco.3.2.7.dylib")
-    elseif(SYSTEM_TYPE STREQUAL "Windows")
-        set(MUJOCO_LIB_NAME "mujoco.dll")
-    else()
-        message(FATAL_ERROR "Unsupported platform: ${SYSTEM_TYPE}")
-    endif()
-
-    # Import MuJoCo library with RPATH
-    add_library(mujoco_prebuilt SHARED IMPORTED)
-    set_target_properties(mujoco_prebuilt PROPERTIES
-        IMPORTED_LOCATION "${MUJOCO_LIB_DIR}/${MUJOCO_LIB_NAME}"
-        INTERFACE_INCLUDE_DIRECTORIES "${MUJOCO_INCLUDE_DIR}"
-        IMPORTED_NO_SONAME TRUE
-    )
-
-    # Include directories
-    include_directories(
-        ${MUJOCO_INCLUDE_DIR}
-        library/thirdparty/joystick
-    )
-
-    # Source files
-    file(GLOB MUJOCO_SIMULATE_SRC library/thirdparty/mujoco_simulate/*.cc)
-    set(JOYSTICK_SRC library/thirdparty/joystick/joystick.cc)
-
-    # On macOS, also include Objective-C++ files for CoreVideo support
-    if(SYSTEM_TYPE STREQUAL "Darwin")
-        file(GLOB MUJOCO_SIMULATE_MM library/thirdparty/mujoco_simulate/*.mm)
-        list(APPEND MUJOCO_SIMULATE_SRC ${MUJOCO_SIMULATE_MM})
-    endif()
-
-    # Build executable
-    add_executable(rl_sim_mujoco src/rl_sim_mujoco.cpp ${MUJOCO_SIMULATE_SRC} ${JOYSTICK_SRC})
-
-    # Suppress deprecation warnings for macOS 15.0 API changes in MuJoCo Simulate
-    if(SYSTEM_TYPE STREQUAL "Darwin")
-        set_source_files_properties(
-            ${MUJOCO_SIMULATE_MM}
-            PROPERTIES COMPILE_FLAGS "-Wno-deprecated-declarations"
+        install(
+            DIRECTORY launch worlds
+            DESTINATION share/${PROJECT_NAME}/${dir}
+        )
+        install(
+            DIRECTORY ${PROJECT_ROOT_DIR}/policy
+            DESTINATION share/${PROJECT_NAME}/${dir}
         )
     endif()
-
-    # Add include directories for mujoco_simulate and joystick headers
-    target_include_directories(rl_sim_mujoco PRIVATE
-        library/thirdparty/mujoco_simulate
-        library/thirdparty/joystick
-    )
-
-    target_link_libraries(rl_sim_mujoco
-        rl_sdk observation_buffer ${YAML_CPP_LIBRARIES}
-        Threads::Threads mujoco_prebuilt glfw
-    )
-
-    # macOS specific frameworks and libraries
-    if(SYSTEM_TYPE STREQUAL "Darwin")
-        # OpenMP support
-        if(OPENMP_LIBRARIES)
-            target_link_libraries(rl_sim_mujoco ${OPENMP_LIBRARIES})
-        endif()
-
-        # Required frameworks for GlfwCoreVideo
-        target_link_libraries(rl_sim_mujoco
-            "-framework CoreVideo"
-            "-framework OpenGL"
-            "-framework AppKit"
-        )
-    endif()
-
-    install(TARGETS rl_sim_mujoco DESTINATION bin)
-    message(STATUS "MuJoCo configured: ${MUJOCO_DIR}")
 endif()
 
 # ========================
@@ -1435,7 +1290,6 @@ message(STATUS "Architecture: ${CMAKE_SYSTEM_PROCESSOR}")
 message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
-message(STATUS "USE_CMAKE: ${USE_CMAKE}")
 message(STATUS "----------------------------------------")
 message(STATUS "Backend Configuration:")
 message(STATUS "USE_TORCH: ${USE_TORCH}")
@@ -1461,11 +1315,5 @@ if(USE_ONNX)
     else()
         message(STATUS "ONNX Runtime: Available")
     endif()
-endif()
-message(STATUS "----------------------------------------")
-message(STATUS "Simulator Configuration:")
-message(STATUS "USE_MUJOCO: ${USE_MUJOCO}")
-if(USE_MUJOCO)
-    message(STATUS "MuJoCo: Enabled")
 endif()
 message(STATUS "========================================")

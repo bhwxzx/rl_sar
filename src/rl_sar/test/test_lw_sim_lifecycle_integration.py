@@ -7,6 +7,8 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SIM_SOURCE = ROOT / "src" / "rl_sim_LW.cpp"
 SIM_HEADER = ROOT / "include" / "rl_sim_LW.hpp"
+LEGACY_SIM_SOURCE = ROOT / "src" / "rl_sim_mujoco.cpp"
+LEGACY_SIM_HEADER = ROOT / "include" / "rl_sim_mujoco.hpp"
 MUJOCO_UTILS = (
     ROOT / "library" / "thirdparty" / "mujoco_simulate" / "mujoco_utils.hpp"
 )
@@ -16,6 +18,10 @@ SIMULATE_SOURCE = (
 
 
 class LWSimLifecycleIntegrationTests(unittest.TestCase):
+    def test_legacy_detached_mujoco_runtime_was_removed(self) -> None:
+        self.assertFalse(LEGACY_SIM_SOURCE.exists())
+        self.assertFalse(LEGACY_SIM_HEADER.exists())
+
     def test_constructor_has_no_detached_or_unbounded_startup_wait(self) -> None:
         source = SIM_SOURCE.read_text(encoding="utf-8")
         constructor = source[

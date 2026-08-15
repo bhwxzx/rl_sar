@@ -28,14 +28,15 @@ class BuildWorkflowTests(unittest.TestCase):
     def test_jetson_pytorch_installer_was_removed(self) -> None:
         self.assertFalse(REMOVED_JETSON_INSTALLER.exists())
 
-    def test_obsolete_standalone_cmake_mode_was_removed(self) -> None:
+    def test_obsolete_standalone_cmake_modes_were_removed(self) -> None:
         content = BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn("run_cmake_build()", content)
         self.assertNotIn("-m|--cmake", content)
         self.assertNotIn("cmake_mode", content)
         self.assertNotIn("--cmake option", content)
-        self.assertIn("-mj|--mujoco) mujoco_mode=true; shift ;;", content)
-        self.assertIn("-DUSE_CMAKE=ON -DUSE_MUJOCO=ON", content)
+        self.assertNotIn("run_mujoco_build()", content)
+        self.assertNotIn("-mj|--mujoco", content)
+        self.assertNotIn("mujoco_mode", content)
 
         result = subprocess.run(
             ["bash", str(BUILD_SCRIPT), "--help"],
@@ -44,12 +45,19 @@ class BuildWorkflowTests(unittest.TestCase):
             capture_output=True,
         )
         self.assertNotIn("--cmake", result.stdout)
-        self.assertIn("--mujoco", result.stdout)
+        self.assertNotIn("--mujoco", result.stdout)
 
         for document in (DEPLOYMENT_GUIDE, QUICK_START_GUIDE):
-            self.assertNotIn(
-                "--cmake", document.read_text(encoding="utf-8")
-            )
+            document_content = document.read_text(encoding="utf-8")
+            self.assertNotIn("--cmake", document_content)
+            self.assertNotIn("--mujoco", document_content)
+
+        cmake = CMAKE_FILE.read_text(encoding="utf-8")
+        self.assertNotIn("USE_CMAKE", cmake)
+        self.assertNotIn("USE_MUJOCO", cmake)
+        self.assertNotIn("rl_sim_mujoco", cmake)
+        self.assertIn("add_executable(rl_sim_LW", cmake)
+        self.assertIn("lw_mujoco_simulate_vendor", cmake)
 
     def test_selected_builds_include_dependency_closure(self) -> None:
         content = BUILD_SCRIPT.read_text(encoding="utf-8")
@@ -190,7 +198,7 @@ class BuildWorkflowTests(unittest.TestCase):
 
     def test_production_install_contains_only_real_launch(self) -> None:
         cmake = CMAKE_FILE.read_text(encoding="utf-8")
-        install_block = cmake[cmake.rindex("if(NOT USE_CMAKE)") :]
+        install_block = cmake[cmake.index("# executable for actuator net") :]
         production_block = install_block[
             install_block.index("if(LW_PRODUCTION_DEPLOYMENT)") :
         ]

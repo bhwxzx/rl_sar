@@ -134,12 +134,11 @@ ros2 pkg prefix rl_sar
 | --- | --- |
 | `./build.sh [PACKAGE_NAMES...]` | 不带包名时构建整个 ROS 工作区；带包名时构建指定包及其依赖 |
 | `./build.sh -c` / `./build.sh --clean [PACKAGE_NAMES...]` | 清理全部或指定包的工作区链接和构建产物 |
-| `./build.sh -mj` / `./build.sh --mujoco` | 含 MuJoCo 的 CMake 构建 |
 | `./build.sh -h` / `./build.sh --help` | 显示用法后退出 |
 
-`--clean` 是显式清理操作；`--mujoco` 是开发/诊断构建，不能代替本文后续由
-`build_lw_deployment.sh` 生成和验收的正式部署包。交付前的
-Sim2Sim 验证也必须回到不带包名的完整工作区构建。
+`--clean` 是显式清理操作。交付前的 Sim2Sim 验证必须使用不带包名的完整
+工作区构建；它不能代替本文后续由 `build_lw_deployment.sh` 生成和验收的
+正式部署包。
 
 在 Jetson 上，`./build.sh` 会自动检查 Linux/aarch64、L4T/Tegra 和 Jetson
 CUDA 标志，并在日志中输出 `Jetson mode: true`。只有容器等环境隐藏了这些

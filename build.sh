@@ -96,17 +96,6 @@ validate_lw_description() {
     fi
 }
 
-run_mujoco_build() {
-    print_header "[Running MuJoCo Build]"
-    print_info "Building with MuJoCo simulator support..."
-    print_separator
-
-    cmake src/rl_sar/ -B cmake_build -DUSE_CMAKE=ON -DUSE_MUJOCO=ON
-    cmake --build cmake_build -j$(nproc 2>/dev/null || echo 4)
-
-    print_success "MuJoCo build completed!"
-}
-
 run_ros_build() {
     local packages=("$@")
     local package_list=$(IFS=' '; echo "${packages[*]}")
@@ -328,7 +317,6 @@ show_usage() {
     echo ""
     echo -e "${COLOR_INFO}Options:${COLOR_RESET}"
     echo -e "  -c, --clean      Clean workspace (remove symlinks and build artifacts)"
-    echo -e "  -mj,--mujoco     Build with MuJoCo simulator support (CMake only)"
     echo -e "  -h, --help       Show this help message"
     echo ""
     echo -e "${COLOR_INFO}Examples:${COLOR_RESET}"
@@ -336,36 +324,22 @@ show_usage() {
     echo -e "  $0 package1 package2  # Build specific ROS packages"
     echo -e "  $0 -c                 # Clean all symlinks and build artifacts"
     echo -e "  $0 --clean package1   # Clean specific package and build artifacts"
-    echo -e "  $0 -mj                # Build with CMake and MuJoCo simulator support"
 }
 
 main() {
     local packages=()
     local clean_mode=false
-    local mujoco_mode=false
 
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
             -c|--clean) clean_mode=true; shift ;;
-            -mj|--mujoco) mujoco_mode=true; shift ;;
             -h|--help) show_usage; exit 0 ;;
             --) shift; packages+=("$@"); break ;;
             -*) print_error "Unknown option: $1"; show_usage; exit 1 ;;
             *) packages+=("$1"); shift ;;
         esac
     done
-
-    # Handle MuJoCo build mode
-    if [ "$mujoco_mode" = true ]; then
-        prepare_build_platform
-        setup_system_dependencies
-        setup_inference_runtime
-        validate_lw_description
-        setup_mujoco
-        run_mujoco_build
-        exit 0
-    fi
 
     # Handle clean mode
     if [ "$clean_mode" = true ]; then

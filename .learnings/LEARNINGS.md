@@ -160,6 +160,50 @@ LW-041 已在中英文 README 和完整编译部署说明中记录 `--enable-plo
 
 ---
 
+## [LRN-20260815-004] best_practice
+
+**Logged**: 2026-08-15T16:11:48+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+项目应只保留一个受支持的 LW Sim2Sim 构建入口，并让构建、测试和文档共同固定该边界。
+
+### Details
+历史 `build.sh --mujoco` 通过独立的 `USE_CMAKE`/`USE_MUJOCO` CMake 分支构建
+`rl_sim_mujoco`，与标准 ROS 工作空间中的 `rl_sim_LW` 形成第二套仿真实现。
+该入口绕开了当前受维护的共享运行时、生命周期、安全适配和 ROS 集成，容易在主
+Sim2Sim 路径继续演进时静默陈旧。项目实际需要的 MuJoCo 依赖准备、vendor 库、
+无窗口生命周期测试和标准仿真目标均已由完整工作空间构建覆盖，因此额外入口没有
+独立交付价值，反而扩大了代码、文档和验证表面。
+
+### Suggested Action
+将不带包名的完整 `./build.sh` 和其中生成的 `rl_sim_LW` 作为唯一受支持的 LW
+Sim2Sim 构建/运行路径。修改构建系统时同时用回归测试固定三类约束：历史 CLI、
+CMake 选项和独立源文件不存在；标准 `rl_sim_LW` 与 MuJoCo vendor 目标存在；
+操作文档只引导完整工作空间验证。保留共享依赖准备和测试资源，不把删除旧入口误
+扩展为删除标准 MuJoCo 能力。
+
+### Metadata
+- Source: conversation
+- Related Files: build.sh, src/rl_sar/CMakeLists.txt, src/rl_sar/test/test_build_workflow.py, src/rl_sar/test/test_lw_sim_lifecycle_integration.py, docs/LW_BUILD_DEPLOYMENT_CN.md, docs/LW_QUICK_START_CN.md
+- Tags: LW, Sim2Sim, MuJoCo, build-entry, lifecycle, maintenance
+- See Also: LRN-20260815-003
+- Pattern-Key: build.single_supported_sim2sim_entry
+- Recurrence-Count: 1
+- First-Seen: 2026-08-15
+- Last-Seen: 2026-08-15
+
+### Resolution
+- **Resolved**: 2026-08-15T16:11:48+08:00
+- **Commit/PR**: 未提交（按用户要求）
+- **Notes**: 已删除历史 `--mujoco`、`USE_CMAKE`/`USE_MUJOCO`、
+  `rl_sim_mujoco` 源文件和目标；标准 `rl_sim_LW`、MuJoCo 依赖、vendor 库及
+  自动测试保留。现有构建与全新严格构建的 45/45 CTest 均通过。
+
+---
+
 ## [LRN-20260811-003] correction
 
 **Logged**: 2026-08-11T17:57:11+08:00
