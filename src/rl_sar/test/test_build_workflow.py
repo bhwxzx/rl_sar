@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,104 @@ STRICT_BUILD_VALIDATOR = Path(sys.argv.pop(1)).resolve()
 
 
 class BuildWorkflowTests(unittest.TestCase):
+    CLEAN_PACKAGES = ("serial", "fdilink_ahrs", "rl_sar", "lw_description")
+
+    def create_clean_fixture(
+        self, workspace: Path, install_layout: str = "isolated"
+    ) -> dict[str, str]:
+        (workspace / "scripts").mkdir(parents=True)
+        shutil.copy2(BUILD_SCRIPT, workspace / "build.sh")
+        shutil.copy2(
+            BUILD_SCRIPT.parent / "scripts" / "common.sh",
+            workspace / "scripts" / "common.sh",
+        )
+
+        for package in self.CLEAN_PACKAGES:
+            package_dir = workspace / "src" / package
+            package_dir.mkdir(parents=True)
+            (package_dir / "package.ros1.xml").write_text(
+                f"<package><name>{package}</name></package>\n",
+                encoding="utf-8",
+            )
+            (package_dir / "package.ros2.xml").write_text(
+                f"<package><name>{package}</name></package>\n",
+                encoding="utf-8",
+            )
+            (package_dir / "package.xml").symlink_to("package.ros2.xml")
+            for artifact_root in ("build", "install"):
+                artifact = workspace / artifact_root / package
+                artifact.mkdir(parents=True)
+                (artifact / "keep.txt").write_text(package, encoding="utf-8")
+
+        install_root = workspace / "install"
+        (install_root / ".colcon_install_layout").write_text(
+            f"{install_layout}\n", encoding="utf-8"
+        )
+        for shared_directory in ("log", "cmake_build", "logs"):
+            directory = workspace / shared_directory
+            directory.mkdir()
+            (directory / "keep.txt").write_text(
+                shared_directory, encoding="utf-8"
+            )
+
+        fake_bin = workspace / "fake-bin"
+        fake_bin.mkdir()
+        fake_colcon = fake_bin / "colcon"
+        fake_colcon.write_text(
+            "#!/bin/bash\n"
+            "set -e\n"
+            "if [[ \" $* \" == *\" --packages-above \"* ]]; then\n"
+            "  if [[ \" $* \" == *\" serial \"* ]]; then\n"
+            "    printf '%s\\n' serial fdilink_ahrs rl_sar\n"
+            "  elif [[ \" $* \" == *\" fdilink_ahrs \"* ]]; then\n"
+            "    printf '%s\\n' fdilink_ahrs rl_sar\n"
+            "  elif [[ \" $* \" == *\" rl_sar \"* ]]; then\n"
+            "    printf '%s\\n' rl_sar\n"
+            "  else\n"
+            "    printf '%s\\n' lw_description\n"
+            "  fi\n"
+            "else\n"
+            "  printf '%s\\n' serial fdilink_ahrs rl_sar lw_description\n"
+            "fi\n",
+            encoding="utf-8",
+        )
+        fake_colcon.chmod(0o755)
+        fake_catkin = fake_bin / "catkin"
+        fake_catkin.write_text(
+            "#!/bin/sh\n"
+            "set -e\n"
+            "printf '%s\\n' \"$*\" >> \"$RL_SAR_FAKE_CATKIN_LOG\"\n",
+            encoding="utf-8",
+        )
+        fake_catkin.chmod(0o755)
+
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "PATH": f"{fake_bin}:{environment['PATH']}",
+                "ROS_DISTRO": "humble",
+                "RL_SAR_FAKE_CATKIN_LOG": str(workspace / "catkin.log"),
+            }
+        )
+        return environment
+
+    def run_clean(
+        self,
+        workspace: Path,
+        arguments: list[str],
+        environment: dict[str, str],
+        answer: str = "",
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(workspace / "build.sh"), *arguments],
+            check=False,
+            cwd=workspace.parent,
+            env=environment,
+            input=answer,
+            text=True,
+            capture_output=True,
+        )
+
     def test_lw_wrapper_was_removed(self) -> None:
         self.assertFalse(REMOVED_LW_SCRIPT.exists())
 
@@ -62,6 +161,8 @@ class BuildWorkflowTests(unittest.TestCase):
     def test_selected_builds_include_dependency_closure(self) -> None:
         content = BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn("--packages-select", content)
+        self.assertNotIn("--merge-install", content)
+        self.assertIn("colcon build --symlink-install", content)
         self.assertIn('--packages-up-to "${packages[@]}"', content)
 
         build_function = content[content.index("run_ros_build()") :]
@@ -70,6 +171,181 @@ class BuildWorkflowTests(unittest.TestCase):
             build_function.index("create_symlinks_for_all_packages"),
             build_function.index("--packages-up-to"),
         )
+
+    def test_clean_help_and_documentation_match_isolated_layout(self) -> None:
+        result = subprocess.run(
+            ["bash", str(BUILD_SCRIPT), "--help"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        self.assertIn("selected packages and reverse dependencies", result.stdout)
+        self.assertIn("--clean package1", result.stdout)
+
+        deployment = DEPLOYMENT_GUIDE.read_text(encoding="utf-8")
+        quick_start = QUICK_START_GUIDE.read_text(encoding="utf-8")
+        for document in (deployment, quick_start):
+            self.assertIn("isolated", document)
+            self.assertIn("merged", document)
+            self.assertIn("./build.sh --clean", document)
+        self.assertIn("./build.sh --clean serial", deployment)
+        self.assertIn("./build.sh --clean rl_sar", quick_start)
+
+    def test_selected_clean_removes_only_package_closure(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="lw-package-clean-test-"
+        ) as temporary:
+            workspace = Path(temporary) / "workspace"
+            environment = self.create_clean_fixture(workspace)
+
+            result = self.run_clean(
+                workspace, ["--clean", "serial"], environment, "y\n"
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for package in ("serial", "fdilink_ahrs", "rl_sar"):
+                self.assertIn(f"build/{package}", result.stdout)
+                self.assertIn(f"install/{package}", result.stdout)
+                self.assertFalse((workspace / "build" / package).exists())
+                self.assertFalse((workspace / "install" / package).exists())
+            self.assertTrue((workspace / "build/lw_description/keep.txt").is_file())
+            self.assertTrue((workspace / "install/lw_description/keep.txt").is_file())
+            self.assertTrue((workspace / "log/keep.txt").is_file())
+            self.assertTrue((workspace / "cmake_build/keep.txt").is_file())
+            for package in self.CLEAN_PACKAGES:
+                self.assertTrue((workspace / "src" / package / "package.xml").is_symlink())
+
+    def test_selected_clean_rejects_unknown_package_before_deletion(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="lw-package-clean-test-"
+        ) as temporary:
+            workspace = Path(temporary) / "workspace"
+            environment = self.create_clean_fixture(workspace)
+
+            result = self.run_clean(
+                workspace, ["--clean", "../rl_sar"], environment
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Invalid package name '../rl_sar'", result.stdout)
+            for package in self.CLEAN_PACKAGES:
+                self.assertTrue((workspace / "build" / package / "keep.txt").is_file())
+                self.assertTrue((workspace / "install" / package / "keep.txt").is_file())
+
+    def test_selected_clean_rejects_merged_install_without_changes(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="lw-package-clean-test-"
+        ) as temporary:
+            workspace = Path(temporary) / "workspace"
+            environment = self.create_clean_fixture(workspace, "merged")
+
+            result = self.run_clean(
+                workspace, ["--clean", "rl_sar"], environment
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("requires an isolated Colcon install layout", result.stdout)
+            self.assertIn("./build.sh --clean", result.stdout)
+            for package in self.CLEAN_PACKAGES:
+                self.assertTrue((workspace / "build" / package / "keep.txt").is_file())
+                self.assertTrue((workspace / "install" / package / "keep.txt").is_file())
+
+    def test_selected_clean_rejects_symlinked_artifact_root(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="lw-package-clean-test-"
+        ) as temporary:
+            workspace = Path(temporary) / "workspace"
+            environment = self.create_clean_fixture(workspace)
+            external_build = workspace / "external-build"
+            (workspace / "build").rename(external_build)
+            (workspace / "build").symlink_to(
+                external_build, target_is_directory=True
+            )
+
+            result = self.run_clean(
+                workspace, ["--clean", "rl_sar"], environment
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("refuses a symlinked artifact root", result.stdout)
+            for package in self.CLEAN_PACKAGES:
+                self.assertTrue((external_build / package / "keep.txt").is_file())
+                self.assertTrue((workspace / "install" / package / "keep.txt").is_file())
+
+    def test_selected_clean_cancellation_preserves_workspace(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="lw-package-clean-test-"
+        ) as temporary:
+            workspace = Path(temporary) / "workspace"
+            environment = self.create_clean_fixture(workspace)
+
+            result = self.run_clean(
+                workspace, ["--clean", "rl_sar"], environment, "n\n"
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("Clean operation cancelled", result.stdout)
+            for package in self.CLEAN_PACKAGES:
+                self.assertTrue((workspace / "build" / package / "keep.txt").is_file())
+                self.assertTrue((workspace / "install" / package / "keep.txt").is_file())
+
+    def test_ros1_selected_clean_uses_catkin_dependents(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="lw-package-clean-test-"
+        ) as temporary:
+            workspace = Path(temporary) / "workspace"
+            environment = self.create_clean_fixture(workspace)
+            environment["ROS_DISTRO"] = "noetic"
+
+            result = self.run_clean(
+                workspace, ["--clean", "rl_sar"], environment, "y\n"
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            calls = (workspace / "catkin.log").read_text(encoding="utf-8")
+            self.assertIn(
+                "clean --dry-run --yes --dependents rl_sar", calls
+            )
+            self.assertIn("clean --yes --dependents rl_sar", calls)
+
+    def test_ros1_selected_clean_rejects_option_injection(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="lw-package-clean-test-"
+        ) as temporary:
+            workspace = Path(temporary) / "workspace"
+            environment = self.create_clean_fixture(workspace)
+            environment["ROS_DISTRO"] = "noetic"
+
+            result = self.run_clean(
+                workspace, ["--clean", "--", "--force"], environment
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Invalid package name '--force'", result.stdout)
+            self.assertFalse((workspace / "catkin.log").exists())
+            for package in self.CLEAN_PACKAGES:
+                self.assertTrue((workspace / "build" / package / "keep.txt").is_file())
+                self.assertTrue((workspace / "install" / package / "keep.txt").is_file())
+
+    def test_full_clean_keeps_existing_workspace_wide_behavior(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="lw-package-clean-test-"
+        ) as temporary:
+            workspace = Path(temporary) / "workspace"
+            environment = self.create_clean_fixture(workspace, "merged")
+
+            result = self.run_clean(
+                workspace, ["--clean"], environment, "y\n"
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for artifact in ("build", "install", "log", "logs", "cmake_build"):
+                self.assertFalse((workspace / artifact).exists())
+            for package in self.CLEAN_PACKAGES:
+                package_dir = workspace / "src" / package
+                self.assertFalse((package_dir / "package.xml").exists())
+                self.assertTrue((package_dir / "package.ros1.xml").is_file())
+                self.assertTrue((package_dir / "package.ros2.xml").is_file())
 
     def test_documentation_uses_the_single_entry_point(self) -> None:
         for document in (README, DEPLOYMENT_GUIDE, QUICK_START_GUIDE):

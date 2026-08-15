@@ -55,8 +55,11 @@ ros2 run rl_sar rl_sim_LW
 
 上述 `./build.sh` 不带参数时构建整个 ROS 工作区，是正式 Sim2Sim 验证的
 标准入口。开发期可用 `./build.sh rl_sar` 指定包及其依赖；`-c`/`--clean`
-会清理构建产物，完整用法可运行 `./build.sh --help`。交付前必须使用上述完整
-工作区构建完成标准 `rl_sim_LW` Sim2Sim 验证。严格构建默认并行度为 2；
+不带包名时清理整个工作区，`./build.sh --clean rl_sar` 则只清理该包及其反向
+依赖的 isolated `build/`、`install/` 子目录。旧版 merged install 必须先执行
+一次全量 `./build.sh --clean` 再重新构建，脚本不会把包级请求自动扩大为全量
+删除。完整用法可运行 `./build.sh --help`。交付前必须使用上述完整工作区构建
+完成标准 `rl_sim_LW` Sim2Sim 验证。严格构建默认并行度为 2；
 资源受限或需要调整时可显式使用：
 
 ```bash

@@ -3,9 +3,14 @@ set -e
 
 # Get script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+WORKSPACE_ROOT="$SCRIPT_DIR"
 
 # Load common utilities
 source "${SCRIPT_DIR}/scripts/common.sh"
+
+# Keep every relative build and cleanup path bound to this workspace even when
+# the script is launched from another directory.
+cd "$WORKSPACE_ROOT"
 
 # ========================
 # Configuration
@@ -102,11 +107,11 @@ run_ros_build() {
 
     print_header "[Running ROS Build]"
 
-    # Clean existing symlinks
-    clean_existing_symlinks "${packages[@]}"
-
     # Detect incompatible artifacts
     detect_incompatible_build_artifacts
+
+    # Clean existing symlinks
+    clean_existing_symlinks "${packages[@]}"
 
     # Colcon must see every dual-ROS package before resolving dependency closure.
     create_symlinks_for_all_packages
@@ -120,17 +125,17 @@ run_ros_build() {
         else
             print_header "[Using colcon build]"
             print_info "Building all packages..."
-            colcon build --merge-install --symlink-install
+            colcon build --symlink-install
         fi
     else
         if [[ "$ROS_DISTRO" == "noetic" ]]; then
             print_header "[Using catkin build]"
             print_info "Building specific packages: $package_list"
-            catkin build $package_list
+            catkin build "${packages[@]}"
         else
             print_header "[Using colcon build]"
             print_info "Building specific packages: $package_list"
-            colcon build --merge-install --symlink-install \
+            colcon build --symlink-install \
                 --packages-up-to "${packages[@]}"
         fi
     fi
@@ -142,18 +147,11 @@ run_ros_build() {
 # Clean Functions
 # ========================
 
-clean_workspace() {
-    local packages=("$@")
-
+clean_all_workspace() {
     print_header "[Cleaning Workspace]"
 
-    # Show what will be cleaned
     print_info "The following will be cleaned:"
-    if [ ${#packages[@]} -eq 0 ]; then
-        echo "  - All package.xml symlinks in directory src/"
-    else
-        echo "  - Package.xml symlinks for: ${packages[*]}"
-    fi
+    echo "  - All package.xml symlinks in directory src/"
     echo "  - directory build/"
     echo "  - directory cmake_build/"
     echo "  - directory devel/"
@@ -162,46 +160,209 @@ clean_workspace() {
     echo "  - directory logs/"
     echo "  - directory .catkin_tools/"
 
-    # Ask for confirmation
-    if [ ${#packages[@]} -eq 0 ]; then
-        if ! ask_confirmation "Are you sure you want to clean ALL symlinks and build artifacts?"; then
-            print_warning "Clean operation cancelled."
-            exit 0
-        fi
-    else
-        if ! ask_confirmation "Are you sure you want to clean symlinks for specified packages and build artifacts?"; then
-            print_warning "Clean operation cancelled."
-            exit 0
-        fi
+    if ! ask_confirmation "Are you sure you want to clean ALL symlinks and build artifacts?"; then
+        print_warning "Clean operation cancelled."
+        exit 0
     fi
 
-    # Remove package.xml symlinks
-    if [ ${#packages[@]} -eq 0 ]; then
-        print_info "Removing all package.xml symlinks..."
-        find src -name "package.xml" -type l -delete
-        print_success "Removed all symlinks"
-    else
-        print_info "Removing symlinks for specific packages..."
-        for package_name in "${packages[@]}"; do
-            package_dir=$(find src -name "$package_name" -type d | head -n 1)
-            if [ -n "$package_dir" ]; then
-                if [ -L "$package_dir/package.xml" ]; then
-                    rm -f "$package_dir/package.xml"
-                    print_success "Removed symlink from $package_name"
-                else
-                    print_warning "No symlink found for $package_name"
-                fi
-            else
-                print_error "Package '$package_name' not found in src directory"
-            fi
-        done
-    fi
+    print_info "Removing all package.xml symlinks..."
+    find "$WORKSPACE_ROOT/src" -name "package.xml" -type l -delete
+    print_success "Removed all symlinks"
 
-    # Clean build artifacts
     print_info "Cleaning build artifacts..."
-    rm -rf build/ cmake_build/ devel/ install/ log/ logs/ .catkin_tools/
+    rm -rf -- \
+        "$WORKSPACE_ROOT/build" \
+        "$WORKSPACE_ROOT/cmake_build" \
+        "$WORKSPACE_ROOT/devel" \
+        "$WORKSPACE_ROOT/install" \
+        "$WORKSPACE_ROOT/log" \
+        "$WORKSPACE_ROOT/logs" \
+        "$WORKSPACE_ROOT/.catkin_tools"
 
     print_success "Clean completed!"
+}
+
+validate_ros2_isolated_layout() {
+    local install_root="$WORKSPACE_ROOT/install"
+    local layout_marker="$install_root/.colcon_install_layout"
+    local layout=""
+    local artifact_root=""
+
+    for artifact_root in "$WORKSPACE_ROOT/build" "$install_root"; do
+        if [ -L "$artifact_root" ]; then
+            print_error "Package cleanup refuses a symlinked artifact root: $artifact_root"
+            return 1
+        fi
+        if [ -e "$artifact_root" ] && [ ! -d "$artifact_root" ]; then
+            print_error "Package cleanup requires a directory artifact root: $artifact_root"
+            return 1
+        fi
+    done
+
+    if [ -e "$layout_marker" ]; then
+        if [ ! -f "$layout_marker" ] || [ -L "$layout_marker" ]; then
+            print_error "Invalid Colcon install layout marker: $layout_marker"
+            return 1
+        fi
+        IFS= read -r layout < "$layout_marker" || true
+        if [ "$layout" != "isolated" ]; then
+            print_error "Package cleanup requires an isolated Colcon install layout; found '${layout:-unknown}'."
+            print_info "Run './build.sh --clean' once, then './build.sh' to migrate safely."
+            return 1
+        fi
+    elif [ -d "$install_root" ] && [ -n "$(find "$install_root" -mindepth 1 -print -quit)" ]; then
+        print_error "Package cleanup cannot identify the existing install layout."
+        print_info "Run './build.sh --clean' once, then './build.sh' to recreate it safely."
+        return 1
+    fi
+}
+
+resolve_ros2_clean_packages() {
+    local requested=("$@")
+    local discovered_output=""
+    local affected_output=""
+    local package_name=""
+    local -A discovered=()
+    local -A affected_seen=()
+
+    if ! discovered_output=$(colcon list --names-only); then
+        print_error "Failed to discover ROS 2 packages before cleanup."
+        return 1
+    fi
+    while IFS= read -r package_name; do
+        if [ -n "$package_name" ]; then
+            if [[ "$package_name" = "." || "$package_name" = ".."
+               || "$package_name" = */* ]]; then
+                print_error "Colcon returned an unsafe package name: '$package_name'"
+                return 1
+            fi
+            discovered["$package_name"]=1
+        fi
+    done <<< "$discovered_output"
+
+    for package_name in "${requested[@]}"; do
+        if [ -z "${discovered[$package_name]+present}" ]; then
+            print_error "Unknown package '$package_name'; no files were removed."
+            return 1
+        fi
+    done
+
+    if ! affected_output=$(colcon list --names-only --topological-order \
+        --packages-above "${requested[@]}"); then
+        print_error "Failed to resolve packages which depend on: ${requested[*]}"
+        return 1
+    fi
+
+    ROS2_CLEAN_PACKAGES=()
+    while IFS= read -r package_name; do
+        if [ -n "$package_name" ]; then
+            if [ -z "${discovered[$package_name]+present}" ]; then
+                print_error "Colcon returned an undiscovered affected package: '$package_name'"
+                return 1
+            fi
+            if [ -z "${affected_seen[$package_name]+present}" ]; then
+                affected_seen["$package_name"]=1
+                ROS2_CLEAN_PACKAGES+=("$package_name")
+            fi
+        fi
+    done <<< "$affected_output"
+    if [ ${#ROS2_CLEAN_PACKAGES[@]} -eq 0 ]; then
+        print_error "No packages were resolved for cleanup; no files were removed."
+        return 1
+    fi
+}
+
+clean_ros2_packages() {
+    local requested=("$@")
+    local package_name=""
+    local index=0
+
+    validate_ros2_isolated_layout
+    resolve_ros2_clean_packages "${requested[@]}"
+
+    print_header "[Cleaning Selected ROS 2 Packages]"
+    print_info "Requested packages: ${requested[*]}"
+    print_info "The following packages will be cleaned, including reverse dependencies:"
+    for package_name in "${ROS2_CLEAN_PACKAGES[@]}"; do
+        echo "  - build/$package_name"
+        echo "  - install/$package_name"
+    done
+    print_info "Shared log directories and package.xml symlinks will be preserved."
+
+    if ! ask_confirmation "Proceed with this package-scoped cleanup?"; then
+        print_warning "Clean operation cancelled."
+        return 0
+    fi
+
+    # Delete dependents before their dependencies. Package names come only
+    # from Colcon discovery, and build/install roots were rejected if symlinked.
+    for ((index=${#ROS2_CLEAN_PACKAGES[@]} - 1; index >= 0; index--)); do
+        package_name="${ROS2_CLEAN_PACKAGES[$index]}"
+        rm -rf -- \
+            "$WORKSPACE_ROOT/build/$package_name" \
+            "$WORKSPACE_ROOT/install/$package_name"
+    done
+    print_success "Selected ROS 2 package cleanup completed!"
+}
+
+clean_ros1_packages() {
+    local requested=("$@")
+
+    if ! command -v catkin >/dev/null 2>&1; then
+        print_error "catkin_tools is required for ROS 1 package cleanup."
+        return 1
+    fi
+    print_header "[Cleaning Selected ROS 1 Packages]"
+    print_info "Requested packages and their reverse dependencies will be cleaned: ${requested[*]}"
+    if ! catkin clean --dry-run --yes --dependents "${requested[@]}"; then
+        print_error "ROS 1 package cleanup preflight failed; no files were removed."
+        return 1
+    fi
+    if ! ask_confirmation "Proceed with this package-scoped cleanup?"; then
+        print_warning "Clean operation cancelled."
+        return 0
+    fi
+    catkin clean --yes --dependents "${requested[@]}"
+    print_success "Selected ROS 1 package cleanup completed!"
+}
+
+clean_selected_packages() {
+    local packages=("$@")
+    local package_name=""
+
+    for package_name in "${packages[@]}"; do
+        if [[ ! "$package_name" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]]; then
+            print_error "Invalid package name '$package_name'; no files were removed."
+            return 1
+        fi
+    done
+
+    if [ -z "${ROS_DISTRO:-}" ]; then
+        print_error "ROS environment not detected. Source ROS before cleaning selected packages."
+        return 1
+    fi
+    case "$ROS_DISTRO" in
+        noetic)
+            clean_ros1_packages "${packages[@]}"
+            ;;
+        foxy|humble)
+            clean_ros2_packages "${packages[@]}"
+            ;;
+        *)
+            print_error "Unsupported ROS distribution for package cleanup: $ROS_DISTRO"
+            return 1
+            ;;
+    esac
+}
+
+clean_workspace() {
+    local packages=("$@")
+
+    if [ ${#packages[@]} -eq 0 ]; then
+        clean_all_workspace
+    else
+        clean_selected_packages "${packages[@]}"
+    fi
 }
 
 clean_existing_symlinks() {
@@ -240,6 +401,18 @@ detect_incompatible_build_artifacts() {
     print_header "[Checking for Incompatible Build Artifacts]"
 
     local needs_cleanup=false
+
+    if [[ "$ROS_DISTRO" != "noetic"
+       && -f "$WORKSPACE_ROOT/install/.colcon_install_layout" ]]; then
+        local install_layout=""
+        IFS= read -r install_layout \
+            < "$WORKSPACE_ROOT/install/.colcon_install_layout" || true
+        if [ "$install_layout" = "merged" ]; then
+            print_error "The existing ROS 2 workspace uses the legacy merged install layout."
+            print_info "Run './build.sh --clean' once before rebuilding with isolated installs."
+            return 1
+        fi
+    fi
 
     # Check for ROS1 artifacts when using ROS2
     if [[ "$ROS_DISTRO" != "noetic" ]]; then
@@ -316,14 +489,14 @@ show_usage() {
     echo -e "Usage: $0 [OPTIONS] [PACKAGE_NAMES...]"
     echo ""
     echo -e "${COLOR_INFO}Options:${COLOR_RESET}"
-    echo -e "  -c, --clean      Clean workspace (remove symlinks and build artifacts)"
+    echo -e "  -c, --clean      Clean all artifacts, or selected packages and reverse dependencies"
     echo -e "  -h, --help       Show this help message"
     echo ""
     echo -e "${COLOR_INFO}Examples:${COLOR_RESET}"
     echo -e "  $0                    # Build all ROS packages"
     echo -e "  $0 package1 package2  # Build specific ROS packages"
     echo -e "  $0 -c                 # Clean all symlinks and build artifacts"
-    echo -e "  $0 --clean package1   # Clean specific package and build artifacts"
+    echo -e "  $0 --clean package1   # Clean a package and packages which depend on it"
 }
 
 main() {

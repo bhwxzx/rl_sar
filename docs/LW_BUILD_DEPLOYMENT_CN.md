@@ -133,12 +133,24 @@ ros2 pkg prefix rl_sar
 | 形式 | 含义 |
 | --- | --- |
 | `./build.sh [PACKAGE_NAMES...]` | 不带包名时构建整个 ROS 工作区；带包名时构建指定包及其依赖 |
-| `./build.sh -c` / `./build.sh --clean [PACKAGE_NAMES...]` | 清理全部或指定包的工作区链接和构建产物 |
+| `./build.sh -c` / `./build.sh --clean` | 经确认后清理全部工作区链接和构建产物 |
+| `./build.sh --clean PACKAGE_NAMES...` | 经确认后清理指定包及其反向依赖的 ROS 构建/安装产物 |
 | `./build.sh -h` / `./build.sh --help` | 显示用法后退出 |
 
-`--clean` 是显式清理操作。交付前的 Sim2Sim 验证必须使用不带包名的完整
-工作区构建；它不能代替本文后续由 `build_lw_deployment.sh` 生成和验收的
-正式部署包。
+`--clean` 是显式清理操作。无包名时会删除整个 `build/`、`install/`、日志目录
+和生成的 `package.xml` 链接；带包名时会先验证包名并列出该包及所有反向依赖，
+确认后只删除这些包各自的 `build/<package>`、`install/<package>`，保留共享日志、
+其它包和源码链接。例如 `./build.sh --clean serial` 会同时列出并清理依赖
+`serial` 的包，避免留下与新依赖不一致的旧二进制。
+
+ROS 2 开发工作区使用 Colcon isolated install，以提供明确的包级删除边界。
+如果现有工作区来自旧版 merged install（`--merge-install`），包级清理会在任何删除前拒绝；先运行
+一次 `./build.sh --clean`，再运行 `./build.sh` 完成布局迁移。脚本不会把包级
+清理自动扩大为全量删除。ROS 1 包级清理由 `catkin clean --dependents` 执行，
+需要 catkin_tools 的 linked devel 布局。
+
+交付前的 Sim2Sim 验证必须使用不带包名的完整工作区构建；它不能代替本文后续由
+`build_lw_deployment.sh` 生成和验收的正式部署包。
 
 在 Jetson 上，`./build.sh` 会自动检查 Linux/aarch64、L4T/Tegra 和 Jetson
 CUDA 标志，并在日志中输出 `Jetson mode: true`。只有容器等环境隐藏了这些
