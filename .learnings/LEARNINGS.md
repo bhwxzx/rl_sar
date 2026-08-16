@@ -1,5 +1,123 @@
 # Learnings
 
+## [LRN-20260816-003] correction
+
+**Logged**: 2026-08-16T12:38:22+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+当前操作文档应只描述现行接口，无需持续说明已移除的历史参数。
+
+### Details
+Sim2Sim 执行器路径清理后，README、快速指南和部署指南增加了
+旧 `--use_actuator_net` 参数已移除并会失败的说明。用户明确要求
+面向操作者的当前文档不保留该迁移提示，只说明当前 PD+前馈行为和
+可用参数。运行时仍可保留旧参数的显式拒绝作为防误用保护。
+
+### Suggested Action
+更新现行使用文档时，优先列出当前受支持的行为与参数；除非用户要求
+迁移指南，不把已删除的旧接口继续放在操作说明中。
+
+### Metadata
+- Source: user_feedback
+- Related Files: README.md, docs/LW_QUICK_START_CN.md, docs/LW_BUILD_DEPLOYMENT_CN.md
+- Tags: documentation, current-interface, migration-note, Sim2Sim
+- Pattern-Key: docs.describe_current_interface_without_retired_flags
+- Recurrence-Count: 1
+- First-Seen: 2026-08-16
+- Last-Seen: 2026-08-16
+
+### Resolution
+- **Resolved**: 2026-08-16T12:38:22+08:00
+- **Commit/PR**: 本提交
+- **Notes**: 三份现行操作文档已删除旧参数的退役与失败说明，
+  保留当前 PD+前馈行为、ONNX 策略根和 Plot 参数说明；运行时防误用保护未变。
+
+---
+
+## [LRN-20260816-001] correction
+
+**Logged**: 2026-08-16T12:09:29+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: backend
+
+### Summary
+退役 Sim2Sim 执行器网络接管路径时必须保留离线执行器模型训练与评估能力。
+
+### Details
+初版退役方案把 Sim2Sim C++ 执行器网络推理、Python 训练脚本和两个已训练 `.pt`
+资产一起列入删除范围。用户明确纠正：只删除执行器网络替换 MuJoCo 底层执行器
+的运行时功能，仍需保留模型训练功能。因此 Python `torch`、
+`scripts/actuator_net.py`、脚本安装入口以及 leg/foot `.pt` 训练产物不属于删除
+范围；C++ LibTorch 推理依赖可与 Python 训练依赖分开处理。
+
+### Suggested Action
+在新的 LW 单项中删除 `--use_actuator_net`、C++ 模型加载和力矩接管路径，并将
+运行时构建收敛为 ONNX-only；保留和验证 Python 训练/评估工具及现有模型资产，
+文档明确区分“可离线训练”与“不会被 Sim2Sim 运行时加载”。
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/rl_sar/src/rl_sim_LW.cpp, src/rl_sar/scripts/actuator_net.py, policy/LW/robot_lab/motors
+- Tags: Sim2Sim, actuator-network, training, Python, LibTorch, scope
+- Pattern-Key: simulation.retire_runtime_preserve_actuator_training
+- Recurrence-Count: 1
+- First-Seen: 2026-08-16
+- Last-Seen: 2026-08-16
+
+### Resolution
+- **Resolved**: 2026-08-16T12:35:00+08:00
+- **Commit/PR**: 本提交
+- **Notes**: LW-043 仅退役 Sim2Sim C++ 执行器模型接管和 LibTorch
+  链路；`actuator_net.py`、其 CMake 安装规则及 leg/foot `.pt` 保持
+  字节不变。文档已明确 Python 离线训练与 C++ 运行时的边界。
+
+---
+
+## [LRN-20260816-002] knowledge_gap
+
+**Logged**: 2026-08-16T12:10:18+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: backend
+
+### Summary
+当前执行器训练脚本的固定策略路径与仓库现有根级 `policy/` 布局不一致。
+
+### Details
+`src/rl_sar/scripts/actuator_net.py` 以脚本父目录为 `BASE_PATH`，随后把 `--data`
+和 `--output` 拼到 `BASE_PATH/policy`。源码运行时实际指向不存在的
+`src/rl_sar/policy/`；安装后也会从 `install/rl_sar/lib/` 推导错误的 policy
+目录。仓库当前真实策略根是 `/home/lfr/rl_sar/policy`，因此仅保留脚本文件不能
+证明训练入口可用。
+
+### Suggested Action
+保留训练算法和模型格式，但把 `--data`、`--output` 改为明确路径参数，并在写入
+前校验输入文件、输出父目录和覆盖语义；用临时 CSV、CPU 小配置及临时输出路径
+覆盖训练/评估入口，避免测试改写正式 `.pt` 资产。
+
+### Metadata
+- Source: investigation
+- Related Files: src/rl_sar/scripts/actuator_net.py, policy/LW/robot_lab/motors
+- Tags: actuator-training, path-resolution, Python, policy-root, testing
+- Pattern-Key: training.actuator_paths_match_repository_layout
+- Recurrence-Count: 1
+- First-Seen: 2026-08-16
+- Last-Seen: 2026-08-16
+
+### Resolution
+- **Resolved**: 2026-08-16T12:35:00+08:00
+- **Commit/PR**: 本提交
+- **Notes**: 用户批准的 LW-043 不重构训练脚本；当前
+  `os.path.join()` 对绝对参数保留绝对路径，README 已要求
+  `--data`/`--output` 使用绝对路径，避免落入不存在的
+  `src/rl_sar/policy/`。若未来需改变相对路径契约，应作为独立范围处理。
+
+---
+
 ## [LRN-20260814-001] correction
 
 **Logged**: 2026-08-14T20:17:53+08:00

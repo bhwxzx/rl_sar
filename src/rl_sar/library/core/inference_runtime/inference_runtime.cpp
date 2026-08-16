@@ -8,10 +8,6 @@
 #include <iostream>
 #include <numeric>
 
-#ifdef USE_TORCH
-#include <ATen/Parallel.h>
-#endif
-
 namespace InferenceRuntime
 {
 
@@ -33,109 +29,6 @@ const std::vector<TensorMetadata>& Model::output_metadata() const
 {
     return emptyTensorMetadata();
 }
-
-// ============================================================================
-// TorchModel Implementation
-// ============================================================================
-
-TorchModel::TorchModel()
-{
-#ifdef USE_TORCH
-    // Set threads before model load
-    torch::set_num_threads(1);
-#endif
-}
-
-TorchModel::~TorchModel()
-{
-}
-
-bool TorchModel::load(const std::string& model_path)
-{
-    try
-    {
-#ifdef USE_TORCH
-        // Load TorchScript model
-        model_ = torch::jit::load(model_path);
-        model_path_ = model_path;
-        loaded_ = true;
-        std::cout << LOGGER::INFO << "Successfully loaded Torch model: " << model_path << std::endl;
-        return true;
-#else
-        std::cout << LOGGER::WARNING << "Torch support not compiled. Please define USE_TORCH." << std::endl;
-        loaded_ = false;
-        return false;
-#endif
-    }
-    catch (const std::exception& e)
-    {
-        std::cout << LOGGER::ERROR << "Failed to load Torch model: " << e.what() << std::endl;
-        loaded_ = false;
-        return false;
-    }
-}
-
-std::vector<float> TorchModel::forward(const std::vector<std::vector<float>>& inputs)
-{
-    if (!loaded_)
-    {
-        throw std::runtime_error("Model not loaded");
-    }
-
-#ifdef USE_TORCH
-    try
-    {
-        // Convert input vector to Torch tensor (use first input only)
-        const auto& input = inputs[0];
-        auto input_tensor = torch::tensor(input, torch::kFloat32).reshape({1, static_cast<int64_t>(input.size())});
-
-        // Disable gradient computation before each forward pass
-        torch::autograd::GradMode::set_enabled(false);
-
-        // Ensure single-threaded execution (critical for performance!)
-        torch::set_num_threads(1);
-
-        // Execute forward inference
-        auto output = model_.forward({input_tensor}).toTensor();
-
-        // Convert output tensor to vector
-        return torch_to_vector(output);
-    }
-    catch (const std::exception& e)
-    {
-        std::cout << LOGGER::ERROR << "Torch inference error: " << e.what() << std::endl;
-        throw;
-    }
-#else
-    throw std::runtime_error("Torch support not compiled");
-#endif
-}
-
-#ifdef USE_TORCH
-torch::Tensor TorchModel::vector_to_torch(const std::vector<float>& data, const std::vector<int64_t>& shape)
-{
-    // Use torch::tensor() + reshape() to match test program behavior
-    auto tensor = torch::tensor(data, torch::kFloat32).reshape(shape);
-    return tensor;
-}
-
-std::vector<float> TorchModel::torch_to_vector(const torch::Tensor& tensor)
-{
-    // Ensure tensor is contiguous and on CPU
-    auto cpu_tensor = tensor.is_contiguous() ? tensor : tensor.contiguous();
-    if (cpu_tensor.device().type() != torch::kCPU)
-    {
-        cpu_tensor = cpu_tensor.to(torch::kCPU);
-    }
-
-    // Get data pointer and size
-    float* data_ptr = cpu_tensor.data_ptr<float>();
-    int64_t num_elements = cpu_tensor.numel();
-
-    // Copy data to vector
-    return std::vector<float>(data_ptr, data_ptr + num_elements);
-}
-#endif
 
 // ============================================================================
 // ONNXModel Implementation
@@ -376,8 +269,6 @@ std::unique_ptr<Model> ModelFactory::create_model(ModelType type)
 {
     switch (type)
     {
-        case ModelType::TORCH:
-            return std::make_unique<TorchModel>();
         case ModelType::ONNX:
             return std::make_unique<ONNXModel>();
         default:
@@ -395,17 +286,15 @@ ModelFactory::ModelType ModelFactory::detect_model_type(const std::string& model
     std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
 
     // Determine model type based on extension
-    if (extension == ".pt" || extension == ".pth")
-    {
-        return ModelType::TORCH;
-    }
-    else if (extension == ".onnx")
+    if (extension == ".onnx")
     {
         return ModelType::ONNX;
     }
     else
     {
-        throw std::runtime_error("Unknown model file extension: " + extension + ". Supported: .pt, .pth, .onnx");
+        throw std::runtime_error(
+            "Unknown model file extension: " + extension
+            + ". Supported: .onnx");
     }
 }
 

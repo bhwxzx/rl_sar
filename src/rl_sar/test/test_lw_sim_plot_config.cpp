@@ -61,7 +61,7 @@ void TestPlotDefaultsOffAtOneHundredHertz()
         "Sim2Sim plot default rate differs from 100 Hz");
 
     const auto unrelated = Parse(
-        {"rl_sim_LW", "--policy-root", "/tmp/policy", "--use_actuator_net"});
+        {"rl_sim_LW", "--policy-root", "/tmp/policy"});
     Require(!unrelated.enabled, "unrelated arguments enabled plotting");
 }
 
@@ -96,6 +96,9 @@ void TestExplicitPlotRatesAndPeriods()
 
 void TestInvalidPlotArgumentsFailClosed()
 {
+    RequireFailure(
+        {"rl_sim_LW", "--use_actuator_net"},
+        "--use_actuator_net has been removed");
     RequireFailure({"rl_sim_LW", "--plot-rate-hz"}, "requires an integer");
     RequireFailure(
         {"rl_sim_LW", "--enable-plot", "--plot-rate-hz", "fast"},

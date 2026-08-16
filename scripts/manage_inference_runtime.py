@@ -77,7 +77,7 @@ def load_catalog(path: Path) -> list[dict[str, str]]:
         if not isinstance(raw_entry, dict) or set(raw_entry) != ENTRY_FIELDS:
             raise RuntimeErrorWithCode("catalog archive entry has an unexpected field set")
         entry = {field: require_string(raw_entry, field) for field in ENTRY_FIELDS}
-        if entry["kind"] not in {"onnx", "libtorch"}:
+        if entry["kind"] != "onnx":
             raise RuntimeErrorWithCode(f"unsupported runtime kind in catalog: {entry['kind']}")
         if entry["os"] != "Linux":
             raise RuntimeErrorWithCode(f"unsupported runtime OS in catalog: {entry['os']}")
@@ -160,7 +160,9 @@ def run_validator(
 
 
 def destination_for(runtime_root: Path, kind: str) -> Path:
-    return runtime_root / ("onnxruntime" if kind == "onnx" else "libtorch")
+    if kind != "onnx":
+        raise RuntimeErrorWithCode(f"unsupported runtime kind: {kind}")
+    return runtime_root / "onnxruntime"
 
 
 def check_runtime(args: argparse.Namespace, entry: dict[str, str]) -> None:
@@ -353,7 +355,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage pinned inference runtimes.")
     parser.add_argument("action", choices=("select", "check", "install"))
     parser.add_argument("--catalog", type=Path, required=True)
-    parser.add_argument("--kind", choices=("onnx", "libtorch"), required=True)
+    parser.add_argument("--kind", choices=("onnx",), required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--os", dest="os_name", required=True)
     parser.add_argument("--architecture", required=True)

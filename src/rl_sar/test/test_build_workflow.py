@@ -395,30 +395,21 @@ class BuildWorkflowTests(unittest.TestCase):
             main.index("setup_inference_runtime"),
         )
 
-    def test_jetson_build_prepares_only_onnx(self) -> None:
+    def test_all_builds_prepare_only_onnx(self) -> None:
         build_content = BUILD_SCRIPT.read_text(encoding="utf-8")
         setup = build_content[build_content.index("setup_inference_runtime()") :]
         setup = setup[: setup.index("setup_system_dependencies()")]
-        self.assertIn("runtime_target=all", setup)
-        self.assertIn('if [ "${IS_JETSON}" = true ]', setup)
         self.assertIn("runtime_target=onnx", setup)
+        self.assertNotIn("runtime_target=all", setup)
+        self.assertNotIn('if [ "${IS_JETSON}" = true ]', setup)
         self.assertIn('bash "$DOWNLOAD_SCRIPT" "$runtime_target"', setup)
 
         downloader = RUNTIME_DOWNLOADER.read_text(encoding="utf-8")
-        self.assertIn("Jetson production path is ONNX-only", downloader)
-        self.assertIn("DOWNLOAD_TARGET=onnx", downloader)
+        self.assertIn('DOWNLOAD_TARGET="onnx"', downloader)
+        self.assertIn('ensure_runtime onnx "$ONNXRUNTIME_VERSION"', downloader)
+        self.assertNotIn("LIBTORCH_VERSION", downloader)
+        self.assertNotIn("ensure_runtime libtorch", downloader)
         self.assertNotIn("install_pytorch_jetson.sh", downloader)
-
-    def test_non_jetson_development_keeps_automatic_libtorch(self) -> None:
-        build_content = BUILD_SCRIPT.read_text(encoding="utf-8")
-        setup = build_content[build_content.index("setup_inference_runtime()") :]
-        setup = setup[: setup.index("setup_system_dependencies()")]
-        self.assertIn("runtime_target=all", setup)
-
-        downloader = RUNTIME_DOWNLOADER.read_text(encoding="utf-8")
-        all_target = downloader[downloader.index('    all)') :]
-        self.assertIn('ensure_runtime libtorch "$LIBTORCH_VERSION"', all_target)
-        self.assertIn('ensure_runtime onnx "$ONNXRUNTIME_VERSION"', all_target)
 
     def test_runtime_download_is_pinned_and_transactional(self) -> None:
         downloader = RUNTIME_DOWNLOADER.read_text(encoding="utf-8")
@@ -430,7 +421,7 @@ class BuildWorkflowTests(unittest.TestCase):
         self.assertNotIn("Darwin)", downloader)
         self.assertNotIn("MINGW", downloader)
 
-    def test_explicit_jetson_libtorch_request_is_rejected(self) -> None:
+    def test_removed_libtorch_target_is_rejected(self) -> None:
         environment = os.environ.copy()
         environment.update(
             {
@@ -447,14 +438,15 @@ class BuildWorkflowTests(unittest.TestCase):
             env=environment,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not supported", result.stdout)
+        self.assertIn("Download target must be onnx", result.stdout)
         self.assertNotIn("Downloading", result.stdout)
 
     def test_production_cmake_and_deployment_are_onnx_only(self) -> None:
         cmake = CMAKE_FILE.read_text(encoding="utf-8")
         self.assertIn("if(IS_JETSON OR LW_PRODUCTION_DEPLOYMENT)", cmake)
-        self.assertIn("set(TORCH_BACKEND_ALLOWED FALSE)", cmake)
-        self.assertIn("LibTorch disabled", cmake)
+        self.assertNotIn("TORCH_BACKEND_ALLOWED", cmake)
+        self.assertNotIn("USE_TORCH", cmake)
+        self.assertNotIn("find_package(Torch", cmake)
         self.assertIn("ONNX Runtime validation failed", cmake)
         self.assertIn('INSTALL_RPATH "$ORIGIN/onnxruntime"', cmake)
         self.assertIn('RENAME "libonnxruntime.so.1"', cmake)
@@ -488,6 +480,21 @@ class BuildWorkflowTests(unittest.TestCase):
         self.assertIn("FILES launch/rl_real_LW.launch.py", production_block)
         self.assertNotIn("DIRECTORY launch worlds", production_block)
         self.assertIn("DIRECTORY launch worlds", development_block)
+
+    def test_offline_actuator_training_assets_remain_installed(self) -> None:
+        cmake = CMAKE_FILE.read_text(encoding="utf-8")
+        install_block = cmake[cmake.index("# executable for actuator net") :]
+        self.assertIn("scripts/actuator_net.py", install_block)
+
+        repository_root = CMAKE_FILE.parents[2]
+        self.assertTrue(
+            (repository_root / "policy/LW/robot_lab/motors/leg_actuator_net.pt")
+            .is_file()
+        )
+        self.assertTrue(
+            (repository_root / "policy/LW/robot_lab/motors/foot_actuator_net.pt")
+            .is_file()
+        )
 
     def test_dependency_installer_lists_base_and_ros_packages(self) -> None:
         environment = os.environ.copy()

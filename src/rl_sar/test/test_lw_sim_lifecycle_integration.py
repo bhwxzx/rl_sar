@@ -120,30 +120,25 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
             main.index("shutdown_coordinator.Unbind();"),
         )
 
-    def test_optional_actuator_models_follow_the_selected_policy_root(self) -> None:
+    def test_actuator_model_runtime_is_absent(self) -> None:
         source = SIM_SOURCE.read_text(encoding="utf-8")
+        header = SIM_HEADER.read_text(encoding="utf-8")
         constructor = source[
             source.index("RL_Real::RL_Real(") : source.index("RL_Real::~RL_Real()")
         ]
-        actuator_block = constructor[
-            constructor.index("if (this->use_actuator_net_)") : constructor.index(
-                "// auto load FSM"
-            )
-        ]
 
-        self.assertIn(
-            "ResolveLWActuatorModelPaths(policy_root_, this->robot_name)",
-            actuator_block,
-        )
-        self.assertIn(
-            "LoadLWActuatorModel(actuator_model_paths_.leg)", actuator_block
-        )
-        self.assertIn(
-            "LoadLWActuatorModel(actuator_model_paths_.foot)", actuator_block
-        )
-        self.assertNotIn("POLICY_DIR", actuator_block)
-        self.assertIn("Loading leg actuator model:", actuator_block)
-        self.assertIn("Loading foot actuator model:", actuator_block)
+        for removed in (
+            "use_actuator_net_",
+            "UpdateActuatorNetwork",
+            "LoadLWActuatorModel",
+            "actuator_model_paths_",
+            "actuator_net_torque_frame_",
+            "pos_err_history_",
+            "vel_history_",
+        ):
+            self.assertNotIn(removed, source)
+            self.assertNotIn(removed, header)
+        self.assertNotIn(".pt", constructor)
 
     def test_plot_publishing_is_explicit_and_operator_status_is_independent(
         self,
@@ -208,32 +203,27 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
         ):
             self.assertIn(payload_name, callback)
 
-    def test_actuator_network_and_mujoco_torques_are_transactional(self) -> None:
+    def test_pd_ff_mujoco_torques_are_validated_transactionally(self) -> None:
         source = SIM_SOURCE.read_text(encoding="utf-8")
-        update = source[
-            source.index("void RL_Real::UpdateActuatorNetwork()") : source.index(
-                "void RL_Real::RunModel()"
-            )
-        ]
         command = source[
             source.index("void RL_Real::SetCommand(") : source.index(
                 "void RL_Real::SetupSysJoystick("
             )
         ]
 
-        self.assertNotIn("output[0]", update)
-        self.assertLess(update.index("beginUpdate()"), update.index("const auto activation"))
-        self.assertIn("!runtime_core_.controlledFallbackLatched()", update)
-        self.assertEqual(update.count("actuator_net_torque_frame_.commit("), 1)
-        self.assertEqual(
-            update.count("LWSafetyEvent::SimulationActuatorCommandInvalid"),
-            2,
-        )
+        self.assertIn("command->motor_command.tau[i]", command)
+        self.assertIn("command->motor_command.kp[i]", command)
+        self.assertIn("command->motor_command.kd[i]", command)
+        self.assertNotIn("actuator_net", command)
 
-        prepare = command.index("PrepareLWActuatorTorques(")
+        prepare = command.index("PrepareLWSimTorques(")
         first_write = command.index("mj_data->ctrl[")
         self.assertLess(prepare, first_write)
         self.assertIn("if (!validation.valid())", command[prepare:first_write])
+        self.assertIn(
+            "LWSafetyEvent::SimulationActuatorCommandInvalid",
+            command[prepare:first_write],
+        )
         self.assertNotIn("mj_data->ctrl[", command[:prepare])
 
 

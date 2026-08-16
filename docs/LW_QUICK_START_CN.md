@@ -102,18 +102,15 @@ ros2 run plotjuggler plotjuggler
 
 在 PlotJuggler 中选择 ROS 2 Bag 数据加载器并打开 `$bag_dir` 对应的 bag。
 
-如需改用非编译期策略目录，使用 `--policy-root PATH`；如需启用可选的
-TorchScript 执行器网络，追加 `--use_actuator_net`。同时使用的示例为：
+如需改用非编译期策略目录，使用 `--policy-root PATH`：
 
 ```bash
 ros2 run rl_sar rl_sim_LW \
-    --policy-root /absolute/path/to/policy \
-    --use_actuator_net
+    --policy-root /absolute/path/to/policy
 ```
 
-有效策略根必须包含四套 ONNX 策略；启用执行器网络时还必须包含
-`LW/robot_lab/motors/{leg,foot}_actuator_net.pt`。任一所需模型缺失或契约
-不兼容都会使启动失败。这两个参数可独立使用，也可与 Plot 参数组合。
+有效策略根只需包含四套 ONNX 策略。Sim2Sim 的每个关节始终使用
+MuJoCo PD+前馈力矩。`--policy-root` 可与 Plot 参数组合。
 
 至少确认四个 ONNX 策略均为本次候选版本，腿式、轮式和两个形态转换都能完整
 运行，没有加载错误、NaN、越界、持续发散、明显跳变或控制周期异常。关闭仿真后
@@ -151,7 +148,7 @@ src/rl_sar/scripts/build_lw_deployment.sh \
 ```
 
 `validate_inference_runtime.sh` 的完整形式为
-`<onnx|libtorch> <runtime-directory> [architecture]`；本正式部署路径必须保持
+`<onnx> <runtime-directory> [architecture]`；本正式部署路径必须保持
 上述 `onnx` 和当前机器架构校验；支持的架构名为 `x86_64`/`amd64` 和
 `aarch64`/`arm64`。`build_lw_deployment.sh` 的形式为
 `<empty-output-prefix> [commit]`；脚本虽允许省略提交并使用 `HEAD`，但本可追溯部署

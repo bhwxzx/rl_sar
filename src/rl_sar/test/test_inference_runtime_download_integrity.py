@@ -238,13 +238,6 @@ class InferenceRuntimeDownloadIntegrityTests(unittest.TestCase):
             actual,
             {
                 (
-                    "libtorch",
-                    "2.3.0",
-                    "Linux",
-                    "x86_64",
-                    "f60009d2a74b6c8bdb174e398c70d217b7d12a4d3d358cd1db0690b32f6e193b",
-                ),
-                (
                     "onnx",
                     "1.22.0",
                     "Linux",

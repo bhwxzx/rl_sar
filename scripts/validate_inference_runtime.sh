@@ -3,7 +3,7 @@
 set -euo pipefail
 
 if [[ $# -lt 2 || $# -gt 3 ]]; then
-    echo "Usage: $0 <onnx|libtorch> <runtime-directory> [architecture]" >&2
+    echo "Usage: $0 <onnx> <runtime-directory> [architecture]" >&2
     exit 2
 fi
 
@@ -21,14 +21,6 @@ case "$runtime_kind" in
             "$runtime_dir/lib"/libonnxruntime.so.*
         )
         shopt -u nullglob
-        ;;
-    libtorch)
-        if [[ -f "$runtime_dir/include/torch/torch.h" ]]; then
-            required_header="$runtime_dir/include/torch/torch.h"
-        else
-            required_header="$runtime_dir/include/torch/csrc/api/include/torch/torch.h"
-        fi
-        library_candidates=("$runtime_dir/lib/libtorch_cpu.so")
         ;;
     *)
         echo "Unsupported inference runtime kind: $runtime_kind" >&2

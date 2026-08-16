@@ -155,18 +155,19 @@ CUDA 标志，并在日志中输出 `Jetson mode: true`。只有容器等环境�
 必要时可用 `IS_JETSON=false` 显式禁用。
 
 建议 Jetson Orin NX 使用 JetPack 6.2.2、Ubuntu 22.04 和 ROS 2 Humble。Jetson
-真机路径只下载并链接 Linux aarch64 ONNX Runtime，不安装 PyTorch/LibTorch，
-也不启用 CUDA/TensorRT 推理。已有推理库会先校验 ELF 架构，不能把 x86_64
+所有 C++ 构建只下载并链接 ONNX Runtime，Jetson 使用 Linux aarch64
+归档，也不启用 CUDA/TensorRT 推理。已有推理库会先校验 ELF 架构，不能把 x86_64
 开发机的 `library/inference_runtime` 复制到 Jetson 使用。
 
-推理运行时下载只支持三种已审查组合：Linux x86_64 的 LibTorch 2.3.0 与
-ONNX Runtime 1.22.0，以及 Linux aarch64 的 ONNX Runtime 1.22.0。版本、精确
+推理运行时下载只支持两种已审查组合：Linux x86_64 和 Linux aarch64
+的 ONNX Runtime 1.22.0。版本、精确
 官方 HTTPS URL 和归档 SHA-256 固定在
 `scripts/inference_runtime_archives.json`。下载器先验证完整归档摘要，再在隔离
 目录解压并验证结构和 ELF 架构；全部成功后才替换结构损坏的旧目录。一个结构
 有效但缺少匹配来源证明、版本更高或摘要不同的现有运行时不会被自动覆盖，构建会
-停止并要求把升级作为单独变更审查。项目的 C++ LibTorch 与 ONNX 运行时独立于
-用户 Python 环境中安装的 `torch`/`onnxruntime`，后者版本更高不会触发此检查。
+停止并要求把升级作为单独变更审查。该 C++ ONNX 运行时独立于用户
+Python 环境中安装的 `torch`/`onnxruntime`；Python `torch` 仍可用于离线
+执行器模型训练和评估，不是 C++ 编译依赖。
 
 这个开发构建与后面的正式部署构建用途不同：
 
@@ -241,21 +242,17 @@ ros2 run plotjuggler plotjuggler
 从 `/LW_joint_states` 中选择所需曲线。记录命令显式限定该话题，不会把工作区内
 其它 ROS 2 话题一并写入。
 
-需要可选执行器网络时，策略根必须同时包含四套主策略以及两个 `.pt` 模型：
+如需改用非编译期策略目录，传入只包含四套 ONNX 主策略的策略根：
 
 ```bash
 ros2 run rl_sar rl_sim_LW \
-    --policy-root /absolute/path/to/policy \
-    --use_actuator_net
+    --policy-root /absolute/path/to/policy
 ```
 
-两个模型固定解析为所选策略根下的
-`LW/robot_lab/motors/{leg,foot}_actuator_net.pt`，不会回退到编译期策略目录。
-启动日志会分别显示最终绝对路径；任一文件缺失、无法加载，或不满足 6 维输入和
-单值有限输出契约时，Sim2Sim 会明确报错并终止。未指定
-`--use_actuator_net` 时，这两个模型仍是可选资产。
-`--policy-root`、`--use_actuator_net`、`--enable-plot` 和 `--plot-rate-hz`
-可在同一条 Sim2Sim 命令中组合，各自保持上述校验和默认值。
+Sim2Sim 的每个关节始终使用 MuJoCo PD+前馈力矩。`--policy-root`、
+`--enable-plot` 和 `--plot-rate-hz` 可在同一条
+Sim2Sim 命令中组合。已跟踪的 `.pt` 执行器模型仅供 Python 离线训练/
+评估工具使用，`rl_sim_LW` 不加载它们。
 
 关闭 MuJoCo 窗口或按 `Ctrl+C` 都会进入同一条正常线程关闭路径：先请求渲染循环
 退出，再关闭 ROS，并按顺序等待业务线程和物理线程结束。`SIGINT` 在任何工作
@@ -349,11 +346,10 @@ bash "$RL_SAR_ROOT/scripts/validate_inference_runtime.sh" \
 ```
 
 校验脚本的完整位置参数形式是
-`<onnx|libtorch> <runtime-directory> [architecture]`。架构可省略，默认使用
+`<onnx> <runtime-directory> [architecture]`。架构可省略，默认使用
 `uname -m`，支持 `x86_64`/`amd64` 和 `aarch64`/`arm64`；正式 LW
 部署仅携带 ONNX Runtime，因此必须使用上述
-`onnx` 及当前机器架构的完整调用。`libtorch` 只用于单独校验开发机上的
-LibTorch 运行时，不能用它替代正式部署前的 ONNX 校验。
+`onnx` 及当前机器架构的完整调用。
 
 还需要保证 `git`、`cmake`、`colcon`、C++ 编译器及
 [README.md](../README.md#获取代码与依赖) 中的依赖可用。

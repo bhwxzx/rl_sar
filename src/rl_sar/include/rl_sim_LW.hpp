@@ -10,16 +10,15 @@
 
 #include "rl_sdk.hpp"
 #include "observation_buffer.hpp"
-#include "inference_runtime.hpp"
 #include "loop.hpp"
 #include "lw_control_safety.hpp"
-#include "lw_actuator_models.hpp"
 #include "lw_joystick_safety.hpp"
 #include "lw_loop_config.hpp"
 #include "lw_runtime_core.hpp"
 #include "lw_safety_policy.hpp"
 #include "lw_signal_shutdown.hpp"
 #include "lw_sim_plot_config.hpp"
+#include "lw_sim_torque_validation.hpp"
 #include "fsm_LW.hpp"
 
 #include "LW_sdk.hpp"
@@ -67,7 +66,6 @@ private:
         const std::string& reason) noexcept;
     void ZeroActiveMuJoCoActuators() noexcept;
     void ApplySimulationControls();
-    void UpdateActuatorNetwork();
 
     // loop
     std::shared_ptr<LoopFunc> loop_joystick;
@@ -131,16 +129,7 @@ private:
     std::uint64_t last_operator_status_sequence_ = 0;
     bool operator_status_seen_ = false;
 
-    // actuator net
-    bool use_actuator_net_ = false; // 是否使用执行器网络的 Flag
-    LWActuatorModelPaths actuator_model_paths_;
-    std::shared_ptr<InferenceRuntime::Model> leg_actuator_model_; // 模型指针
-    std::shared_ptr<InferenceRuntime::Model> foot_actuator_model_; // 模型指针
-    std::vector<int> leg_train_indices = {0, 1, 2, 3, 4, 5}; 
-    std::vector<int> foot_train_indices = {6, 7};
-    std::deque<std::vector<float>> pos_err_history_; 
-    std::deque<std::vector<float>> vel_history_;     
-    LWActuatorTorqueFrame actuator_net_torque_frame_;
+    // Final MuJoCo torque frame. Candidates are validated before ctrl mutation.
     std::vector<float> mujoco_tau_candidates_;
     std::vector<float> mujoco_tau_bounded_;
 

@@ -58,16 +58,6 @@ class InferenceRuntimeArchitectureTests(unittest.TestCase):
         (runtime / "lib/libonnxruntime.so").symlink_to("libonnxruntime.so.1")
         return runtime
 
-    def make_libtorch_runtime(self, machine: int = 62) -> Path:
-        runtime = self.root / "libtorch"
-        (runtime / "include/torch/csrc/api/include/torch").mkdir(parents=True)
-        (runtime / "lib").mkdir()
-        (runtime / "include/torch/csrc/api/include/torch/torch.h").write_text(
-            "// fixture\n", encoding="utf-8"
-        )
-        (runtime / "lib/libtorch_cpu.so").write_bytes(elf_header(machine))
-        return runtime
-
     def validate(
         self,
         kind: str,
@@ -105,11 +95,10 @@ class InferenceRuntimeArchitectureTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("architecture mismatch", result.stderr)
 
-    def test_matching_libtorch_is_accepted_for_development(self) -> None:
-        result = self.validate(
-            "libtorch", self.make_libtorch_runtime(62), "x86_64"
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+    def test_removed_runtime_kind_is_rejected(self) -> None:
+        result = self.validate("libtorch", self.make_onnx_runtime(), "x86_64")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Unsupported inference runtime kind", result.stderr)
 
     def test_corrupt_elf_is_rejected(self) -> None:
         runtime = self.make_onnx_runtime()

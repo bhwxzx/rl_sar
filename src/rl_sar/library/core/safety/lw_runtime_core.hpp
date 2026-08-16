@@ -45,7 +45,6 @@ struct LWControlCycleHooks
     std::function<bool()> platform_ready;
     std::function<bool()> platform_precheck;
     std::function<void()> adapter_controls;
-    std::function<void()> before_command_delivery;
     std::function<void()> after_command_delivery;
 };
 
@@ -334,11 +333,6 @@ public:
         }
 
         rl_->control.ClearInput();
-        call(hooks.before_command_delivery);
-        if (terminalLatched())
-        {
-            return;
-        }
         rl_->SetCommand(&rl_->robot_command);
         call(hooks.after_command_delivery);
     }

@@ -31,6 +31,12 @@ inline LWSimPlotConfiguration ParseLWSimPlotConfiguration(
             continue;
         }
         const std::string_view argument(argv[index]);
+        if (argument == "--use_actuator_net")
+        {
+            throw std::runtime_error(
+                "--use_actuator_net has been removed; rl_sim_LW always uses "
+                "MuJoCo PD plus feedforward torque");
+        }
         if (argument == "--enable-plot")
         {
             configuration.enabled = true;

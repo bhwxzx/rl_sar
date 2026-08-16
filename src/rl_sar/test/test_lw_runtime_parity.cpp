@@ -177,7 +177,6 @@ struct Harness
                 []() { return true; },
                 []() { return true; },
                 {},
-                {},
                 {}});
     }
 

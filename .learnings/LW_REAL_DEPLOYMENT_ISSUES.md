@@ -134,6 +134,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 40 | LW-040 | P2 / low | resolved | Make the polymorphic RL base destruction contract safe |
 | 41 | LW-041 | P2 / low | resolved | Make high-rate Sim2Sim plot publishing explicitly opt-in |
 | 42 | LW-042 | P2 / medium | resolved | Make real debug telemetry nonblocking, source-fresh, and rate-bounded |
+| 43 | LW-043 | P2 / medium | resolved | Retire the Sim2Sim actuator-model runtime while preserving offline training |
 
 ---
 
@@ -3465,6 +3466,100 @@ it does not cover contention, duplicate suppression, or the production rate.
   `--show-args`、四份文档参数交叉核对和 `git diff --check` 通过。未启动真机
   节点、AHRS、串口、电机或 MuJoCo GUI；用户未跟踪技能目录
   保持未修改。
+- **Remaining Follow-ups**: none
+
+---
+
+## [LW-043] Retire the Sim2Sim actuator-model runtime while preserving offline training
+
+**Priority**: P2 / medium
+**Status**: resolved
+**Dependencies**: LW-020, LW-021, LW-036
+
+### Problem
+
+The optional `rl_sim_LW --use_actuator_net` path replaces selected MuJoCo
+PD-plus-feedforward torques with TorchScript actuator-network output. This
+creates a second Sim2Sim actuation path and retains a C++ LibTorch build,
+download, validation, and runtime dependency solely for that optional feature.
+The project still needs the independent Python training and evaluation workflow
+and its two tracked `.pt` artifacts, but those offline assets do not require the
+simulator to load or execute TorchScript.
+
+### Evidence
+
+- `src/rl_sar/src/rl_sim_LW.cpp`
+- `src/rl_sar/include/rl_sim_LW.hpp`
+- `src/rl_sar/library/core/simulation/lw_actuator_models.{hpp,cpp}`
+- `src/rl_sar/library/core/inference_runtime/inference_runtime.{hpp,cpp}`
+- `src/rl_sar/CMakeLists.txt`
+- `scripts/download_inference_runtime.sh`
+- `src/rl_sar/scripts/actuator_net.py`
+- `policy/LW/robot_lab/motors/{leg,foot}_actuator_net.pt`
+
+### Intended Scope
+
+- Make Sim2Sim use the existing MuJoCo PD-plus-feedforward torque path for every
+  joint and reject the removed `--use_actuator_net` option explicitly during
+  startup.
+- Preserve final finite-value and effort-limit validation before any MuJoCo
+  control-array mutation by moving it into an actuator-model-independent module.
+- Remove the C++ LibTorch backend and its build/download/validation surface;
+  keep the ONNX Runtime policy backend.
+- Preserve the Python actuator-model training/evaluation script, its install
+  rule, Python `torch` usage, and both tracked model artifacts unchanged.
+- Update maintained tests and current operator documentation without rewriting
+  historical resolved issue records.
+
+### Acceptance Criteria
+
+- No maintained Sim2Sim code can load an actuator model or replace PD-plus-
+  feedforward torque, and the old option fails before ROS, MuJoCo, or workers
+  start.
+- Invalid final candidate torques still trigger
+  `SimulationActuatorCommandInvalid` before any `mj_data->ctrl` write.
+- The maintained C++ build and runtime-management tools are ONNX-only and do not
+  require LibTorch.
+- The training script, its install rule, and both `.pt` files remain byte-for-
+  byte unchanged and usable by the Python training/evaluation workflow.
+- A clean build, full CTest suite, and strict build complete successfully.
+
+### Resolution
+
+- **Resolved**: 2026-08-16T12:35:00+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 删除 `rl_sim_LW --use_actuator_net` 对 MuJoCo 底层力矩的
+  运行时接管，所有关节统一使用 PD+前馈；旧参数在任何 ROS、MuJoCo
+  或 worker 启动前明确拒绝。将最终力矩有限值/限幅/事务性写入校验迁入
+  与执行器模型无关的 `lw_sim_torque_validation`，并删除已无消费者的共享
+  `before_command_delivery` hook。C++ 推理、CMake、下载、来源清单和
+  验证工具收敛为 ONNX-only；Python 训练/评估脚本、安装规则以及两个
+  `.pt` 资产保持不变。当前 764 MB LibTorch 目录未删除，已可恢复地迁至
+  `/home/lfr/rl_sar-runtime-backups/20260816-actuator-runtime-retirement/libtorch`，
+  不覆盖既有备份。
+- **Changed Files**: `.gitignore`、`README.md`、`build.sh`、
+  `docs/{LW_BUILD_DEPLOYMENT_CN.md,LW_QUICK_START_CN.md}`、
+  `scripts/{download_inference_runtime.sh,inference_runtime_archives.json,manage_inference_runtime.py,validate_inference_runtime.sh}`、
+  `src/rl_sar/CMakeLists.txt`、`src/rl_sar/include/rl_sim_LW.hpp`、
+  `src/rl_sar/library/core/inference_runtime/inference_runtime.{hpp,cpp}`、
+  `src/rl_sar/library/core/safety/lw_runtime_core.hpp`、
+  `src/rl_sar/library/core/simulation/{lw_actuator_models.hpp,lw_actuator_models.cpp,lw_sim_plot_config.hpp,lw_sim_torque_validation.hpp,lw_sim_torque_validation.cpp}`、
+  `src/rl_sar/src/{rl_sim_LW.cpp,rl_real_LW.cpp,lw_config_profiler.cpp}`、
+  `src/rl_sar/test/{test_build_workflow.py,test_inference_runtime.cpp,test_inference_runtime_architecture.py,test_inference_runtime_download_integrity.py,test_lw_actuator_models.cpp,test_lw_runtime_parity.cpp,test_lw_sim_lifecycle_integration.py,test_lw_sim_plot_config.cpp,test_lw_sim_torque_validation.cpp}`、
+  `.learnings/{LEARNINGS.md,LW_REAL_DEPLOYMENT_ISSUES.md}`。
+- **Verification**: 修改前基线 45/45 CTest 通过，其中旧 LibTorch 测试已对
+  当前两个 TorchScript 模型完成加载及 6 维输入/单值输出契约验证。
+  定向 7 项 CTest 通过；旧 `--use_actuator_net` 实际运行在 GUI/ROS 启动前
+  以非零状态和明确诊断退出。执行全量 `./build.sh --clean` 后 `./build.sh`
+  从零构建 6 个包成功，干净构建 45/45 CTest 通过；
+  `scripts/validate_lw_strict_build.sh` 在 `-Wall -Wextra -Wpedantic -Werror`
+  下构建全部维护目标并通过 45/45 CTest。`ldd` 确认
+  `rl_sim_LW`、`rl_real_LW` 和 `lw_config_profiler` 均不依赖
+  `libtorch`/`libc10`。Bash/Python 语法、ONNX 架构/下载完整性、通用力矩
+  校验、源码/文档交叉检查和 `git diff --check` 通过。训练脚本和两个
+  模型 SHA-256 与基线完全一致，安装后脚本存在；当前机器的现有
+  Python 环境均未安装 `torch`，因此未新增依赖也未重复 Python 前向推理。
+  未启动真机节点、AHRS、串口、电机或 MuJoCo GUI；用户未跟踪技能目录保持未修改。
 - **Remaining Follow-ups**: none
 
 ---

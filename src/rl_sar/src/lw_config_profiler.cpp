@@ -996,7 +996,7 @@ private:
                                 || state_ready_.load(
                                     std::memory_order_acquire);
                         },
-                        []() { return true; }, {}, {}, {}});
+                        []() { return true; }, {}, {}});
             },
             error_handler);
         LoopFunc inference_loop(

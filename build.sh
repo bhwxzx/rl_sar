@@ -26,10 +26,7 @@ setup_inference_runtime() {
 
     SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
     DOWNLOAD_SCRIPT="${SCRIPT_DIR}/scripts/download_inference_runtime.sh"
-    local runtime_target=all
-    if [ "${IS_JETSON}" = true ]; then
-        runtime_target=onnx
-    fi
+    local runtime_target=onnx
 
     if [ -f "$DOWNLOAD_SCRIPT" ]; then
         print_info "Checking inference libraries (${runtime_target})..."

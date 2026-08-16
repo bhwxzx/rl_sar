@@ -575,7 +575,6 @@ void RL_Real::RobotControl()
                 return false;
             },
             {},
-            {},
             [this]()
             {
                 if (!debug_publisher_)

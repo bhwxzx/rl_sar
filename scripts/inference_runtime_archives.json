@@ -2,17 +2,6 @@
   "schema_version": 1,
   "archives": [
     {
-      "kind": "libtorch",
-      "version": "2.3.0",
-      "os": "Linux",
-      "architecture": "x86_64",
-      "archive_name": "libtorch-cxx11-abi-shared-with-deps-2.3.0+cpu.zip",
-      "archive_format": "zip",
-      "root_directory": "libtorch",
-      "url": "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.3.0%2Bcpu.zip",
-      "sha256": "f60009d2a74b6c8bdb174e398c70d217b7d12a4d3d358cd1db0690b32f6e193b"
-    },
-    {
       "kind": "onnx",
       "version": "1.22.0",
       "os": "Linux",

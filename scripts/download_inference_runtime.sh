@@ -17,43 +17,33 @@ print_info "Jetson mode: ${IS_JETSON} (${JETSON_DETECTION_SOURCE})"
 OS_TYPE="${RL_SAR_PLATFORM_OS:-$(uname -s)}"
 ARCH_TYPE="${RL_SAR_PLATFORM_ARCH:-$(uname -m)}"
 
+if [[ $# -ge 1 && ( "$1" == "libtorch" || "$1" == "all" ) ]]; then
+    print_error "Download target must be onnx"
+    exit 2
+fi
+
 if [[ $# -eq 0 ]]; then
     TARGET_DIR="library/inference_runtime"
-    DOWNLOAD_TARGET="all"
+    DOWNLOAD_TARGET="onnx"
 elif [[ $# -eq 1 ]]; then
-    if [[ "$1" == "libtorch" || "$1" == "onnx" || "$1" == "all" ]]; then
+    if [[ "$1" == "onnx" ]]; then
         TARGET_DIR="library/inference_runtime"
         DOWNLOAD_TARGET="$1"
     else
         TARGET_DIR="$1"
-        DOWNLOAD_TARGET="all"
+        DOWNLOAD_TARGET="onnx"
     fi
 elif [[ $# -eq 2 ]]; then
     TARGET_DIR="$1"
     DOWNLOAD_TARGET="$2"
 else
-    print_error "Usage: $0 [target-directory] [libtorch|onnx|all]"
+    print_error "Usage: $0 [target-directory] [onnx]"
     exit 2
 fi
 
-case "$DOWNLOAD_TARGET" in
-    libtorch|onnx|all) ;;
-    *)
-        print_error "Download target must be libtorch, onnx, or all"
-        exit 2
-        ;;
-esac
-
-if [[ "${IS_JETSON}" = true ]]; then
-    if [[ "$DOWNLOAD_TARGET" = libtorch ]]; then
-        print_error "LibTorch is not supported by the LW Jetson production path"
-        print_info "LW Jetson policies use ONNX Runtime; request the onnx target instead"
-        exit 1
-    fi
-    if [[ "$DOWNLOAD_TARGET" = all ]]; then
-        print_info "Jetson production path is ONNX-only; skipping LibTorch"
-        DOWNLOAD_TARGET=onnx
-    fi
+if [[ "$DOWNLOAD_TARGET" != onnx ]]; then
+    print_error "Download target must be onnx"
+    exit 2
 fi
 
 if [[ "$TARGET_DIR" = /* ]]; then
@@ -63,7 +53,6 @@ else
 fi
 mkdir -p "$MODEL_INTERFACE_DIR"
 
-LIBTORCH_VERSION="2.3.0"
 ONNXRUNTIME_VERSION="1.22.0"
 RUNTIME_VALIDATOR="${SCRIPT_DIR}/validate_inference_runtime.sh"
 RUNTIME_MANAGER="${SCRIPT_DIR}/manage_inference_runtime.py"
@@ -161,17 +150,6 @@ ensure_runtime() {
     print_success "$kind $version installed with approved provenance"
 }
 
-case "$DOWNLOAD_TARGET" in
-    libtorch)
-        ensure_runtime libtorch "$LIBTORCH_VERSION"
-        ;;
-    onnx)
-        ensure_runtime onnx "$ONNXRUNTIME_VERSION"
-        ;;
-    all)
-        ensure_runtime libtorch "$LIBTORCH_VERSION"
-        ensure_runtime onnx "$ONNXRUNTIME_VERSION"
-        ;;
-esac
+ensure_runtime onnx "$ONNXRUNTIME_VERSION"
 
 print_success "All requested inference runtimes are ready"

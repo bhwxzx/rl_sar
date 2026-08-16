@@ -14,10 +14,6 @@
 #include <algorithm>
 #include "logger.hpp"
 
-#ifdef USE_TORCH
-#include <torch/script.h>
-#endif
-
 #ifdef USE_ONNX
 #include <onnxruntime_cxx_api.h>
 #endif
@@ -41,7 +37,7 @@ struct TensorMetadata
 /**
  * @brief Model interface base class
  *
- * Defines common interface for model loading and inference, supporting both Torch and ONNX backends
+ * Defines the common interface for ONNX model loading and inference.
  */
 class Model
 {
@@ -70,7 +66,7 @@ public:
 
     /**
      * @brief Get model type string
-     * @return Model type ("torch" or "onnx")
+     * @return Model type ("onnx")
      */
     virtual std::string get_model_type() const = 0;
 
@@ -83,49 +79,6 @@ public:
      * @brief Return immutable output tensor metadata when supported.
      */
     virtual const std::vector<TensorMetadata>& output_metadata() const;
-};
-
-/**
- * @brief Torch model implementation class
- *
- * Model inference implementation based on PyTorch TorchScript
- */
-class TorchModel : public Model
-{
-private:
-    bool loaded_ = false;               ///< Whether model is loaded
-    std::string model_path_;            ///< Model file path
-
-#ifdef USE_TORCH
-    torch::jit::script::Module model_; ///< TorchScript model object
-#endif
-
-public:
-    TorchModel();
-    ~TorchModel();
-
-    bool load(const std::string& model_path) override;
-    bool is_loaded() const override { return loaded_; }
-    std::vector<float> forward(const std::vector<std::vector<float>>& inputs) override;
-    std::string get_model_type() const override { return "torch"; }
-
-private:
-#ifdef USE_TORCH
-    /**
-     * @brief Convert vector data to Torch tensor
-     * @param data Input data vector
-     * @param shape Tensor shape
-     * @return Torch tensor
-     */
-    torch::Tensor vector_to_torch(const std::vector<float>& data, const std::vector<int64_t>& shape);
-
-    /**
-     * @brief Convert Torch tensor to vector data
-     * @param tensor Input tensor
-     * @return Data vector
-     */
-    std::vector<float> torch_to_vector(const torch::Tensor& tensor);
-#endif
 };
 
 /**
@@ -197,7 +150,6 @@ public:
      */
     enum class ModelType
     {
-        TORCH,  ///< TorchScript model
         ONNX,   ///< ONNX model
         AUTO    ///< Automatically detect model type
     };
