@@ -35,3 +35,39 @@
 - **Notes**: 已恢复误改内容并验证只有 `LRN-20260731-002` 获得本次 Resolution。
 
 ---
+
+## [ERR-20260816-001] rg-shell-quoting
+
+**Logged**: 2026-08-16T15:44:04+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+包含 Markdown 反引号的 `rg` 搜索模式被放入双引号，导致 Bash 将其解释为未闭合的命令替换。
+
+### Error
+```text
+/bin/bash: -c: 行 1: 寻找匹配的 ``' 时遇到了未预期的 EOF
+/bin/bash: -c: 行 6: 语法错误：未预期的文件结束符
+```
+
+### Context
+- 操作：核对正式部署文档中是否仍有旧措辞。
+- 原因：把包含反引号的多个搜索模式放进 Bash 双引号字符串。
+- 影响：只读搜索未执行，没有修改文件。
+
+### Suggested Fix
+搜索 Markdown 反引号时使用单引号，并优先使用 `rg -F -e 'pattern'` 分别传入固定字符串模式。
+
+### Metadata
+- Reproducible: yes
+- Related Files: docs/LW_BUILD_DEPLOYMENT_CN.md
+- See Also: N/A
+
+### Resolution
+- **Resolved**: 2026-08-16T15:44:04+08:00
+- **Commit/PR**: N/A
+- **Notes**: 已改用单引号固定字符串模式重新核对，命令成功且未发现残留旧措辞。
+
+---
