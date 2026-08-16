@@ -147,8 +147,11 @@ ros2 run plotjuggler plotjuggler
 
 在 PlotJuggler 中使用 ROS 2 Bag 数据加载器打开 `$bag_dir` 对应的 bag。
 
-Sim2Sim 的每个关节始终使用 MuJoCo PD+前馈力矩。`--policy-root`
-只需提供四套 ONNX 主策略。
+Sim2Sim 默认直接读取编译时仓库根目录下的 `policy/`；该绝对路径
+在编译时写入可执行文件，`build/` 和 `install/` 不是默认策略来源。
+Sim2Sim 的每个关节始终使用 MuJoCo PD+前馈力矩。只有需要改用其他
+策略目录时才指定 `--policy-root PATH`，新目录只需提供四套 ONNX
+主策略。编译后如果移动仓库，需重新构建或显式指定新策略根。
 
 执行器模型的离线训练与评估功能保留在
 `src/rl_sar/scripts/actuator_net.py`。当前脚本应传入绝对路径，例如：
