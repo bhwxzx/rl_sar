@@ -15,7 +15,7 @@
 | --- | --- |
 | 首次实机部署 | 本文全部步骤，包括参数测算闭环 |
 | 更换主机、内核、CPU/调度方案、IMU、串口设备、控制频率、策略模型、推理运行时或关键配置 | 重新执行参数测算闭环 |
-| 已有可追溯的测算、评审和最终部署记录，且上述环境均未变化 | 可跳过第 5 节，从每日启动前验收继续 |
+| 已有可追溯的测算、评审和最终部署记录，且上述环境均未变化 | 可跳过第 5 节，从第 6 节日常启动检查继续 |
 | 报告缺失、分析失败、评审关系不清或无法确认环境未变化 | 禁止启动；按首次部署重新测算 |
 
 如果测算候选导致 `policy/LW/base.yaml` 改动，最终提交会与原测算候选提交不同。
@@ -102,7 +102,9 @@ ros2 run plotjuggler plotjuggler
 
 在 PlotJuggler 中选择 ROS 2 Bag 数据加载器并打开 `$bag_dir` 对应的 bag。
 
-如需改用非编译期策略目录，使用 `--policy-root PATH`：
+Sim2Sim 默认直接读取编译时仓库根目录下的 `policy/`。该绝对路径
+会写入可执行文件；`build/` 和 `install/` 不是默认策略来源。如需改用
+其他策略目录，使用 `--policy-root PATH`：
 
 ```bash
 ros2 run rl_sar rl_sim_LW \
@@ -110,7 +112,8 @@ ros2 run rl_sar rl_sim_LW \
 ```
 
 有效策略根只需包含四套 ONNX 策略。Sim2Sim 的每个关节始终使用
-MuJoCo PD+前馈力矩。`--policy-root` 可与 Plot 参数组合。
+MuJoCo PD+前馈力矩。`--policy-root` 可与 Plot 参数组合。编译后如果
+移动仓库，需重新构建或显式指定新策略根。
 
 至少确认四个 ONNX 策略均为本次候选版本，腿式、轮式和两个形态转换都能完整
 运行，没有加载错误、NaN、越界、持续发散、明显跳变或控制周期异常。关闭仿真后
@@ -119,14 +122,23 @@ MuJoCo PD+前馈力矩。`--policy-root` 可与 Plot 参数组合。
 ```bash
 git status --short
 git show --stat --oneline HEAD
-SOURCE_COMMIT=$(git rev-parse HEAD)
+RELEASE_TAG=lw-release-20260816-01
+git tag -a "$RELEASE_TAG" -m "LW部署验证"
+git push origin "$RELEASE_TAG"
+SOURCE_COMMIT=$(git rev-parse "${RELEASE_TAG}^{commit}")
 echo "$SOURCE_COMMIT"
 ```
 
-把完整哈希和 Sim2Sim 结果交给部署机。提交后若又修改任何发布资源，必须重新
-测试、Sim2Sim 和提交。
+把简短的标签名（例如 `lw-release-20260816-01`）和 Sim2Sim 结果交给
+部署机，无需手工传递完整哈希。每个部署候选版本使用新标签，不要移动或
+复用已验证标签。提交或建立标签后若又修改任何发布资源，必须重新测试、
+Sim2Sim、提交并创建新标签。
 
-## 4. 部署机：生成并离线验收候选部署包
+## 4. 部署机：生成并完成候选部署包首次离线验收
+
+本节对每个新候选版本完整执行一次。发布提交或标签、模型、配置、ONNX Runtime
+发生变化，或者生成了新的 `DEPLOY_PREFIX`，都属于新候选，不能沿用旧候选的
+验收结果。
 
 在部署机自己的项目中新开终端：
 
@@ -134,25 +146,24 @@ echo "$SOURCE_COMMIT"
 source /opt/ros/humble/setup.bash
 cd "$RL_SAR_ROOT"
 git status --short
-git fetch --all --tags
+RELEASE_TAG=lw-release-20260816-01
+git fetch origin tag "$RELEASE_TAG"
+SOURCE_COMMIT=$(git rev-parse "${RELEASE_TAG}^{commit}")
 git cat-file -e "${SOURCE_COMMIT}^{commit}"
 git show --stat --oneline "$SOURCE_COMMIT"
-
-test -d "$RL_SAR_ROOT/library/inference_runtime/onnxruntime"
-bash "$RL_SAR_ROOT/scripts/validate_inference_runtime.sh" \
-    onnx "$RL_SAR_ROOT/library/inference_runtime/onnxruntime" "$(uname -m)"
 
 src/rl_sar/scripts/build_lw_deployment.sh \
     "$DEPLOY_PREFIX" \
     "$SOURCE_COMMIT"
 ```
 
-`validate_inference_runtime.sh` 的完整形式为
-`<onnx> <runtime-directory> [architecture]`；本正式部署路径必须保持
-上述 `onnx` 和当前机器架构校验；支持的架构名为 `x86_64`/`amd64` 和
-`aarch64`/`arm64`。`build_lw_deployment.sh` 的形式为
+`build_lw_deployment.sh` 的形式为
 `<empty-output-prefix> [commit]`；脚本虽允许省略提交并使用 `HEAD`，但本可追溯部署
 流程必须显式传入已验证的完整 `SOURCE_COMMIT`。
+
+构建脚本会先确认项目内 ONNX Runtime 目录存在，再使用候选提交中的
+`validate_inference_runtime.sh` 按当前机器架构检查其结构、共享库和 ELF 架构；
+只有校验通过才会创建部署输出并开始编译，无需另行手动执行该校验。
 
 构建脚本必须成功验收原部署前缀及其迁移副本。随后在未加载其他工作区的新终端
 重新执行第 2 节变量块，再执行：
@@ -165,15 +176,16 @@ source "$DEPLOY_PREFIX/setup.bash"
 for package in serial fdilink_ahrs rl_sar; do
     test "$(realpath -m "$(ros2 pkg prefix "$package")")" = "$DEPLOY_PREFIX"
 done
-
-ldd "$DEPLOY_PREFIX/lib/rl_sar/rl_real_LW"
-ldd "$DEPLOY_PREFIX/lib/rl_sar/lw_config_profiler"
-ldd "$DEPLOY_PREFIX/lib/fdilink_ahrs/ahrs_driver_node"
 ```
 
 `--verify-deployment-only` 必须返回 `0`，三个包必须解析到当前
-`DEPLOY_PREFIX`，`ldd` 不得出现 `not found`。任一检查失败都停止部署，不得
-直接修改部署目录、伪造来源文件或从其他版本补拷二进制、模型和动态库。
+`DEPLOY_PREFIX`。任一检查失败都停止部署，不得直接修改部署目录、伪造来源
+文件或从其他版本补拷二进制、模型和动态库。
+
+上述新终端检查是候选部署在最终运行位置的首次完整离线验收。同一前缀保持在
+该位置，部署文件及 ROS、操作系统动态库等运行环境均未变化时，日常启动不要求
+重复整段本节；前缀被复制或移动、文件完整性存疑、运行环境或依赖变化，或者
+无法确认验收记录仍适用时，必须重新执行本节。
 
 ## 5. 首次部署或环境变化：参数测算闭环
 
@@ -271,8 +283,8 @@ python3 "$LW_PROFILE_TOOL" collect-hardware \
 
 ### 5.3 生成评审候选并返回开发闭环
 
-四个上限必须由机械与控制安全负责人确定。先填写变量；任何变量为空都会在分析
-前停止：
+四个上限必须由机械与控制安全负责人确定。先填写变量；`analyze` 会拒绝占位符、
+空值、非有限值和非正数：
 
 ```bash
 MAX_SAFE_SENSOR_TIMEOUT_MS=REPLACE_WITH_REVIEWED_VALUE
@@ -280,34 +292,21 @@ MAX_SAFE_TRUSTED_IMU_TIMEOUT_MS=REPLACE_WITH_REVIEWED_VALUE
 MAX_SAFE_IMU_AHRS_PAIR_AGE_MS=REPLACE_WITH_REVIEWED_VALUE
 MAX_SAFE_CONTROL_GAP_MS=REPLACE_WITH_REVIEWED_VALUE
 
-(
-    for value in \
-        "$MAX_SAFE_SENSOR_TIMEOUT_MS" \
-        "$MAX_SAFE_TRUSTED_IMU_TIMEOUT_MS" \
-        "$MAX_SAFE_IMU_AHRS_PAIR_AGE_MS" \
-        "$MAX_SAFE_CONTROL_GAP_MS"; do
-        if [[ ! "$value" =~ ^[0-9]+([.][0-9]+)?$ \
-              || "$value" =~ ^0+([.]0+)?$ ]]; then
-            echo "四个 max-safe 值必须由安全负责人填写为有限正数" >&2
-            exit 2
-        fi
-    done
-
-    python3 "$LW_PROFILE_TOOL" analyze \
-        --base-yaml "$LW_POLICY_ROOT/LW/base.yaml" \
-        --reports "$LW_PROFILE_DIR"/host/*.json "$LW_PROFILE_DIR/hardware.json" \
-        --output "$LW_PROFILE_DIR/candidate-review.json" \
-        --max-safe-sensor-timeout-ms "$MAX_SAFE_SENSOR_TIMEOUT_MS" \
-        --max-safe-trusted-imu-timeout-ms "$MAX_SAFE_TRUSTED_IMU_TIMEOUT_MS" \
-        --max-safe-imu-ahrs-pair-age-ms "$MAX_SAFE_IMU_AHRS_PAIR_AGE_MS" \
-        --max-safe-control-gap-ms "$MAX_SAFE_CONTROL_GAP_MS" \
-        --minimum-hardware-samples 1000
-)
+python3 "$LW_PROFILE_TOOL" analyze \
+    --base-yaml "$LW_POLICY_ROOT/LW/base.yaml" \
+    --reports "$LW_PROFILE_DIR"/host/*.json "$LW_PROFILE_DIR/hardware.json" \
+    --output "$LW_PROFILE_DIR/candidate-review.json" \
+    --max-safe-sensor-timeout-ms "$MAX_SAFE_SENSOR_TIMEOUT_MS" \
+    --max-safe-trusted-imu-timeout-ms "$MAX_SAFE_TRUSTED_IMU_TIMEOUT_MS" \
+    --max-safe-imu-ahrs-pair-age-ms "$MAX_SAFE_IMU_AHRS_PAIR_AGE_MS" \
+    --max-safe-control-gap-ms "$MAX_SAFE_CONTROL_GAP_MS" \
+    --minimum-hardware-samples 1000
 ```
 
 `--reports` 接受一个或多个报告，但本流程要求同一部署的全部 host 报告和
 一份 hardware 报告。四个 `--max-safe-*-ms` 在程序接口中可省略，但本实机
-候选评审流程要求全部填写为由安全负责人确定的有限正数。
+候选评审流程要求全部填写为由安全负责人确定的有限正数；参数解析和正数检查
+由 `analyze` 自身执行。
 `--minimum-hardware-samples` 必须是正整数，默认 1000；输出文件不得已经存在。
 
 `candidate-review.json` 仅供评审。不得把它直接覆盖到当前部署包。需要采用候选时：
@@ -319,21 +318,33 @@ MAX_SAFE_CONTROL_GAP_MS=REPLACE_WITH_REVIEWED_VALUE
 5. 对新前缀重新执行第 4 节的全部离线验收；
 6. 保存测算候选、原始报告、评审结论和最终提交之间的追溯记录。
 
-## 6. 每次实机启动前
+## 6. 日常实机启动前
+
+以下轻量检查每次启动都执行。新候选首次启动前必须已经完成第 4 节的最终位置
+完整验收；同一份未变化且已验收部署的日常重复启动无需重新构建，也无需手动
+重复第 4 节的 `--verify-deployment-only` 和全部 `ldd` 检查。正常
+`rl_real_LW` 启动仍会在打开电机板串口和访问硬件前自动校验部署清单及资源
+哈希，不会因采用日常流程而绕过完整性保护。
 
 - [ ] 当前 `DEPLOY_PREFIX` 与交付记录一致；
+- [ ] 该前缀仍位于已验收的最终位置，部署文件和运行环境均未变化；
 - [ ] 已确认该最终提交的测试和 Sim2Sim 记录；
 - [ ] 首次部署/环境变化所需的测算与人工评审已经闭环；
-- [ ] `--verify-deployment-only` 刚刚返回 `0`；
-- [ ] `ldd` 和 ROS 包前缀检查通过；
 - [ ] `/dev/ttyLegRight`、`/dev/ttyLegLeft`、`/dev/fdilink_ahrs` 正确且可访问；
 - [ ] 没有其他进程读取 IMU 或两个电机板串口；
 - [ ] 机器人可靠吊装或离地，运动范围隔离；
 - [ ] 物理急停可用，现场监护人员已就位。
 
-在刚刚完成离线验收的同一终端启动：
+每次启动都在新终端重新加载基础 ROS 和已验收前缀，并做轻量包解析检查：
 
 ```bash
+source /opt/ros/humble/setup.bash
+source "$DEPLOY_PREFIX/setup.bash"
+
+for package in serial fdilink_ahrs rl_sar; do
+    test "$(realpath -m "$(ros2 pkg prefix "$package")")" = "$DEPLOY_PREFIX"
+done
+
 PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py
 ```
 

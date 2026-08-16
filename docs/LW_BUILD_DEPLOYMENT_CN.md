@@ -43,33 +43,44 @@
 ## 2. 推荐流程总览
 
 ```text
-开发机修改代码、配置和模型
+开发机修改代码、配置、模型和其他发布资源
         ↓
 开发机编译并完成 LW Sim2Sim 验证
         ↓
-提交验证通过的代码、配置和四个 ONNX 到 Git
+将全部获批发布资源提交到 Git
         ↓
-记录完整 commit 哈希并同步给部署机
+创建并推送新的不可变发布标签
         ↓
-部署机取得该 commit，但不必切换当前工作区
+部署机精确取得该标签并自动解析完整提交哈希
         ↓
-部署机在自己的 rl_sar 中执行干净构建
+部署机为该候选执行干净的正式构建和自动验收
         ↓
-部署包离线验收 + 动态库检查
+在最终运行位置完成该候选的首次离线验收
         ↓
 完成机械和人员安全检查
         ↓
-部署机进行实机实验
+执行每次启动检查并进行实机实验
 ```
+
+首次部署、软硬件环境变化或需要重新确定时序参数时，在已验收候选上执行
+`collect-host`、吊装状态下的 `collect-hardware` 和 `analyze`。分析结果只供
+人工评审；如果决定采用候选值，必须回到源码配置完成修改、测试、Sim2Sim、
+新提交和新标签，再重新生成候选版本，不能直接修改现有部署目录。
 
 推荐在部署机本地构建，而不是直接复制开发机编译出的二进制。这样可以使用部署机自己的 CPU 架构、ROS、编译环境和 `library/inference_runtime`，减少两台机器环境不一致造成的问题。
 
-这里有两个不同的验收关口：
+这里有三个职责不同的验收关口：
 
 - 开发机的 **Sim2Sim 验证**检查策略和控制逻辑在仿真中的行为是否正确；
-- 部署机的 **部署包离线验收**检查二进制、提交、模型和配置是否完整一致。
+- 正式构建的 **自动验收**检查部署包及其临时重定位副本是否完整、自洽；
+- 最终运行位置的 **首次离线验收**检查候选身份、发布物完整性和 ROS 包解析是否
+  适用于实际启动位置与终端环境。
 
-两者缺一不可。`--verify-deployment-only` 不运行仿真，也不能证明机器人行为正确。
+三者缺一不可。`--verify-deployment-only` 不运行仿真，也不能证明机器人行为正确。
+
+本文使用“提交（commit）”表示 Git 提交对象，使用“带说明标签（annotated
+tag）”表示在线传递候选版本身份的不可变发布标签。`collect-host`、
+`collect-hardware` 和 `analyze` 是命令行子命令，名称保持原样。
 
 ## 3. 开发机上的步骤
 
@@ -154,8 +165,9 @@ CUDA 标志，并在日志中输出 `Jetson mode: true`。只有容器等环境�
 会拒绝运行。普通 x86_64 和可明确排除 Jetson 的 aarch64 环境无需设置变量，
 必要时可用 `IS_JETSON=false` 显式禁用。
 
-建议 Jetson Orin NX 使用 JetPack 6.2.2、Ubuntu 22.04 和 ROS 2 Humble。Jetson
-所有 C++ 构建只下载并链接 ONNX Runtime，Jetson 使用 Linux aarch64
+本项目当前已验证的 Jetson Orin NX 部署基线为 JetPack 6.2.2、Ubuntu 22.04 和
+ROS 2 Humble；升级 JetPack、L4T、Ubuntu 或 ROS 前必须重新完成构建与部署验收。
+Jetson 所有 C++ 构建只下载并链接 ONNX Runtime，并使用 Linux aarch64
 归档，也不启用 CUDA/TensorRT 推理。已有推理库会先校验 ELF 架构，不能把 x86_64
 开发机的 `library/inference_runtime` 复制到 Jetson 使用。
 
@@ -242,7 +254,9 @@ ros2 run plotjuggler plotjuggler
 从 `/LW_joint_states` 中选择所需曲线。记录命令显式限定该话题，不会把工作区内
 其它 ROS 2 话题一并写入。
 
-如需改用非编译期策略目录，传入只包含四套 ONNX 主策略的策略根：
+Sim2Sim 默认直接读取编译时仓库根目录下的 `policy/`。该绝对路径
+会写入可执行文件，`build/` 和 `install/` 不是默认策略来源。如需改用
+其他目录，传入只包含四套 ONNX 主策略的策略根：
 
 ```bash
 ros2 run rl_sar rl_sim_LW \
@@ -252,7 +266,8 @@ ros2 run rl_sar rl_sim_LW \
 Sim2Sim 的每个关节始终使用 MuJoCo PD+前馈力矩。`--policy-root`、
 `--enable-plot` 和 `--plot-rate-hz` 可在同一条
 Sim2Sim 命令中组合。已跟踪的 `.pt` 执行器模型仅供 Python 离线训练/
-评估工具使用，`rl_sim_LW` 不加载它们。
+评估工具使用，`rl_sim_LW` 不加载它们。编译后如果移动仓库，需重新
+构建或显式指定新策略根。
 
 关闭 MuJoCo 窗口或按 `Ctrl+C` 都会进入同一条正常线程关闭路径：先请求渲染循环
 退出，再关闭 ROS，并按顺序等待业务线程和物理线程结束。`SIGINT` 在任何工作
@@ -273,7 +288,7 @@ Sim2Sim 对象构造完成后立即执行。
 如果 Sim2Sim 暴露问题，应回到第一步修改并重新验证。只有 Sim2Sim 通过后，候选版本才能交给部署机进行实机实验。
 
 > [!NOTE]
-> Sim2Sim 只能降低实机风险，不能替代实机安全措施。仿真通过后，部署机仍必须完成部署包验收、动态库检查和机械安全检查。
+> Sim2Sim 只能降低实机风险，不能替代实机安全措施。仿真通过后，部署机仍必须完成正式构建的自动验收、最终运行位置的首次离线验收和机械安全检查。
 
 ### 第四步：提交 Sim2Sim 验证通过的内容
 
@@ -290,18 +305,46 @@ git show --stat --oneline HEAD
 
 提交之后不要再修改本次发布使用的代码、模型或配置；如果又有修改，必须重新完成 Sim2Sim 并生成新的提交。
 
-### 第五步：记录并同步已验证提交
+### 第五步：用在线 Git 标签交付已验证提交
 
-记录准备部署的完整提交哈希：
+两台机器不需要人工复制 40 位完整哈希。开发机给已完成测试和
+Sim2Sim 的 `HEAD` 创建一个简短、唯一的 annotated tag，再推送到部署机
+可访问的 Git 远程。下面以 `origin` 为远程名；如项目使用其他远程名，
+应在开发机和部署机上同步替换。
+
+先为本次候选版选择新标签名。示例中的日期和序号每次发布都应更新：
+
+```bash
+RELEASE_TAG=lw-release-20260816-01
+
+# 两条命令都应无输出；有输出说明标签已被使用，应改用新名称
+git tag --list "$RELEASE_TAG"
+git ls-remote --tags origin "refs/tags/$RELEASE_TAG"
+```
+
+确认名称未被使用后，将标签绑定到当前已验证提交，本地解析标签并
+核对，然后只推送该标签：
 
 ```bash
 SOURCE_COMMIT=$(git rev-parse HEAD)
-echo "$SOURCE_COMMIT"
+git tag -a "$RELEASE_TAG" "$SOURCE_COMMIT" \
+    -m "LW deployment candidate $RELEASE_TAG"
+
+TAG_COMMIT=$(git rev-parse "${RELEASE_TAG}^{commit}")
+test "$TAG_COMMIT" = "$SOURCE_COMMIT"
+git show --stat --oneline "$TAG_COMMIT"
+
+git push origin "refs/tags/$RELEASE_TAG"
 ```
 
-将该提交推送到部署机能够访问的 Git 仓库，或通过团队认可的方式把该提交同步到部署机。交付信息中必须保留上面输出的完整哈希，不能只说“使用最新版本”。
+annotated tag 记录标签名、说明和目标提交；它用于便于传递及固定候选版
+身份，不代替完整哈希和部署清单校验。团队应将已发布标签视为不可变：
+不使用 `git tag -f`，不强制推送，也不删除后重建同名标签。如果发布资源又有
+修改，必须重新测试、Sim2Sim、提交，并使用新序号创建新标签。
 
-开发机交付时应同时记录 Sim2Sim 结果和完整提交哈希。开发机到这里完成正式交付准备；后续部署包构建和实机实验在部署机完成。
+开发机交付时只需把 `RELEASE_TAG` 的值和 Sim2Sim 结果交给部署机。
+完整 `SOURCE_COMMIT` 由两台机器分别从同一标签自动解析，不需要人工输入。
+开发机到这里完成正式交付准备；后续部署包构建和实机实验在部署机完成。
 
 ## 4. 部署机上的准备步骤
 
@@ -315,41 +358,43 @@ git status --short
 
 部署机可以保留自己的未跟踪文件或其他开发内容。后面的构建脚本会为指定提交创建临时干净工作树，不会直接从当前工作目录编译。不过，开始前仍应查看状态，避免误操作用户文件。
 
-### 第二步：取得开发机指定的提交
+### 第二步：按发布标签取得开发机指定的提交
 
-先从 Git 仓库取得最新对象：
-
-```bash
-git fetch --all --tags
-```
-
-然后填写开发机提供的完整提交哈希并确认该提交已经存在。下面的哈希只是格式示例，执行时必须替换：
+填写开发机提供的简短标签名，从同一 Git 远程精确拉取该标签，再由
+Git 在部署机上解析完整提交哈希：
 
 ```bash
-SOURCE_COMMIT=0123456789abcdef0123456789abcdef01234567
+RELEASE_TAG=lw-release-20260816-01
+git fetch origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+
+SOURCE_COMMIT=$(git rev-parse "${RELEASE_TAG}^{commit}")
 git cat-file -e "${SOURCE_COMMIT}^{commit}"
+git tag -n1 "$RELEASE_TAG"
 git show --stat --oneline "$SOURCE_COMMIT"
 ```
 
-`git cat-file` 没有输出且返回成功，表示部署机已经取得该提交。构建脚本可以直接构建这个提交，因此不需要执行 `git checkout`，也不需要切换部署机当前分支。
+精确 refspec 只取得指定标签。如部署机已有同名但指向不同对象的标签，
+Git 会拒绝覆盖；此时不得使用 `--force`，应停止并确认发布标签是否被违规
+移动。`git cat-file` 没有输出且返回成功，表示部署机已经取得标签对应的
+提交。应把 `git tag -n1` 显示的标签说明和 `git show` 显示的提交概要与
+开发机的交付记录对照。
+
+构建脚本可以直接构建 `SOURCE_COMMIT`，因此不需要执行 `git checkout`，也
+不需要切换部署机当前分支。标签只负责在线传递候选版身份；后续构建、
+部署清单和验收仍使用解析出的完整提交哈希。
 
 ### 第三步：检查部署机本地依赖
 
-加载部署机安装的 ROS 2，并确认推理库存在：
+加载部署机安装的 ROS 2：
 
 ```bash
 source /opt/ros/humble/setup.bash
-
-test -d "$RL_SAR_ROOT/library/inference_runtime/onnxruntime"
-bash "$RL_SAR_ROOT/scripts/validate_inference_runtime.sh" \
-    onnx "$RL_SAR_ROOT/library/inference_runtime/onnxruntime" "$(uname -m)"
 ```
 
-校验脚本的完整位置参数形式是
-`<onnx> <runtime-directory> [architecture]`。架构可省略，默认使用
-`uname -m`，支持 `x86_64`/`amd64` 和 `aarch64`/`arm64`；正式 LW
-部署仅携带 ONNX Runtime，因此必须使用上述
-`onnx` 及当前机器架构的完整调用。
+第 5 节的 `build_lw_deployment.sh` 会先确认项目内 ONNX Runtime 目录存在，
+再使用候选提交中的 `validate_inference_runtime.sh` 按当前机器架构检查其结构、
+共享库和 ELF 架构；只有校验通过才会创建部署输出并开始编译。因此正式流程不需要
+在这里手动重复运行该校验脚本。
 
 还需要保证 `git`、`cmake`、`colcon`、C++ 编译器及
 [README.md](../README.md#获取代码与依赖) 中的依赖可用。
@@ -413,6 +458,19 @@ done
 
 ## 5. 在部署机生成正式运行版本
 
+构建和验收按以下频率执行：
+
+| 时机 | 必须执行的流程 |
+| --- | --- |
+| 每个新候选版本 | 完整执行本节构建；构建脚本自动验收原前缀及临时重定位副本 |
+| 候选版本放到最终运行位置后首次使用 | 在新终端完整执行第 6 节一次 |
+| 同一份未变化且已验收部署的日常重复启动 | 执行第 7 节日常检查；无需重新构建或重复整段第 6 节 |
+
+发布提交或标签、模型、配置、ONNX Runtime 发生变化，或者重新生成了新的部署
+输出前缀，都构成新的候选版本，不能沿用旧候选版本的验收结果。部署前缀被复制
+或移动到另一个最终位置，以及 ROS、操作系统动态库等运行环境发生变化时，也
+必须按第 6 节重新验收。
+
 继续在部署机的 `/home/lfr/rl_sar` 中执行：
 
 ```bash
@@ -434,8 +492,8 @@ src/rl_sar/scripts/build_lw_deployment.sh \
 2. 初始化该提交锁定的 Git 子模块；
 3. 使用 `Release` 和 `LW_PRODUCTION_DEPLOYMENT=ON` 编译；
 4. 安装 `serial`、`fdilink_ahrs`、`rl_real_LW`、LW 配置测量工具、五个
-   YAML、四个 ONNX、两个状态转换 CSV，以及匹配本机构架的 ONNX Runtime；
-5. 生成 schema v3 `manifest.yaml`，记录源码提交、策略资源、项目内
+   YAML、四个 ONNX、两个状态转换 CSV，以及匹配本机架构的 ONNX Runtime；
+5. 生成 schema v4 `manifest.yaml`，记录源码提交、策略资源、项目内
    IMU/串口运行文件以及 ONNX Runtime 版本、架构和库文件 SHA-256；
 6. 拒绝关键部署文件中的符号链接；
 7. 检查生产可执行文件只通过 `$ORIGIN/onnxruntime` 解析随包推理库，不保留
@@ -445,7 +503,8 @@ src/rl_sar/scripts/build_lw_deployment.sh \
 
 输出目录必须不存在或为空。脚本不会覆盖以前的部署版本。如果同一个提交需要重新构建，应使用新的带后缀目录，例如 `${SHORT_COMMIT}_02`，并保留必要的旧版本供回滚。
 
-主要产物位于：
+核心产物位于以下位置；为保持简洁，未逐项列出受清单保护的 `package.xml` 和
+ament 包索引：
 
 ```text
 <DEPLOY_PREFIX>/
@@ -461,6 +520,7 @@ src/rl_sar/scripts/build_lw_deployment.sh \
 ├── share/fdilink_ahrs/
 │   ├── launch/ahrs_driver.launch.py
 │   └── wheeltec_udev.sh
+├── share/rl_sar/launch/rl_real_LW.launch.py
 └── share/rl_sar/deployment/LW/
     ├── manifest.yaml
     └── policy/LW/
@@ -472,9 +532,17 @@ src/rl_sar/scripts/build_lw_deployment.sh \
             └── wheel_to_leg/
 ```
 
-## 6. 在部署机进行部署包离线验收
+## 6. 每个候选在最终运行位置的首次离线验收
 
-构建脚本已经自动验收一次。正式启动前，建议在一个没有加载旧部署版本的新终端中再验收一次。
+构建脚本已经在候选生成阶段自动验收原部署前缀及临时重定位副本。每个新候选
+放到最终运行位置后，必须在一个没有加载旧部署版本的新终端中完整执行本节一次，
+再进行该候选的首次实机启动；如果构建输出目录本身就是最终运行位置，也仍要
+完成这次针对目标终端、包解析和系统动态依赖的首次验收。
+
+同一部署前缀保持在已验收的最终位置，发布文件和 ROS、操作系统动态库等运行
+环境均未变化时，日常重复启动不要求重新执行整段本节。只要前缀被复制或移动、
+部署文件可能被修改、运行环境或依赖发生变化，或者无法确认已有验收记录仍适用，
+就必须在下一次启动前重新完整执行本节。
 
 重新设置变量，因为新终端不会保留上一个终端中的变量：
 
@@ -482,8 +550,9 @@ src/rl_sar/scripts/build_lw_deployment.sh \
 RL_SAR_ROOT=/home/lfr/rl_sar
 cd "$RL_SAR_ROOT"
 
-# 必须与本次部署的提交一致
-SOURCE_COMMIT=0123456789abcdef0123456789abcdef01234567
+# 必须与本次部署的发布标签一致
+RELEASE_TAG=lw-release-20260816-01
+SOURCE_COMMIT=$(git rev-parse "${RELEASE_TAG}^{commit}")
 SHORT_COMMIT=$(git rev-parse --short "$SOURCE_COMMIT")
 DEPLOY_PREFIX="$RL_SAR_ROOT/build/lw_deployments/$SHORT_COMMIT"
 
@@ -497,31 +566,23 @@ source "$DEPLOY_PREFIX/setup.bash"
 - 当前可执行文件是否属于清单记录的源码提交；
 - 可执行文件、五个 YAML、四个 ONNX 和两个 CSV 的哈希是否正确；
 - 随包 ONNX Runtime 的版本、架构、精确文件集合和 SHA-256 是否正确；
-- `libserial`、AHRS 节点、launch、udev 辅助脚本和两个 ROS 包索引的哈希
+- `libserial`、AHRS 节点、launch、udev 辅助脚本和三个 ROS 包索引的哈希
   是否正确；
 - 资源路径是否仍在部署目录内；
-- 关键部署文件是否经过符号链接。
+- 关键部署文件本身或其路径是否包含符号链接。
 
 只有命令返回码为 `0` 才表示部署包完整性验收通过。它不能证明策略行为正确，因此必须确认该提交已经在开发机完成 Sim2Sim。任何报错都应停止部署，不能通过直接修改部署目录来绕过检查。
 
-查看清单和动态库：
+查看清单：
 
 ```bash
 sed -n '1,220p' \
     "$DEPLOY_PREFIX/share/rl_sar/deployment/LW/manifest.yaml"
-
-ldd "$DEPLOY_PREFIX/lib/rl_sar/rl_real_LW"
-ldd "$DEPLOY_PREFIX/lib/rl_sar/lw_config_profiler"
-ldd "$DEPLOY_PREFIX/lib/fdilink_ahrs/ahrs_driver_node"
 ```
 
-`manifest.yaml` 中的 `source_commit` 应等于开发机交付的完整提交哈希。两次
-`ldd` 输出中如果出现 `not found`，说明部署机缺少运行库，不得启动实机程序。
-`rl_real_LW` 和 `lw_config_profiler` 应依赖 `libonnxruntime.so.1`，解析结果必须
-位于 `$DEPLOY_PREFIX/lib/rl_sar/onnxruntime/`，且不得出现 `libtorch`、
-`libtorch_cpu` 或 `libc10`。其 ELF 动态段应包含 `$ORIGIN/onnxruntime`，不得
-包含项目中 `library/inference_runtime/onnxruntime/lib` 的绝对路径；正式部署
-构建脚本会自动检查这些约束。
+`manifest.yaml` 中的 `source_commit` 应等于开发机交付的完整提交哈希。标准的
+部署机本地构建路径已经自动检查三个生产可执行文件的动态依赖，本节不再手动
+重复；跨机器复制部署前缀属于例外路径，必须按第 9 节在目标机重新检查。
 
 还必须确认包解析没有回退到旧开发工作区：
 
@@ -533,20 +594,43 @@ done
 
 ## 7. 在部署机进行实机实验
 
+以下检查每次实机启动都要执行。新候选的首次启动必须已经完成第 6 节；同一份
+未变化且已验收部署的日常重复启动只执行本节检查，无需重新构建或手动重复整段
+第 6 节。正常 `rl_real_LW` 启动仍会在打开电机板串口和访问硬件前自动校验清单
+及资源哈希，因此这个频率区分不会绕过部署完整性保护。
+
+| 操作 | 执行频率或触发条件 |
+| --- | --- |
+| 正式构建及构建脚本自动验收 | 每个新候选版本一次 |
+| 第 6 节最终运行位置离线验收 | 每个候选到达最终位置后首次一次；位置、文件或运行环境变化后重做 |
+| 本节日常启动与现场检查 | 每次实机启动 |
+| `collect-host`、`collect-hardware`、`analyze` | 首次部署、软硬件环境变化或需要重新确定参数时 |
+| IMU 单独验证和调试话题 | 仅受控验证或故障诊断时 |
+
+### 日常实机启动
+
 启动前至少确认：
 
-- 当前部署目录的 `--verify-deployment-only` 已通过；
+- 当前 `DEPLOY_PREFIX` 与验收记录一致，仍位于已经验收的最终运行位置；
+- 部署文件、基础 ROS 和系统动态依赖等环境没有发生需要重新验收的变化；
 - `manifest.yaml` 中的提交与本次交付记录一致；
 - 该提交在开发机上的 Sim2Sim 验证记录已确认；
-- `ldd` 没有缺失依赖；
 - 机器人型号、关节映射、限位、初始姿态和四个策略版本正确；
 - IMU、串口、执行器及手柄连接已分别验证；
 - 机器人已可靠吊装或离地，运动范围内无人和障碍物；
 - 硬件急停、电机失能方式及现场监护人员均已就位。
 
-在刚才完成离线验收、并且 `DEPLOY_PREFIX` 指向正确版本的终端中执行：
+每次启动都在新终端中重新加载基础 ROS 和已验收前缀，并做轻量包解析检查；
+这不等同于重复第 6 节的完整离线验收：
 
 ```bash
+source /opt/ros/humble/setup.bash
+source "$DEPLOY_PREFIX/setup.bash"
+
+for package in serial fdilink_ahrs rl_sar; do
+    test "$(realpath -m "$(ros2 pkg prefix "$package")")" = "$DEPLOY_PREFIX"
+done
+
 PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py
 ```
 
@@ -567,7 +651,7 @@ PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py
 
 正常启动会加载 AHRS 驱动并运行 `rl_real_LW`，随后可能访问真实硬件。不要跳过离线验收，也不要用正常启动命令测试部署包是否完整。
 
-### 正式节点的启动失能边界
+### 启动与安全：正式节点的失能边界
 
 `rl_real_LW` 先完成不访问硬件的部署清单和资源哈希校验。只有该校验通过且本次
 不是 `--verify-deployment-only` 后，程序才打开左右电机板串口；此时 ROS、终端
@@ -587,7 +671,7 @@ PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py
 执行失能，也不是硬件回执。因此正式启动前仍必须可靠吊装或离地，保持运动范围
 隔离，并由现场人员掌握物理急停；不能用本启动顺序替代这些措施。
 
-### 真机终端键盘
+### 操作员输入：真机终端键盘
 
 真机 launch 默认设置 `enable_keyboard:=true`。`rl_real_LW` 会直接打开启动该
 launch 的控制终端 `/dev/tty`，切换为非规范、无回显的非阻塞输入，但保留
@@ -610,7 +694,7 @@ PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py enable_keyboar
 关闭后不存在终端 `GetDown` 通道，必须在启动前准备独立的受控恢复方式、可靠
 机械支撑和物理急停；不得仅因为节点仍在运行就假设手柄断联后可以安全恢复。
 
-### 当前键盘和手柄映射
+### 操作员输入：当前键盘和手柄映射
 
 以下表格描述当前 LW 代码实际使用的映射，不是通用推荐键位。FSM 按键只在表中
 列出的状态前提满足时生效；没有满足前提时，按键不会强制跳过起身、趴下或形态
@@ -676,7 +760,7 @@ Linux joystick 编号的逻辑名称；不同品牌、连接方式或驱动可�
 失能，单独十字键也不调整步频；不得依据通用 SDK 注释或其他机器人配置推测
 这些按键的功能。
 
-### 受控验证 IMU 话题
+### 可选诊断：受控验证 IMU 话题
 
 这一步不是自动化验收的一部分，因为它会真实打开 `/dev/fdilink_ahrs`。只能在
 确认 IMU 型号、波特率 `921600`、设备别名和权限正确，并且尚未启动完整
@@ -710,7 +794,7 @@ AHRS 事件作为一次性授权，并只接受授权时效内紧随其后、角
 合理的下一帧原始 IMU；通过后四元数会归一化。启动以来从未出现有效配对时，控制
 保持硬失能等待；已经进入 Ready 后可信 IMU 过期，则锁存硬失能并关闭程序。
 
-### 可选调试话题
+### 可选诊断：调试话题
 
 正式启动默认不创建高频调试 publisher 或定时器，也不会在控制线程中复制调试
 快照。如需临时观察当前/目标关节、IMU 和速度指令，可显式启用默认 50 Hz 的
@@ -759,7 +843,7 @@ bag 不代表无损控制周期日志。正常结束应使用 `Ctrl+C` 完成 ba
 出现异常时必须优先执行物理急停和失能，不能为保存 bag 延迟安全操作。采集结束
 后恢复默认关闭 `enable_debug_publisher`。
 
-### 实机控制循环的默认保护行为
+### 控制循环与安全：默认保护行为
 
 LW 实机控制循环按绝对时间点以 5 ms 周期运行。某次执行过慢时，程序会跳过已经过期的周期，不会为了“补次数”而连续突发执行控制回调。终端状态和周期统计由 ROS 定时器输出，不在 200 Hz 电机命令线程中打印。
 
@@ -784,7 +868,7 @@ control_loop_fatal_lateness: 0.0
 
 不要直接修改已经生成的部署目录来调整参数。参数调整应在项目的 `policy/LW/base.yaml` 中完成，经过开发机测试和 Sim2Sim、提交，再由部署机从新提交生成新的部署版本。
 
-### 吊装且不进入 Locomotion 的配置测量
+### 首次部署或环境变化：吊装配置测量
 
 可靠吊装并保持 FSM 在 Passive 时，可以完成两阶段的部署前测量：第一阶段在
 目标 Jetson 上不连接任何硬件，运行与正式部署相同的四个 ONNX、观测/输出路径、
@@ -837,8 +921,9 @@ python3 "$LW_PROFILE_TOOL" collect-host \
 
 `--cpus allowed` 会逐一测量当前进程亲和掩码允许的逻辑 CPU；也可用
 `--cpus=-1,0,1` 显式加入不绑定的对照组。正数实时优先级只应由部署负责人明确
-选定后加入，例如 `--realtime-priorities 0,50`。未成功应用的亲和性或
-`SCHED_FIFO` 报告不会被分析器选为候选。每个输出目录必须不存在或为空，工具
+选定后加入，例如 `--realtime-priorities 0,50`。只要报告请求了 CPU 绑定或
+正数实时优先级但实际未成功应用，`analyze` 就会拒绝整次分析，不会静默跳过
+该报告。每个输出目录必须不存在或为空，工具
 拒绝覆盖历史测量。同一轮用于比较的全部 host 报告必须使用相同的
 `--duration-seconds`；累计丢周期数只在该条件下参与排序，不能混用不同时长的
 历史报告。
@@ -917,17 +1002,23 @@ shadow 推理和耗时测量，其生成的 Passive/策略命令会被丢弃，�
 #### 生成仅供评审的候选
 
 下面四个 `max-safe` 值不是脚本测出来的性能值，而是风险评估预先确定的硬上限；
-必须由负责机械与控制安全的人员给出。示例中的占位符不能原样执行：
+必须由负责机械与控制安全的人员给出。先把下面四个变量的占位内容替换为评审
+确定的有限正数，再执行分析命令：
 
 ```bash
+MAX_SAFE_SENSOR_TIMEOUT_MS=REPLACE_WITH_REVIEWED_POSITIVE_MS
+MAX_SAFE_TRUSTED_IMU_TIMEOUT_MS=REPLACE_WITH_REVIEWED_POSITIVE_MS
+MAX_SAFE_IMU_AHRS_PAIR_AGE_MS=REPLACE_WITH_REVIEWED_POSITIVE_MS
+MAX_SAFE_CONTROL_GAP_MS=REPLACE_WITH_REVIEWED_POSITIVE_MS
+
 python3 "$LW_PROFILE_TOOL" analyze \
     --base-yaml "$LW_POLICY_ROOT/LW/base.yaml" \
     --reports "$LW_PROFILE_DIR"/host/*.json "$LW_PROFILE_DIR/hardware.json" \
     --output "$LW_PROFILE_DIR/candidate-review.json" \
-    --max-safe-sensor-timeout-ms <评审确定的最大电机反馈时效毫秒> \
-    --max-safe-trusted-imu-timeout-ms <评审确定的最大可信IMU时效毫秒> \
-    --max-safe-imu-ahrs-pair-age-ms <评审确定的最大IMU-AHRS配对时延毫秒> \
-    --max-safe-control-gap-ms <评审确定的最大控制间断毫秒> \
+    --max-safe-sensor-timeout-ms "$MAX_SAFE_SENSOR_TIMEOUT_MS" \
+    --max-safe-trusted-imu-timeout-ms "$MAX_SAFE_TRUSTED_IMU_TIMEOUT_MS" \
+    --max-safe-imu-ahrs-pair-age-ms "$MAX_SAFE_IMU_AHRS_PAIR_AGE_MS" \
+    --max-safe-control-gap-ms "$MAX_SAFE_CONTROL_GAP_MS" \
     --minimum-hardware-samples 1000
 ```
 
@@ -964,7 +1055,7 @@ schema v2 报告不含独立 AHRS、可信 IMU 和配对时延证据，不能用
 `policy/LW/base.yaml` 中单独修改、重新执行 Sim2Sim 和测试、提交，再从新提交
 生成新部署版本。不得把候选文件直接覆盖到当前部署包。
 
-### 可选的 CPU 固定和实时优先级
+### 控制循环与安全：可选的 CPU 固定和实时优先级
 
 只有在目标部署机上完成负载测量后，才应设置 `control_loop_cpu` 或正数的 `control_loop_realtime_priority`。先用 `lscpu` 确认可用 CPU，再确认运行账户具备设置 `SCHED_FIFO` 的权限；具体授权方式应遵守部署机的 systemd 或安全配置，不要仅为绕过权限错误而以 root 身份运行整个控制程序。
 
@@ -972,7 +1063,7 @@ schema v2 报告不含独立 AHRS、可信 IMU 和配对时延证据，不能用
 
 `control_loop_fatal_consecutive_misses` 和 `control_loop_fatal_lateness` 只应在取得部署机时序数据、确认电机板端看门狗行为并决定硬失能策略后显式启用；后一个值的单位是秒。启用任一严重阈值后，达到阈值会进入下文的 S4：锁死命令门、发送约 100 ms 的电机失能包并请求 ROS 关闭，机器人不会自动执行受控趴下。
 
-### 实机运行时的安全分级
+### 控制循环与安全：实机运行时的安全分级
 
 程序不再把所有异常都当成“立即断力并退出”。处理强度由故障发生在哪个环节、此时控制数据是否还可信来决定：
 
@@ -989,7 +1080,7 @@ schema v2 报告不含独立 AHRS、可信 IMU 和配对时延证据，不能用
 循环，并尝试最终 20 包失能序列后中止启动。正常退出仍是先关闭命令门、停止并
 等待全部循环退出，再发送最终 20 包失能序列。
 
-### 主机安全保护的边界
+### 控制循环与安全：主机保护边界
 
 上述等级是主机程序的决策，不等于已经证明电机物理上失能。当前主机只能证明它已经调用串口发送失能帧；尚未在本项目中证明以下硬件事实：
 
@@ -1007,10 +1098,11 @@ schema v2 报告不含独立 AHRS、可信 IMU 和配对时延证据，不能用
 每次升级都重复同一流程：
 
 1. 开发机完成修改、单元测试和 Sim2Sim；
-2. 开发机提交验证通过的内容，并把 Sim2Sim 结果和完整提交哈希交给部署机；
-3. 部署机取得该提交；
+2. 开发机提交验证通过的内容，创建并推送新的不可变发布标签，将
+   Sim2Sim 结果和标签名交给部署机；
+3. 部署机精确拉取该标签并自动解析完整提交哈希；
 4. 部署机构建到新的 `build/lw_deployments/<提交短哈希>/`；
-5. 部署机完成部署包、动态库和实机安全检查；
+5. 部署机完成最终运行位置的首次离线验收和实机安全检查；
 6. 加载新目录的 `setup.bash` 后进行实机实验。
 
 不要覆盖旧部署目录，也不要在部署目录中替换模型、配置或可执行文件。需要修改任何受清单管理的文件时，应提交修改并生成新的部署版本。
@@ -1027,13 +1119,16 @@ source "$DEPLOY_PREFIX/setup.bash"
 
 验收和安全检查通过后，再执行实机启动命令。
 
-## 9. 可选：从开发机复制部署版本
+## 9. 例外路径：从开发机复制部署版本
 
-只有开发机和部署机的 CPU 架构、操作系统、ROS 版本及 C/C++ ABI 兼容时，
-才考虑在开发机构建后复制完整部署前缀。ONNX Runtime 已包含在部署前缀中，
-不再要求目标机另有项目内推理库路径，但其架构仍必须匹配目标机。
+标准路径是在部署机本地构建。只有开发机和部署机的 CPU 架构、操作系统、ROS
+版本及 C/C++ ABI 已确认兼容时，才考虑在开发机构建后复制完整部署前缀。
+ONNX Runtime 已包含在部署前缀中，不再要求目标机另有项目内推理库路径，但其
+架构仍必须匹配目标机。
 
-不能只复制 `rl_real_LW` 或 `deployment/LW`，必须复制整个 `<DEPLOY_PREFIX>`。复制到部署机后，仍必须重新执行 `--verify-deployment-only` 和 `ldd` 检查。
+不能只复制 `rl_real_LW` 或 `deployment/LW`，必须复制整个 `<DEPLOY_PREFIX>`。
+复制到部署机后，仍必须重新执行 `--verify-deployment-only` 和 `ldd` 检查；这是
+跨机器例外路径的目标机兼容性检查，不是标准本机构建路径的日常重复步骤。
 
 生产可执行文件使用相对于自身的 ONNX Runtime 搜索路径；构建脚本会把部署前缀
 复制到临时新位置并再次验收。基础 ROS、Python 和系统 ABI 仍可能不同，因此
@@ -1099,11 +1194,12 @@ ros2 pkg prefix rl_sar
 
 输出应与当前 `DEPLOY_PREFIX` 一致。
 
-### 动态库缺失
+### 动态库缺失或跨机器 ABI 不兼容
 
-使用 `ldd` 查找 `not found` 项。ONNX Runtime 必须解析到当前部署前缀；其他
-缺失项应通过部署机安装 ABI 兼容的 ROS 和系统依赖解决，不得用
-`LD_LIBRARY_PATH` 指向项目源码树来绕过随包 ONNX Runtime 校验。
+标准的部署机本地构建会自动拒绝 `not found`。如果按第 9 节跨机器复制部署
+前缀，应在目标机使用 `ldd` 查找缺失项并确认 ABI 兼容；ONNX Runtime 必须解析
+到当前部署前缀。其他缺失项应通过部署机安装 ABI 兼容的 ROS 和系统依赖解决，
+不得用 `LD_LIBRARY_PATH` 指向项目源码树来绕过随包 ONNX Runtime 校验。
 
 ## 11. 相关文件
 
@@ -1112,5 +1208,5 @@ ros2 pkg prefix rl_sar
 - 配置候选分析器：`src/rl_sar/scripts/profile_lw_runtime_config.py`
 - 清单生成器：`src/rl_sar/scripts/generate_lw_deployment_manifest.py`
 - LW 实机启动文件：`src/rl_sar/launch/rl_real_LW.launch.py`
-- LW 实机部署问题记录：`.learnings/LW_REAL_DEPLOYMENT_ISSUES.md` 中的
-  `LW-010`、`LW-011`、`LW-017` 和 `LW-027`
+- LW 实机部署权威问题记录：`.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`；按其中的
+  Ordered Summary 和各问题 Resolution 查阅当前状态与证据
