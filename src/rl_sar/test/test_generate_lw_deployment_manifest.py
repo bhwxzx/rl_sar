@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -63,8 +64,31 @@ class ManifestGeneratorTests(unittest.TestCase):
             "url": "https://example.invalid/onnxruntime-linux-x64-1.22.0.tgz",
             "sha256": "b" * 64,
         }
+        self.library_files = [
+            {
+                "path": "lib/libonnxruntime.so.1.22.0",
+                "deployment_path": GENERATOR.ONNX_RUNTIME_FILES[0],
+                "sha256": hashlib.sha256(
+                    (self.prefix / GENERATOR.ONNX_RUNTIME_FILES[0]).read_bytes()
+                ).hexdigest(),
+            },
+            {
+                "path": "lib/libonnxruntime_providers_shared.so",
+                "deployment_path": GENERATOR.ONNX_RUNTIME_FILES[1],
+                "sha256": hashlib.sha256(
+                    (self.prefix / GENERATOR.ONNX_RUNTIME_FILES[1]).read_bytes()
+                ).hexdigest(),
+            },
+        ]
         self.catalog.write_text(
-            json.dumps({"schema_version": 1, "archives": [self.origin_entry]}),
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "archives": [
+                        {**self.origin_entry, "library_files": self.library_files}
+                    ],
+                }
+            ),
             encoding="utf-8",
         )
         self.origin = (
@@ -214,6 +238,12 @@ class ManifestGeneratorTests(unittest.TestCase):
         library = self.prefix / GENERATOR.ONNX_RUNTIME_FILES[-1]
         library.write_bytes(elf64_bytes(183))
         with self.assertRaisesRegex(RuntimeError, "architecture mismatch"):
+            self.generate()
+
+    def test_rejects_onnx_library_bytes_not_from_approved_archive(self) -> None:
+        library = self.prefix / GENERATOR.ONNX_RUNTIME_FILES[0]
+        library.write_bytes(library.read_bytes() + b"tampered")
+        with self.assertRaisesRegex(RuntimeError, "approved archive"):
             self.generate()
 
     def test_rejects_extra_onnx_runtime_library(self) -> None:

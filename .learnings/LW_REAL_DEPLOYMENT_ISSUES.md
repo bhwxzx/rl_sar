@@ -88,6 +88,24 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 - No MuJoCo GUI, ROS real node, serial device, IMU, or motor was started.
 - The review confirmed the new pending issues `LW-032` through `LW-041` below.
 
+## 2026-08-18 Follow-up Review Addendum
+
+- Reviewed: 2026-08-18
+- Repository HEAD during review: `1fda05a`
+- Review scope: installed ONNX Runtime provenance, the retained Gazebo joint
+  controllers, common ONNX inference shape handling, the MuJoCo dependency
+  bootstrap, generic `rl_sim` joystick/controller startup, and optional
+  `rl_sim_LW` debug publication.
+- Review method: static inspection of the implementation, configuration, and
+  existing tests. This record-only update did not run a simulator, ROS node,
+  dependency download, build, or test suite.
+- No serial device, IMU, joystick, simulator, real robot, or motor was started.
+- The earlier draft's `LW-044` finding was already resolved by the current
+  `LW-044`. Because `LW-045` through `LW-047` are also existing resolved
+  entries, the user approved assigning the six remaining findings the unique
+  IDs `LW-048` through `LW-053` rather than overwriting resolved history.
+- The review confirmed the new pending issues `LW-048` through `LW-053` below.
+
 ## Ordered Summary
 
 | Order | ID | Priority | Status | Summary |
@@ -103,42 +121,48 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 9 | LW-045 | P1 / high | resolved | Decode FDILink payloads without packed-union or host-layout dependencies |
 | 10 | LW-046 | P2 / medium | resolved | Reject semantically invalid FDILink samples before ROS publication |
 | 11 | LW-047 | P2 / low | resolved | Classify FDILink 8-bit sequence anomalies without inventing frame loss |
-| 12 | LW-024 | P1 / high | resolved | Make the Sim2Sim physics-thread lifecycle bounded and joinable |
-| 13 | LW-025 | P1 / high | resolved | Preserve keyboard velocity commands instead of replacing them every control cycle |
-| 14 | LW-026 | P1 / high | resolved | Bind configuration candidates to one exact deployment and comparable reports |
-| 15 | LW-027 | P1 / high | resolved | Make the ONNX Runtime dependency reproducible and integrity-verified |
-| 16 | LW-007 | P1 / high | resolved | Remove cross-thread data races with coherent snapshots |
-| 17 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
-| 18 | LW-009 | P1 / high | resolved | Use the configured 60 Hz wheel-to-leg reference rate |
-| 19 | LW-010 | P1 / high | resolved | Make deployed binary, configuration, and models reproducible |
-| 20 | LW-016 | P1 / high | resolved | Audit every safety trigger for proportional and recoverable behavior |
-| 21 | LW-013 | P1 / high | resolved | Validate YAML, mappings, observation sizes, and model outputs |
-| 22 | LW-011 | P1 / high | resolved | Make the control loop suitable for deterministic real-time execution |
-| 23 | LW-017 | P1 / high | resolved | Bundle and verify the LW IMU/serial runtime dependencies |
-| 24 | LW-019 | P1 / high | resolved | Enable a real-robot terminal keyboard recovery channel |
-| 25 | LW-020 | P1 / high | resolved | Make the Jetson production inference bootstrap architecture-safe and ONNX-only |
-| 26 | LW-021 | P1 / high | resolved | Make Sim2Sim and real deployment share one testable control and safety core |
-| 27 | LW-022 | P1 / high | resolved | Measure suspended real-runtime behavior and generate review-only configuration candidates |
-| 28 | LW-028 | P2 / medium | resolved | Replace unsafe Sim2Sim signal-handler work with a signal-safe shutdown request |
-| 29 | LW-029 | P2 / medium | resolved | Resolve optional actuator models through the selected Sim2Sim policy root |
-| 30 | LW-030 | P2 / medium | resolved | Keep inhibited commands and gait-phase observations coherent |
-| 31 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
-| 32 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
-| 33 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
-| 34 | LW-031 | P2 / low | resolved | Restore a warning-clean strict build for maintained LW code and tests |
-| 35 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
-| 36 | LW-032 | P0 / critical | resolved | Require complete, initialized, independently fresh IMU and AHRS data end to end |
-| 37 | LW-033 | P1 / high | resolved | Bind policy-output freshness to the robot-state input snapshot |
-| 38 | LW-034 | P1 / high | resolved | Verify downloaded inference runtimes against pinned trusted digests |
-| 39 | LW-035 | P2 / medium | resolved | Bind the production launch file into deployment integrity verification |
-| 40 | LW-036 | P2 / medium | resolved | Validate optional actuator-network outputs on every Sim2Sim inference |
-| 41 | LW-037 | P2 / medium | resolved | Make Sim2Sim SIGTERM and normal ROS shutdown stop the render loop |
-| 42 | LW-038 | P2 / medium | resolved | Remove repeated configuration decoding and allocation from the real control cycle |
-| 43 | LW-039 | P2 / low | resolved | Reject actuator-model symlinks and policy-root escapes |
-| 44 | LW-040 | P2 / low | resolved | Make the polymorphic RL base destruction contract safe |
-| 45 | LW-041 | P2 / low | resolved | Make high-rate Sim2Sim plot publishing explicitly opt-in |
-| 46 | LW-042 | P2 / medium | resolved | Make real debug telemetry nonblocking, source-fresh, and rate-bounded |
-| 47 | LW-043 | P2 / medium | resolved | Retire the Sim2Sim actuator-model runtime while preserving offline training |
+| 12 | LW-048 | P1 / high | resolved | Bind installed ONNX Runtime library bytes to the approved archive |
+| 13 | LW-049 | P2 / medium | pending | Make retained Gazebo controllers bounded, URDF-ready, and allocation-stable |
+| 14 | LW-050 | P2 / medium | pending | Unify the ONNX dynamic-batch contract and cached tensor resources |
+| 15 | LW-051 | P2 / medium | pending | Make MuJoCo downloads digest-pinned and installation atomic |
+| 16 | LW-052 | P2 / low | pending | Harden generic rl_sim joystick bounds and temporary-file lifecycle |
+| 17 | LW-053 | P2 / low | pending | Cache the rl_sim_LW debug message layout |
+| 18 | LW-024 | P1 / high | resolved | Make the Sim2Sim physics-thread lifecycle bounded and joinable |
+| 19 | LW-025 | P1 / high | resolved | Preserve keyboard velocity commands instead of replacing them every control cycle |
+| 20 | LW-026 | P1 / high | resolved | Bind configuration candidates to one exact deployment and comparable reports |
+| 21 | LW-027 | P1 / high | resolved | Make the ONNX Runtime dependency reproducible and integrity-verified |
+| 22 | LW-007 | P1 / high | resolved | Remove cross-thread data races with coherent snapshots |
+| 23 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
+| 24 | LW-009 | P1 / high | resolved | Use the configured 60 Hz wheel-to-leg reference rate |
+| 25 | LW-010 | P1 / high | resolved | Make deployed binary, configuration, and models reproducible |
+| 26 | LW-016 | P1 / high | resolved | Audit every safety trigger for proportional and recoverable behavior |
+| 27 | LW-013 | P1 / high | resolved | Validate YAML, mappings, observation sizes, and model outputs |
+| 28 | LW-011 | P1 / high | resolved | Make the control loop suitable for deterministic real-time execution |
+| 29 | LW-017 | P1 / high | resolved | Bundle and verify the LW IMU/serial runtime dependencies |
+| 30 | LW-019 | P1 / high | resolved | Enable a real-robot terminal keyboard recovery channel |
+| 31 | LW-020 | P1 / high | resolved | Make the Jetson production inference bootstrap architecture-safe and ONNX-only |
+| 32 | LW-021 | P1 / high | resolved | Make Sim2Sim and real deployment share one testable control and safety core |
+| 33 | LW-022 | P1 / high | resolved | Measure suspended real-runtime behavior and generate review-only configuration candidates |
+| 34 | LW-028 | P2 / medium | resolved | Replace unsafe Sim2Sim signal-handler work with a signal-safe shutdown request |
+| 35 | LW-029 | P2 / medium | resolved | Resolve optional actuator models through the selected Sim2Sim policy root |
+| 36 | LW-030 | P2 / medium | resolved | Keep inhibited commands and gait-phase observations coherent |
+| 37 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
+| 38 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
+| 39 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
+| 40 | LW-031 | P2 / low | resolved | Restore a warning-clean strict build for maintained LW code and tests |
+| 41 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
+| 42 | LW-032 | P0 / critical | resolved | Require complete, initialized, independently fresh IMU and AHRS data end to end |
+| 43 | LW-033 | P1 / high | resolved | Bind policy-output freshness to the robot-state input snapshot |
+| 44 | LW-034 | P1 / high | resolved | Verify downloaded inference runtimes against pinned trusted digests |
+| 45 | LW-035 | P2 / medium | resolved | Bind the production launch file into deployment integrity verification |
+| 46 | LW-036 | P2 / medium | resolved | Validate optional actuator-network outputs on every Sim2Sim inference |
+| 47 | LW-037 | P2 / medium | resolved | Make Sim2Sim SIGTERM and normal ROS shutdown stop the render loop |
+| 48 | LW-038 | P2 / medium | resolved | Remove repeated configuration decoding and allocation from the real control cycle |
+| 49 | LW-039 | P2 / low | resolved | Reject actuator-model symlinks and policy-root escapes |
+| 50 | LW-040 | P2 / low | resolved | Make the polymorphic RL base destruction contract safe |
+| 51 | LW-041 | P2 / low | resolved | Make high-rate Sim2Sim plot publishing explicitly opt-in |
+| 52 | LW-042 | P2 / medium | resolved | Make real debug telemetry nonblocking, source-fresh, and rate-bounded |
+| 53 | LW-043 | P2 / medium | resolved | Retire the Sim2Sim actuator-model runtime while preserving offline training |
 
 ---
 
@@ -3894,6 +3918,353 @@ from duplicates or discontinuities.
   有符号丢帧计数和原始基线字段已删除；`git diff --check` 通过。未访问真机
   串口、AHRS、IMU、GPS 或电机；用户未跟踪技能目录保持未修改。
 - **Remaining Follow-ups**: none
+
+---
+
+## [LW-048] Bind installed ONNX Runtime bytes to the approved archive
+
+**Priority**: P1 / high
+**Status**: resolved
+**Dependencies**: LW-027, LW-034
+
+### Problem
+
+The download path verifies the approved archive SHA-256 before extraction, but
+the installed origin file records only catalog metadata. Later checks compare
+that self-reported origin to the catalog and validate structure and ELF
+architecture; they do not prove that the installed shared-library bytes still
+match the approved archive. Deployment-manifest generation hashes whatever
+library bytes are currently installed, so altered libraries with an unchanged
+origin file can become a new internally consistent deployment baseline.
+
+### Evidence
+
+- `scripts/manage_inference_runtime.py:168-200`
+- `scripts/manage_inference_runtime.py:260-297`
+- `src/rl_sar/scripts/generate_lw_deployment_manifest.py:74-116`
+- `src/rl_sar/scripts/generate_lw_deployment_manifest.py:251-284`
+
+### Intended Scope
+
+- Add the exact installed ONNX Runtime file set and byte digests for every
+  approved platform archive to the trusted runtime catalog or an equivalently
+  reviewed immutable record.
+- Record and verify that approved installed-byte identity during installation,
+  ordinary runtime checks, build configuration, deployment-manifest generation,
+  and deployment verification.
+- Reject missing, additional, replaced, or symlinked runtime files even when
+  version, architecture, and origin metadata still look correct.
+- Preserve the approved ONNX Runtime version, architecture selection, download
+  URLs, deployment layout, and existing archive-digest checks.
+
+### Acceptance Criteria
+
+- An untouched runtime extracted from each approved archive passes install,
+  repeated check, production build, and deployment verification.
+- Changing one installed library byte while preserving the origin file causes
+  runtime check and manifest generation to fail before a deployment can be
+  accepted.
+- A catalog entry whose installed-file digest set is missing, malformed,
+  duplicated, or inconsistent is rejected.
+- Existing wrong-archive, wrong-architecture, unsafe-path, and symlink tests
+  continue to pass, with new end-to-end installed-byte tamper tests.
+- The full strict LW test suite and `git diff --check` pass without downloading
+  a production runtime or accessing real hardware.
+
+### Resolution
+
+- **Resolved**: 2026-08-18T17:02:39+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 将可信运行时目录升级为 schema 2，为 x64 与 aarch64
+  批准归档中的版本化 `libonnxruntime.so.1.22.0` 和
+  `libonnxruntime_providers_shared.so` 固定归档内路径、部署路径及逐文件
+  SHA-256。运行时管理器在安装候选及日常检查时验证精确文件集合、普通文件
+  类型、批准字节和两级主库符号链接；部署清单生成器只接受目录中批准的库
+  字节；部署端再把清单摘要与按架构编译进验证器的批准摘要比较，拒绝同时
+  篡改库文件和清单的自洽伪造。继续接受既有 schema 1 origin 文件，保持
+  版本、下载地址、架构选择、部署布局和归档摘要检查不变。
+- **Changed Files**: `scripts/inference_runtime_archives.json`、
+  `scripts/manage_inference_runtime.py`、`src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/library/core/deployment/lw_deployment_bundle.cpp`、
+  `src/rl_sar/scripts/generate_lw_deployment_manifest.py`、
+  `src/rl_sar/test/test_generate_lw_deployment_manifest.py`、
+  `src/rl_sar/test/test_inference_runtime_download_integrity.py`、
+  `src/rl_sar/test/test_lw_deployment_bundle.cpp`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 下载两个现有目录锁定的官方归档并确认归档 SHA-256，提取
+  四个生产库摘要；当前 x64 已安装运行时与批准归档逐字节一致，aarch64
+  目录选择返回对应批准文件集。运行时管理器 10/10、部署清单生成器 20/20
+  Python 测试通过，覆盖安装后单字节篡改、符号链接改向、缺失或畸形摘要、
+  重复及越界路径；C++ 测试覆盖库与清单同步篡改仍被固定批准摘要拒绝。
+  `scripts/validate_lw_strict_build.sh` 构建全部维护目标并通过 45/45 CTest；
+  使用不挂接分支的临时验证提交运行正式部署构建脚本，三包构建、描述检查、
+  策略一致性、依赖/RPATH/包前缀、清单以及原位置和重定位后的部署验证全部
+  通过。正式生产验证器对同步修改 provider 库与清单摘要的副本按预期失败。
+  Python 编译、JSON 语法和 `git diff --check` 通过；未访问真机串口、AHRS、
+  IMU、手柄、电机或仿真 GUI，现有运行时未重装，用户未跟踪技能目录保持
+  未修改。
+- **Remaining Follow-ups**: LW-049, LW-050, LW-051, LW-052, LW-053
+
+---
+
+## [LW-049] Make retained Gazebo controllers bounded, URDF-ready, and allocation-stable
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-015
+
+### Problem
+
+Both retained ROS 2 controllers call `std::clamp` without assigning its return
+value, so position, velocity, and effort limits currently have no effect. Their
+configuration returns success immediately after an asynchronous URDF request;
+activation or update can therefore dereference missing joint or limit objects.
+The group controller also constructs three joint-sized vectors on every update,
+and both controllers divide by the supplied period without first requiring a
+finite positive duration.
+
+### Evidence
+
+- `src/robot_joint_controller/ros2/src/robot_joint_controller.cpp:28-86`
+- `src/robot_joint_controller/ros2/src/robot_joint_controller.cpp:151-229`
+- `src/robot_joint_controller/ros2/src/robot_joint_controller_group.cpp:28-123`
+- `src/robot_joint_controller/ros2/src/robot_joint_controller_group.cpp:214-299`
+
+### Intended Scope
+
+- Apply returned clamp values for position, velocity, feed-forward effort, and
+  final calculated effort in the single and group controllers.
+- Make configuration succeed only after a bounded URDF fetch has parsed every
+  requested joint and verified the required limit data; return lifecycle error
+  on timeout, shutdown, malformed responses, missing joints, or missing limits.
+- Validate interface counts, command sizes, finite command fields, and a finite
+  positive update period before indexing or calculating velocity and torque.
+- Pre-size and reuse group-controller scratch/state storage outside the update
+  cycle so the maintained update path performs no joint-count-sized allocation.
+- Preserve controller topics, message types, interface names, stop sentinels,
+  ROS 2 lifecycle integration, and the retained Gazebo extension boundary.
+
+### Acceptance Criteria
+
+- Commands outside URDF position, velocity, or effort limits are bounded at the
+  command interface, including the final PD-plus-feed-forward torque.
+- Configuration cannot report success until all joint limits are ready, and
+  missing or malformed robot descriptions fail cleanly without null access.
+- Zero, negative, or non-finite periods and non-finite or wrong-sized commands
+  are rejected without writing a command interface.
+- After activation and warm-up, group update uses preallocated scratch storage;
+  a regression test detects update-cycle allocation.
+- Targeted controller tests, a Gazebo smoke test where available, the strict LW
+  suite, warning-as-error build, and `git diff --check` pass without real motors.
+
+---
+
+## [LW-050] Unify the ONNX dynamic-batch contract and cached tensor resources
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-013
+
+### Problem
+
+LW configuration validation accepts either a fixed batch of one or a dynamic
+batch dimension. Model loading separately normalizes `-1` dimensions to one in
+cached shape vectors, but inference ignores those vectors and asks the session
+for the raw shape again, potentially passing `-1` to `CreateTensor`. The class
+also stores a reusable `Ort::MemoryInfo` while constructing another one on each
+forward call, and it does not validate the outer input-vector cardinality before
+indexing element zero. These parallel contracts can make an accepted model fail
+or behave inconsistently at inference time.
+
+### Evidence
+
+- `src/rl_sar/library/core/inference_runtime/inference_runtime.hpp:90-104`
+- `src/rl_sar/library/core/inference_runtime/inference_runtime.cpp:35-42`
+- `src/rl_sar/library/core/inference_runtime/inference_runtime.cpp:92-123`
+- `src/rl_sar/library/core/inference_runtime/inference_runtime.cpp:143-230`
+- `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp:276-307`
+
+### Intended Scope
+
+- Define one explicit single-sample contract: exactly one float32 input and one
+  float32 output, rank two, fixed batch one or a dynamic batch resolved to one,
+  and fixed positive feature dimensions.
+- Resolve approved dynamic batch dimensions once during load and use the cached
+  concrete shapes for every input tensor; reject dynamic feature dimensions or
+  any other unsupported shape at the same boundary.
+- Validate input cardinality and element count before accessing buffers or
+  calling ONNX Runtime, and calculate output size with checked positive runtime
+  dimensions.
+- Use one cached CPU `Ort::MemoryInfo`, cached node names, and one authoritative
+  shape representation; remove or use currently redundant shape state.
+- Preserve current policy dimensions, numerical results, single-batch behavior,
+  session threading, and the public model abstraction unless a minimal contract
+  clarification is required.
+
+### Acceptance Criteria
+
+- Fixed `[1, features]` and dynamic `[-1, features]` models both execute as a
+  concrete batch of one after passing the same validation contract.
+- Empty, multiple, wrong-sized, wrong-type, wrong-rank, dynamic-feature, and
+  unsupported-batch inputs/models fail deterministically before inference.
+- Forward no longer queries a raw dynamic input shape or constructs a new
+  `Ort::MemoryInfo` on each call.
+- Output extraction rejects invalid or overflowing runtime shapes and returns
+  exactly the verified output element count.
+- Synthetic fixed/dynamic model tests, all four deployed LW policies, the full
+  strict suite, sanitizer checks, and `git diff --check` pass.
+
+---
+
+## [LW-051] Make MuJoCo downloads digest-pinned and installation atomic
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: none
+
+### Problem
+
+The MuJoCo bootstrap selects release URLs by platform but never checks a trusted
+archive digest. It reuses one predictable staging directory and moves the first
+matching extracted directory directly into the final location. When an existing
+installation looks incomplete or has a different version marker, it is deleted
+before download, extraction, and candidate validation succeed. A corrupt,
+substituted, concurrent, or interrupted download can therefore remove a working
+development dependency or install unapproved bytes.
+
+### Evidence
+
+- `scripts/download_mujoco.sh:32-57`
+- `scripts/download_mujoco.sh:65-130`
+- `scripts/download_mujoco.sh:145-234`
+- `scripts/download_mujoco.sh:248-283`
+
+### Intended Scope
+
+- Maintain reviewed SHA-256 digests and exact archive/root names for every
+  supported MuJoCo OS/architecture candidate.
+- Download into a unique private staging directory, verify the archive before
+  extraction, reject unsafe or ambiguous archive layouts, and fully validate a
+  candidate without touching the active installation.
+- Install with an atomic same-filesystem rename and rollback/cleanup semantics;
+  preserve the previous valid installation on every failed operation.
+- Make concurrent invocations fail safely or use independent candidates without
+  sharing partial state.
+- Preserve MuJoCo version 3.2.7, supported platforms, final `library/mujoco`
+  layout, macOS post-processing, and normal CMake discovery.
+
+### Acceptance Criteria
+
+- Each approved archive digest installs successfully on its matching platform;
+  any byte change or platform mismatch is rejected before extraction/install.
+- Failed download, extraction, validation, or final replacement leaves a prior
+  valid MuJoCo directory usable and removes only the invocation's own candidate.
+- Concurrent candidates cannot consume, overwrite, or delete each other's
+  staging data.
+- Archive traversal, link escape, ambiguous top-level roots, and incomplete
+  candidates are rejected.
+- Offline fixture tests cover success, tamper, interruption/rollback, and
+  concurrency; Bash syntax, relevant build tests, and `git diff --check` pass.
+
+---
+
+## [LW-052] Harden generic rl_sim joystick bounds and temporary-file lifecycle
+
+**Priority**: P2 / low
+**Status**: pending
+**Dependencies**: LW-049
+
+### Problem
+
+The generic ROS/Gazebo simulator indexes Joy buttons through 10 and axes through
+7 without checking message lengths, so a short or differently mapped Joy message
+causes out-of-bounds access. Controller startup writes a predictable shared file
+named `/tmp/robot_joint_controller_params.yaml`, invokes the spawner through a
+shell command, and deletes the file only after one success path. Concurrent
+simulators can overwrite each other's parameters, and fork/spawner failures can
+leave stale files or replace an unrelated path.
+
+### Evidence
+
+- `src/rl_sar/src/rl_sim.cpp:142-188`
+- `src/rl_sar/src/rl_sim.cpp:272-317`
+- `src/rl_sar/include/rl_sim.hpp:69-90`
+
+### Intended Scope
+
+- Check the minimum Joy button/axis counts before every indexed mapping and
+  reject a short sample without changing the current command state.
+- Move the F710 mapping into a small testable helper while preserving the
+  current button combinations, D-pad signs, and velocity-axis mapping.
+- Create a unique, private parameter file securely and remove exactly that file
+  on success, spawner failure, fork failure, exception, and object teardown.
+- Execute the controller spawner with an argument vector rather than shell
+  string construction, validate child termination, and keep the generated YAML
+  valid for configured joint names.
+- Preserve generic `rl_sim` topics, controller name, supported ROS distro
+  spawner selection, and LW real/Sim2Sim joystick paths.
+
+### Acceptance Criteria
+
+- Empty and undersized Joy messages cannot access outside their arrays or alter
+  commands; complete F710 messages preserve all existing mappings.
+- Two concurrent startup attempts use distinct parameter files and cannot
+  overwrite or remove each other's data.
+- Every parent failure path removes its own temporary file, while pre-existing
+  or unrelated paths remain untouched.
+- Spawner exec failure, signal termination, and nonzero exit are reported as
+  startup failures without leaking temporary files.
+- Targeted helper/lifecycle tests, sanitizer checks, the maintained build, and
+  `git diff --check` pass without starting Gazebo or real hardware.
+
+---
+
+## [LW-053] Cache the rl_sim_LW debug message layout
+
+**Priority**: P2 / low
+**Status**: pending
+**Dependencies**: LW-041
+
+### Problem
+
+When optional Sim2Sim plot publishing is enabled, every timer callback rebuilds
+four static name vectors, merges them into a fifth vector, creates a new
+`JointState`, resizes all three numeric arrays, and copies joint mapping and
+wheel-index configuration. The layout and configuration do not change between
+callbacks, so this work creates avoidable repeated allocation and copying at up
+to the configured 200 Hz debug rate.
+
+### Evidence
+
+- `src/rl_sar/src/rl_sim_LW.cpp:204-215`
+- `src/rl_sar/src/rl_sim_LW.cpp:261-329`
+- `src/rl_sar/src/rl_sim_LW.cpp:331-419`
+- `src/rl_sar/include/rl_sim_LW.hpp:114-127`
+
+### Intended Scope
+
+- Build and validate the fixed debug field-name layout, numeric array sizes,
+  joint mapping, wheel indices, and offsets once when plot publishing is enabled.
+- Reuse a pre-sized message/layout in the timer callback, updating only the
+  timestamp and numeric sample values before publication.
+- Keep snapshot handoff and MuJoCo access synchronization unchanged, and do not
+  move debug work into the control cycle.
+- Preserve the `/LW_joint_states` topic, exact field order and values, opt-in
+  default, supported 1-200 Hz rates, and behavior when MuJoCo data is unavailable.
+
+### Acceptance Criteria
+
+- Published names, array lengths, offsets, wheel handling, gait data, and
+  tracking data are byte-for-byte/order-equivalent to the current layout.
+- Invalid mapping, wheel index, DOF count, or derived offset fails once during
+  debug setup instead of risking callback indexing.
+- After initialization and warm-up, repeated layout preparation and field fill
+  perform no vector growth or configuration decoding; an allocation regression
+  test covers the maintained callback helper.
+- Plot-disabled runs still construct no debug buffer, publisher, timer, or
+  cached message layout.
+- Sim2Sim debug tests, synchronization/lifecycle tests, strict build, and
+  `git diff --check` pass without opening the MuJoCo GUI.
 
 ---
 

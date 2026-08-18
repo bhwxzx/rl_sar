@@ -4,7 +4,7 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import tempfile
 
@@ -50,6 +50,21 @@ ONNX_RUNTIME_FILES = (
     "lib/rl_sar/onnxruntime/libonnxruntime_providers_shared.so",
 )
 
+ONNX_ARCHIVE_FIELDS = {
+    "kind",
+    "version",
+    "os",
+    "architecture",
+    "archive_name",
+    "archive_format",
+    "root_directory",
+    "url",
+    "sha256",
+    "library_files",
+}
+ONNX_ORIGIN_FIELDS = ONNX_ARCHIVE_FIELDS - {"library_files"}
+ONNX_LIBRARY_FILE_FIELDS = {"path", "deployment_path", "sha256"}
+
 ARCHITECTURE_ALIASES = {
     "amd64": "x86_64",
     "x86_64": "x86_64",
@@ -76,13 +91,13 @@ def load_approved_onnx_origin(
     origin_path: Path,
     version: str,
     architecture: str,
-) -> dict[str, str]:
+) -> dict[str, object]:
     try:
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
         origin = json.loads(origin_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise RuntimeError(f"cannot read ONNX Runtime provenance: {error}") from error
-    if not isinstance(catalog, dict) or catalog.get("schema_version") != 1:
+    if not isinstance(catalog, dict) or catalog.get("schema_version") != 2:
         raise RuntimeError("unsupported inference-runtime catalog schema")
     archives = catalog.get("archives")
     if not isinstance(archives, list):
@@ -98,12 +113,18 @@ def load_approved_onnx_origin(
     ]
     if len(matches) != 1:
         raise RuntimeError("ONNX Runtime catalog selection is missing or ambiguous")
-    expected = {"schema_version": 1, **matches[0]}
+    selected = matches[0]
+    if set(selected) != ONNX_ARCHIVE_FIELDS:
+        raise RuntimeError("approved ONNX Runtime catalog entry has unexpected fields")
+    expected = {
+        "schema_version": 1,
+        **{field: selected[field] for field in ONNX_ORIGIN_FIELDS},
+    }
     if origin != expected:
         raise RuntimeError("installed ONNX Runtime provenance differs from the approved catalog")
-    digest = matches[0].get("sha256")
-    url = matches[0].get("url")
-    archive_name = matches[0].get("archive_name")
+    digest = selected.get("sha256")
+    url = selected.get("url")
+    archive_name = selected.get("archive_name")
     if (
         not isinstance(digest, str)
         or re.fullmatch(r"[0-9a-f]{64}", digest) is None
@@ -113,7 +134,56 @@ def load_approved_onnx_origin(
         or Path(archive_name).name != archive_name
     ):
         raise RuntimeError("approved ONNX Runtime catalog entry is malformed")
-    return matches[0]
+
+    library_files = selected.get("library_files")
+    if not isinstance(library_files, list) or not library_files:
+        raise RuntimeError("approved ONNX Runtime library list is missing")
+    source_paths = set()
+    deployment_paths = set()
+    for library in library_files:
+        if (
+            not isinstance(library, dict)
+            or set(library) != ONNX_LIBRARY_FILE_FIELDS
+        ):
+            raise RuntimeError("approved ONNX Runtime library entry is malformed")
+        source_path = library.get("path")
+        deployment_path = library.get("deployment_path")
+        library_digest = library.get("sha256")
+        for value, description in (
+            (source_path, "source path"),
+            (deployment_path, "deployment path"),
+        ):
+            if not isinstance(value, str):
+                raise RuntimeError(
+                    f"approved ONNX Runtime library {description} is malformed"
+                )
+            relative = PurePosixPath(value)
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or not relative.parts
+                or relative.as_posix() != value
+            ):
+                raise RuntimeError(
+                    f"approved ONNX Runtime library {description} is unsafe"
+                )
+        if (
+            not isinstance(library_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", library_digest) is None
+        ):
+            raise RuntimeError("approved ONNX Runtime library digest is malformed")
+        if source_path in source_paths or deployment_path in deployment_paths:
+            raise RuntimeError("approved ONNX Runtime library path is duplicated")
+        source_paths.add(source_path)
+        deployment_paths.add(deployment_path)
+    if source_paths != {
+        f"lib/libonnxruntime.so.{version}",
+        "lib/libonnxruntime_providers_shared.so",
+    }:
+        raise RuntimeError("approved ONNX Runtime source library set is incorrect")
+    if deployment_paths != set(ONNX_RUNTIME_FILES):
+        raise RuntimeError("approved ONNX Runtime deployment library set is incorrect")
+    return selected
 
 
 def require_regular_file(path: Path, description: str) -> None:
@@ -268,6 +338,10 @@ def generate_manifest(
         )
 
     onnx_hashes = []
+    approved_onnx_hashes = {
+        library["deployment_path"]: library["sha256"]
+        for library in approved_origin["library_files"]
+    }
     for relative_string in ONNX_RUNTIME_FILES:
         relative_path = Path(relative_string)
         require_no_symlink_components(prefix, relative_path)
@@ -281,7 +355,14 @@ def generate_manifest(
                 f"ONNX Runtime library escapes install prefix: {relative_string}"
             ) from error
         require_elf_architecture(library, normalized_architecture)
-        onnx_hashes.append((relative_string, sha256_file(library)))
+        actual_digest = sha256_file(library)
+        expected_digest = approved_onnx_hashes[relative_string]
+        if actual_digest != expected_digest:
+            raise RuntimeError(
+                "installed ONNX Runtime library does not match the approved archive: "
+                f"{relative_string}"
+            )
+        onnx_hashes.append((relative_string, expected_digest))
 
     policy_hashes = []
     for relative_string in POLICY_FILES:

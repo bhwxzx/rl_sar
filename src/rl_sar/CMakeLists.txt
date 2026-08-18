@@ -602,13 +602,42 @@ else()
 endif()
 if(BUILD_TESTING)
     if(SYSTEM_TYPE STREQUAL "Linux")
+        add_library(
+            lw_deployment_bundle_test_support
+            library/core/deployment/lw_deployment_bundle.cpp
+        )
+        target_include_directories(
+            lw_deployment_bundle_test_support
+            PUBLIC library/core/deployment
+        )
+        target_link_libraries(
+            lw_deployment_bundle_test_support
+            PUBLIC ${YAML_CPP_LIBRARIES} OpenSSL::Crypto
+        )
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+            set(LW_TEST_ONNX_MAIN_SHA256
+                "d2d4b1f4378d317a0b2f109a57766ec7713ef4ac160d14d1614467d624a8943c")
+            set(LW_TEST_ONNX_PROVIDER_SHA256
+                "0f9923a1343635e15bf5fc36f3d8687cdcc0f83e5b4e318c0aeb5a0852588525")
+        else()
+            set(LW_TEST_ONNX_MAIN_SHA256
+                "8b27c6b3fd950a70ff1374e817a9467f4be5868981555b2df8454c15c2bbbfdc")
+            set(LW_TEST_ONNX_PROVIDER_SHA256
+                "6d5d7742974c2e3558e5c3092d881aaecaa78af8003e32539c77c5acae45ba43")
+        endif()
+        target_compile_definitions(
+            lw_deployment_bundle_test_support
+            PRIVATE
+                "RL_SAR_TEST_APPROVED_ONNX_MAIN_SHA256=\"${LW_TEST_ONNX_MAIN_SHA256}\""
+                "RL_SAR_TEST_APPROVED_ONNX_PROVIDER_SHA256=\"${LW_TEST_ONNX_PROVIDER_SHA256}\""
+        )
         add_executable(
             test_lw_deployment_bundle
             test/test_lw_deployment_bundle.cpp
         )
         target_link_libraries(
             test_lw_deployment_bundle
-            PRIVATE lw_deployment_bundle
+            PRIVATE lw_deployment_bundle_test_support
         )
         add_test(
             NAME lw_deployment_bundle

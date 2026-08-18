@@ -62,11 +62,22 @@ class InferenceRuntimeDownloadIntegrityTests(unittest.TestCase):
             "// fixture\n", encoding="utf-8"
         )
         if valid:
-            (source / "lib/libonnxruntime.so").write_bytes(elf_header())
+            main_library = source / "lib/libonnxruntime.so.1.22.0"
+            main_library.write_bytes(elf_header())
+            (source / "lib/libonnxruntime_providers_shared.so").write_bytes(
+                elf_header()
+            )
+            (source / "lib/libonnxruntime.so.1").symlink_to(
+                "libonnxruntime.so.1.22.0"
+            )
+            (source / "lib/libonnxruntime.so").symlink_to(
+                "libonnxruntime.so.1"
+            )
         with tarfile.open(self.archive, "w:gz") as output:
             output.add(source, arcname="onnx-fixture")
 
-    def write_catalog(self, *, duplicate: bool = False) -> dict[str, str]:
+    def write_catalog(self, *, duplicate: bool = False) -> dict:
+        approved_library_digest = hashlib.sha256(elf_header()).hexdigest()
         entry = {
             "kind": "onnx",
             "version": "1.22.0",
@@ -77,10 +88,27 @@ class InferenceRuntimeDownloadIntegrityTests(unittest.TestCase):
             "root_directory": "onnx-fixture",
             "url": "https://example.invalid/onnx.tgz",
             "sha256": hashlib.sha256(self.archive.read_bytes()).hexdigest(),
+            "library_files": [
+                {
+                    "path": "lib/libonnxruntime.so.1.22.0",
+                    "deployment_path": (
+                        "lib/rl_sar/onnxruntime/libonnxruntime.so.1"
+                    ),
+                    "sha256": approved_library_digest,
+                },
+                {
+                    "path": "lib/libonnxruntime_providers_shared.so",
+                    "deployment_path": (
+                        "lib/rl_sar/onnxruntime/"
+                        "libonnxruntime_providers_shared.so"
+                    ),
+                    "sha256": approved_library_digest,
+                },
+            ],
         }
         archives = [entry, dict(entry)] if duplicate else [entry]
         self.catalog.write_text(
-            json.dumps({"schema_version": 1, "archives": archives}),
+            json.dumps({"schema_version": 2, "archives": archives}),
             encoding="utf-8",
         )
         return entry
@@ -137,7 +165,10 @@ class InferenceRuntimeDownloadIntegrityTests(unittest.TestCase):
             (self.runtime_root / "onnxruntime/.rl_sar_runtime_origin.json")
             .read_text(encoding="utf-8")
         )
-        self.assertEqual(origin, {"schema_version": 1, **entry})
+        expected_origin = {
+            key: value for key, value in entry.items() if key != "library_files"
+        }
+        self.assertEqual(origin, {"schema_version": 1, **expected_origin})
         checked = self.check()
         self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
 
@@ -164,6 +195,32 @@ class InferenceRuntimeDownloadIntegrityTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("candidate runtime failed", result.stderr)
         self.assertTrue((old / "preserve.txt").is_file())
+
+    def test_installed_library_tamper_is_rejected_with_origin_unchanged(self) -> None:
+        self.make_archive()
+        self.write_catalog()
+        self.assertEqual(self.install().returncode, 0)
+        provider = (
+            self.runtime_root
+            / "onnxruntime/lib/libonnxruntime_providers_shared.so"
+        )
+        provider.write_bytes(provider.read_bytes() + b"tampered")
+
+        result = self.check()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("library SHA-256 mismatch", result.stderr)
+
+    def test_unapproved_main_library_alias_is_rejected(self) -> None:
+        self.make_archive()
+        self.write_catalog()
+        self.assertEqual(self.install().returncode, 0)
+        alias = self.runtime_root / "onnxruntime/lib/libonnxruntime.so"
+        alias.unlink()
+        alias.symlink_to("libonnxruntime_providers_shared.so")
+
+        result = self.check()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("alias resolves to an unapproved file", result.stderr)
 
     def test_valid_unproven_runtime_is_not_automatically_replaced(self) -> None:
         self.make_archive()
@@ -222,8 +279,44 @@ class InferenceRuntimeDownloadIntegrityTests(unittest.TestCase):
         self.assertNotEqual(duplicate.returncode, 0)
         self.assertIn("duplicate", duplicate.stderr)
 
+    def test_malformed_library_catalog_entries_fail_closed(self) -> None:
+        self.make_archive()
+        self.write_catalog()
+        baseline = json.loads(self.catalog.read_text(encoding="utf-8"))
+
+        cases = []
+        missing = json.loads(json.dumps(baseline))
+        del missing["archives"][0]["library_files"]
+        cases.append((missing, "unexpected field set"))
+
+        bad_digest = json.loads(json.dumps(baseline))
+        bad_digest["archives"][0]["library_files"][0]["sha256"] = "bad"
+        cases.append((bad_digest, "library SHA-256"))
+
+        duplicate_path = json.loads(json.dumps(baseline))
+        duplicate_path["archives"][0]["library_files"][1][
+            "deployment_path"
+        ] = duplicate_path["archives"][0]["library_files"][0][
+            "deployment_path"
+        ]
+        cases.append((duplicate_path, "duplicate library path"))
+
+        escaping_path = json.loads(json.dumps(baseline))
+        escaping_path["archives"][0]["library_files"][0]["path"] = (
+            "../libonnxruntime.so"
+        )
+        cases.append((escaping_path, "normalized relative path"))
+
+        for catalog, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                self.catalog.write_text(json.dumps(catalog), encoding="utf-8")
+                result = self.run_manager("select")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+
     def test_production_catalog_has_only_the_reviewed_linux_matrix(self) -> None:
         catalog = json.loads(PRODUCTION_CATALOG.read_text(encoding="utf-8"))
+        self.assertEqual(catalog["schema_version"], 2)
         actual = {
             (
                 entry["kind"],
@@ -251,6 +344,34 @@ class InferenceRuntimeDownloadIntegrityTests(unittest.TestCase):
                     "aarch64",
                     "bb76395092d150b52c7092dc6b8f2fe4d80f0f3bf0416d2f269193e347e24702",
                 ),
+            },
+        )
+        library_matrix = {
+            entry["architecture"]: {
+                record["deployment_path"]: record["sha256"]
+                for record in entry["library_files"]
+            }
+            for entry in catalog["archives"]
+        }
+        self.assertEqual(
+            library_matrix,
+            {
+                "x86_64": {
+                    "lib/rl_sar/onnxruntime/libonnxruntime.so.1": (
+                        "3da6146e14e7b8aaec625dde11d6114c7457c87a5f93d744897da8781e35c673"
+                    ),
+                    "lib/rl_sar/onnxruntime/libonnxruntime_providers_shared.so": (
+                        "e4706ea02be3999167f000bb1ff7391c86e95d2d96f78eb33225c14b172a8451"
+                    ),
+                },
+                "aarch64": {
+                    "lib/rl_sar/onnxruntime/libonnxruntime.so.1": (
+                        "0afd69a0ae38c5099fd0e8604dda398ac43dee67cd9c6394b5142b19e82528de"
+                    ),
+                    "lib/rl_sar/onnxruntime/libonnxruntime_providers_shared.so": (
+                        "3b53a2c1f3ecb87dedaee20e2a6d4d9aaec133e3ec280e2b9cc34efbed7de423"
+                    ),
+                },
             },
         )
 

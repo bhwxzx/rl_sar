@@ -90,6 +90,8 @@ struct ApprovedOnnxArchive
     const char* name;
     const char* url;
     const char* sha256;
+    const char* main_library_sha256;
+    const char* provider_library_sha256;
 };
 
 const ApprovedOnnxArchive& approvedOnnxArchive()
@@ -99,17 +101,48 @@ const ApprovedOnnxArchive& approvedOnnxArchive()
         "1.22.0",
         "onnxruntime-linux-x64-1.22.0.tgz",
         "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz",
-        "8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3"};
+        "8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3",
+#ifdef RL_SAR_TEST_APPROVED_ONNX_MAIN_SHA256
+        RL_SAR_TEST_APPROVED_ONNX_MAIN_SHA256,
+        RL_SAR_TEST_APPROVED_ONNX_PROVIDER_SHA256};
+#else
+        "3da6146e14e7b8aaec625dde11d6114c7457c87a5f93d744897da8781e35c673",
+        "e4706ea02be3999167f000bb1ff7391c86e95d2d96f78eb33225c14b172a8451"};
+#endif
 #elif defined(__aarch64__) || defined(_M_ARM64)
     static const ApprovedOnnxArchive archive{
         "1.22.0",
         "onnxruntime-linux-aarch64-1.22.0.tgz",
         "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-aarch64-1.22.0.tgz",
-        "bb76395092d150b52c7092dc6b8f2fe4d80f0f3bf0416d2f269193e347e24702"};
+        "bb76395092d150b52c7092dc6b8f2fe4d80f0f3bf0416d2f269193e347e24702",
+#ifdef RL_SAR_TEST_APPROVED_ONNX_MAIN_SHA256
+        RL_SAR_TEST_APPROVED_ONNX_MAIN_SHA256,
+        RL_SAR_TEST_APPROVED_ONNX_PROVIDER_SHA256};
+#else
+        "0afd69a0ae38c5099fd0e8604dda398ac43dee67cd9c6394b5142b19e82528de",
+        "3b53a2c1f3ecb87dedaee20e2a6d4d9aaec133e3ec280e2b9cc34efbed7de423"};
+#endif
 #else
     fail("unsupported compiled architecture");
 #endif
     return archive;
+}
+
+std::string approvedOnnxLibrarySha256(
+    const ApprovedOnnxArchive& archive,
+    const std::string& relative_path)
+{
+    if (relative_path
+        == "lib/rl_sar/onnxruntime/libonnxruntime.so.1")
+    {
+        return archive.main_library_sha256;
+    }
+    if (relative_path
+        == "lib/rl_sar/onnxruntime/libonnxruntime_providers_shared.so")
+    {
+        return archive.provider_library_sha256;
+    }
+    return {};
 }
 
 [[noreturn]] void fail(const std::string& message)
@@ -562,6 +595,13 @@ LWDeploymentBundleInfo LWDeploymentBundle::Verify(
         if (!isLowerHex(expected_sha256, 64))
         {
             fail("invalid ONNX Runtime SHA-256 for: " + relative_string);
+        }
+        if (expected_sha256
+            != approvedOnnxLibrarySha256(approved_archive, relative_string))
+        {
+            fail(
+                "ONNX Runtime library SHA-256 is not approved for: "
+                + relative_string);
         }
 
         requireNoSymlinkComponents(prefix, relative_path);

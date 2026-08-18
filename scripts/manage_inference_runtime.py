@@ -27,6 +27,13 @@ ENTRY_FIELDS = {
     "root_directory",
     "url",
     "sha256",
+    "library_files",
+}
+ORIGIN_ENTRY_FIELDS = ENTRY_FIELDS - {"library_files"}
+LIBRARY_FILE_FIELDS = {"path", "deployment_path", "sha256"}
+ONNX_DEPLOYMENT_LIBRARY_PATHS = {
+    "lib/rl_sar/onnxruntime/libonnxruntime.so.1",
+    "lib/rl_sar/onnxruntime/libonnxruntime_providers_shared.so",
 }
 ARCHITECTURE_ALIASES = {
     "amd64": "x86_64",
@@ -60,12 +67,74 @@ def require_string(entry: dict, field: str) -> str:
     return value
 
 
-def load_catalog(path: Path) -> list[dict[str, str]]:
+def require_relative_path(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise RuntimeErrorWithCode(f"catalog field {field} must be non-empty")
+    candidate = PurePosixPath(value)
+    if (
+        candidate.is_absolute()
+        or ".." in candidate.parts
+        or not candidate.parts
+        or candidate.as_posix() != value
+    ):
+        raise RuntimeErrorWithCode(
+            f"catalog field {field} must be a normalized relative path"
+        )
+    return value
+
+
+def require_library_files(raw_value: object, version: str) -> list[dict[str, str]]:
+    if not isinstance(raw_value, list) or not raw_value:
+        raise RuntimeErrorWithCode("catalog library_files must be a non-empty list")
+    result = []
+    source_paths = set()
+    deployment_paths = set()
+    for raw_file in raw_value:
+        if not isinstance(raw_file, dict) or set(raw_file) != LIBRARY_FILE_FIELDS:
+            raise RuntimeErrorWithCode(
+                "catalog library file has an unexpected field set"
+            )
+        source_path = require_relative_path(raw_file.get("path"), "library path")
+        deployment_path = require_relative_path(
+            raw_file.get("deployment_path"), "library deployment_path"
+        )
+        digest = raw_file.get("sha256")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise RuntimeErrorWithCode(
+                "catalog library SHA-256 must be 64 lowercase hex characters"
+            )
+        if source_path in source_paths or deployment_path in deployment_paths:
+            raise RuntimeErrorWithCode("catalog contains a duplicate library path")
+        source_paths.add(source_path)
+        deployment_paths.add(deployment_path)
+        result.append(
+            {
+                "path": source_path,
+                "deployment_path": deployment_path,
+                "sha256": digest,
+            }
+        )
+    expected_source_paths = {
+        f"lib/libonnxruntime.so.{version}",
+        "lib/libonnxruntime_providers_shared.so",
+    }
+    if source_paths != expected_source_paths:
+        raise RuntimeErrorWithCode(
+            "catalog does not contain the exact approved ONNX Runtime library set"
+        )
+    if deployment_paths != ONNX_DEPLOYMENT_LIBRARY_PATHS:
+        raise RuntimeErrorWithCode(
+            "catalog does not contain the exact deployment library set"
+        )
+    return result
+
+
+def load_catalog(path: Path) -> list[dict[str, object]]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise RuntimeErrorWithCode(f"cannot read inference-runtime catalog: {error}") from error
-    if not isinstance(data, dict) or data.get("schema_version") != 1:
+    if not isinstance(data, dict) or data.get("schema_version") != 2:
         raise RuntimeErrorWithCode("unsupported inference-runtime catalog schema")
     archives = data.get("archives")
     if not isinstance(archives, list) or not archives:
@@ -76,7 +145,10 @@ def load_catalog(path: Path) -> list[dict[str, str]]:
     for raw_entry in archives:
         if not isinstance(raw_entry, dict) or set(raw_entry) != ENTRY_FIELDS:
             raise RuntimeErrorWithCode("catalog archive entry has an unexpected field set")
-        entry = {field: require_string(raw_entry, field) for field in ENTRY_FIELDS}
+        entry = {
+            field: require_string(raw_entry, field)
+            for field in ORIGIN_ENTRY_FIELDS
+        }
         if entry["kind"] != "onnx":
             raise RuntimeErrorWithCode(f"unsupported runtime kind in catalog: {entry['kind']}")
         if entry["os"] != "Linux":
@@ -93,6 +165,9 @@ def load_catalog(path: Path) -> list[dict[str, str]]:
         for field in ("archive_name", "root_directory"):
             if Path(entry[field]).name != entry[field] or entry[field] in {".", ".."}:
                 raise RuntimeErrorWithCode(f"catalog {field} must be one path component")
+        entry["library_files"] = require_library_files(
+            raw_entry["library_files"], entry["version"]
+        )
         identity = (
             entry["kind"],
             entry["version"],
@@ -106,7 +181,7 @@ def load_catalog(path: Path) -> list[dict[str, str]]:
     return result
 
 
-def select_entry(args: argparse.Namespace) -> dict[str, str]:
+def select_entry(args: argparse.Namespace) -> dict[str, object]:
     architecture = normalize_architecture(args.architecture)
     matches = [
         entry
@@ -124,8 +199,11 @@ def select_entry(args: argparse.Namespace) -> dict[str, str]:
     return matches[0]
 
 
-def origin_document(entry: dict[str, str]) -> dict[str, object]:
-    return {"schema_version": 1, **entry}
+def origin_document(entry: dict[str, object]) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        **{field: entry[field] for field in ORIGIN_ENTRY_FIELDS},
+    }
 
 
 def load_origin(path: Path) -> dict:
@@ -165,7 +243,7 @@ def destination_for(runtime_root: Path, kind: str) -> Path:
     return runtime_root / "onnxruntime"
 
 
-def check_runtime(args: argparse.Namespace, entry: dict[str, str]) -> None:
+def check_runtime(args: argparse.Namespace, entry: dict[str, object]) -> None:
     destination = destination_for(args.runtime_root, entry["kind"])
     origin_path = destination / ORIGIN_NAME
     if origin_path.exists() or origin_path.is_symlink():
@@ -197,6 +275,7 @@ def check_runtime(args: argparse.Namespace, entry: dict[str, str]) -> None:
         entry["os"],
     ):
         raise RuntimeErrorWithCode("approved runtime failed structural or architecture validation", 4)
+    verify_approved_library_files(destination, entry)
     print(f"approved {entry['kind']} runtime is ready: {destination}")
 
 
@@ -206,6 +285,57 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def require_no_symlink_components(root: Path, relative: PurePosixPath) -> Path:
+    current = root
+    for component in relative.parts:
+        current = current / component
+        if current.is_symlink():
+            raise RuntimeErrorWithCode(
+                f"approved runtime library path contains a symbolic link: {current}"
+            )
+    return current
+
+
+def verify_approved_library_files(
+    runtime_dir: Path, entry: dict[str, object]
+) -> None:
+    approved_main = None
+    for record in entry["library_files"]:
+        relative = PurePosixPath(record["path"])
+        library = require_no_symlink_components(runtime_dir, relative)
+        if not library.is_file():
+            raise RuntimeErrorWithCode(
+                f"approved runtime library is missing or not regular: {library}"
+            )
+        actual_digest = sha256_file(library)
+        if actual_digest != record["sha256"]:
+            raise RuntimeErrorWithCode(
+                "installed runtime library SHA-256 mismatch: "
+                f"expected {record['sha256']}, found {actual_digest} in {library}"
+            )
+        if record["deployment_path"].endswith("/libonnxruntime.so.1"):
+            approved_main = library.resolve(strict=True)
+
+    if approved_main is None:
+        raise RuntimeErrorWithCode("approved main ONNX Runtime library is missing")
+    for alias_name in ("libonnxruntime.so", "libonnxruntime.so.1"):
+        alias = runtime_dir / "lib" / alias_name
+        if not alias.is_symlink():
+            raise RuntimeErrorWithCode(
+                f"ONNX Runtime library alias must be a symbolic link: {alias}"
+            )
+        try:
+            resolved_alias = alias.resolve(strict=True)
+        except OSError as error:
+            raise RuntimeErrorWithCode(
+                f"ONNX Runtime library alias is broken: {alias}"
+            ) from error
+        if resolved_alias != approved_main:
+            raise RuntimeErrorWithCode(
+                f"ONNX Runtime library alias resolves to an unapproved file: {alias}"
+            )
 
 
 def safe_member_path(name: str) -> PurePosixPath:
@@ -257,14 +387,14 @@ def extract_archive(archive: Path, destination: Path, archive_format: str) -> No
         source.extractall(destination)
 
 
-def write_origin(candidate: Path, entry: dict[str, str]) -> None:
+def write_origin(candidate: Path, entry: dict[str, object]) -> None:
     origin = candidate / ORIGIN_NAME
     with origin.open("x", encoding="utf-8") as output:
         json.dump(origin_document(entry), output, indent=2, sort_keys=True)
         output.write("\n")
 
 
-def install_runtime(args: argparse.Namespace, entry: dict[str, str]) -> None:
+def install_runtime(args: argparse.Namespace, entry: dict[str, object]) -> None:
     if args.archive.is_symlink() or not args.archive.is_file():
         raise RuntimeErrorWithCode(f"downloaded archive is not a regular file: {args.archive}")
     actual_digest = sha256_file(args.archive)
@@ -294,6 +424,7 @@ def install_runtime(args: argparse.Namespace, entry: dict[str, str]) -> None:
             entry["os"],
         ):
             raise RuntimeErrorWithCode("candidate runtime failed structural or architecture validation")
+        verify_approved_library_files(candidate, entry)
         write_origin(candidate, entry)
 
         if destination.exists() or destination.is_symlink():

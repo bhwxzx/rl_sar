@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "archives": [
     {
       "kind": "onnx",
@@ -10,7 +10,19 @@
       "archive_format": "tgz",
       "root_directory": "onnxruntime-linux-x64-1.22.0",
       "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz",
-      "sha256": "8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3"
+      "sha256": "8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3",
+      "library_files": [
+        {
+          "path": "lib/libonnxruntime.so.1.22.0",
+          "deployment_path": "lib/rl_sar/onnxruntime/libonnxruntime.so.1",
+          "sha256": "3da6146e14e7b8aaec625dde11d6114c7457c87a5f93d744897da8781e35c673"
+        },
+        {
+          "path": "lib/libonnxruntime_providers_shared.so",
+          "deployment_path": "lib/rl_sar/onnxruntime/libonnxruntime_providers_shared.so",
+          "sha256": "e4706ea02be3999167f000bb1ff7391c86e95d2d96f78eb33225c14b172a8451"
+        }
+      ]
     },
     {
       "kind": "onnx",
@@ -21,7 +33,19 @@
       "archive_format": "tgz",
       "root_directory": "onnxruntime-linux-aarch64-1.22.0",
       "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-aarch64-1.22.0.tgz",
-      "sha256": "bb76395092d150b52c7092dc6b8f2fe4d80f0f3bf0416d2f269193e347e24702"
+      "sha256": "bb76395092d150b52c7092dc6b8f2fe4d80f0f3bf0416d2f269193e347e24702",
+      "library_files": [
+        {
+          "path": "lib/libonnxruntime.so.1.22.0",
+          "deployment_path": "lib/rl_sar/onnxruntime/libonnxruntime.so.1",
+          "sha256": "0afd69a0ae38c5099fd0e8604dda398ac43dee67cd9c6394b5142b19e82528de"
+        },
+        {
+          "path": "lib/libonnxruntime_providers_shared.so",
+          "deployment_path": "lib/rl_sar/onnxruntime/libonnxruntime_providers_shared.so",
+          "sha256": "3b53a2c1f3ecb87dedaee20e2a6d4d9aaec133e3ec280e2b9cc34efbed7de423"
+        }
+      ]
     }
   ]
 }

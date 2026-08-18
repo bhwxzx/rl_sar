@@ -136,7 +136,10 @@ public:
         }
         for (const std::string& relative : kOnnxRuntimeFiles)
         {
-            writeFile(prefix / relative, elf64Bytes(kElfMachine));
+            const std::string content = relative == kOnnxRuntimeFiles.back()
+                ? elf64Bytes(kElfMachine) + "provider\n"
+                : elf64Bytes(kElfMachine);
+            writeFile(prefix / relative, content);
         }
         writeFile(prefix / kOnnxOrigin, "{\"approved\":true}\n");
         writeManifest();
@@ -476,6 +479,23 @@ void testTamperedOnnxRuntimeLibraryFails()
         "ONNX Runtime SHA-256 mismatch");
 }
 
+void testSelfConsistentUnapprovedOnnxRuntimeLibraryFails()
+{
+    Fixture fixture;
+    std::ofstream output(
+        fixture.prefix / kOnnxRuntimeFiles.front(),
+        std::ios::binary | std::ios::app);
+    output << "tampered";
+    output.close();
+    fixture.writeManifest();
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "library SHA-256 is not approved");
+}
+
 void testTamperedOnnxRuntimeProvenanceFails()
 {
     Fixture fixture;
@@ -659,6 +679,7 @@ int main()
         testProductionLaunchBytecodeCacheFails();
         testMissingOnnxRuntimeLibraryFails();
         testTamperedOnnxRuntimeLibraryFails();
+        testSelfConsistentUnapprovedOnnxRuntimeLibraryFails();
         testTamperedOnnxRuntimeProvenanceFails();
         testSymlinkOnnxRuntimeLibraryFails();
         testWrongOnnxRuntimeElfArchitectureFails();
