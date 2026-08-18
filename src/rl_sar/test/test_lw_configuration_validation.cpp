@@ -54,12 +54,16 @@ YAML::Node loadConfig(const fs::path& file, const std::string& key)
 class FakeONNXModel : public InferenceRuntime::Model
 {
 public:
-    FakeONNXModel(std::int64_t input_features, std::int64_t output_features)
+    FakeONNXModel(
+        std::int64_t input_features,
+        std::int64_t output_features,
+        std::int64_t input_batch = 1,
+        std::int64_t output_batch = 1)
         : inputs_{{"observations",
-                   {1, input_features},
+                   {input_batch, input_features},
                    InferenceRuntime::TensorElementType::Float32}},
           outputs_{{"actions",
-                    {1, output_features},
+                    {output_batch, output_features},
                     InferenceRuntime::TensorElementType::Float32}},
           output_features_(output_features)
     {
@@ -349,6 +353,25 @@ void testModelDimensionMismatchIsRejected()
                 bad_output, dimensions, "bad-output.onnx", 0);
         },
         "output feature dimension expected 10, got 9");
+
+    FakeONNXModel dynamic_batch(59, 10, -1);
+    requireFailure(
+        [&]() {
+            ValidateLWModelContract(
+                dynamic_batch, dimensions, "dynamic-batch.onnx", 0);
+        },
+        "input batch dimension must be fixed at 1, got -1");
+
+    FakeONNXModel dynamic_output_batch(59, 10, 1, -1);
+    requireFailure(
+        [&]() {
+            ValidateLWModelContract(
+                dynamic_output_batch,
+                dimensions,
+                "dynamic-output-batch.onnx",
+                0);
+        },
+        "output batch dimension must be fixed at 1, got -1");
 }
 
 void testObservationQuaternionUsesWxyzIdentity()

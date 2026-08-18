@@ -98,8 +98,6 @@ private:
     Ort::MemoryInfo memory_info_;                           ///< Memory information
     std::vector<std::string> input_node_names_;             ///< Input node names
     std::vector<std::string> output_node_names_;            ///< Output node names
-    std::vector<std::vector<int64_t>> input_shapes_;        ///< Input shapes
-    std::vector<std::vector<int64_t>> output_shapes_;       ///< Output shapes
 #endif
     std::vector<TensorMetadata> input_metadata_;
     std::vector<TensorMetadata> output_metadata_;
@@ -122,6 +120,11 @@ public:
     }
 
 private:
+    /**
+     * @brief Clear state after a failed or replacement load.
+     */
+    void reset_loaded_state() noexcept;
+
 #ifdef USE_ONNX
     /**
      * @brief Setup input/output node information

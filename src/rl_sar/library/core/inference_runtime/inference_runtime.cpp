@@ -4,9 +4,9 @@
  */
 
 #include "inference_runtime.hpp"
+#include <limits>
 #include <stdexcept>
 #include <iostream>
-#include <numeric>
 
 namespace InferenceRuntime
 {
@@ -18,6 +18,63 @@ const std::vector<TensorMetadata>& emptyTensorMetadata()
     static const std::vector<TensorMetadata> empty;
     return empty;
 }
+
+#ifdef USE_ONNX
+std::size_t checkedElementCount(
+    const std::vector<int64_t>& shape,
+    const std::string& description)
+{
+    std::size_t count = 1;
+    for (const int64_t dimension : shape)
+    {
+        if (dimension <= 0)
+        {
+            throw std::runtime_error(
+                description + " contains a non-positive dimension");
+        }
+        const auto unsigned_dimension =
+            static_cast<std::uint64_t>(dimension);
+        if (unsigned_dimension
+            > static_cast<std::uint64_t>(
+                std::numeric_limits<std::size_t>::max() / count))
+        {
+            throw std::runtime_error(
+                description + " element count overflows size_t");
+        }
+        count *= static_cast<std::size_t>(unsigned_dimension);
+    }
+    return count;
+}
+
+void requireStaticSingleSampleTensor(
+    const TensorMetadata& tensor,
+    const std::string& role)
+{
+    if (tensor.element_type != TensorElementType::Float32)
+    {
+        throw std::runtime_error(
+            "ONNX " + role + " tensor must use float32");
+    }
+    if (tensor.shape.size() != 2)
+    {
+        throw std::runtime_error(
+            "ONNX " + role + " tensor must have rank 2");
+    }
+    if (tensor.shape[0] != 1)
+    {
+        throw std::runtime_error(
+            "ONNX " + role + " batch dimension must be fixed at 1");
+    }
+    if (tensor.shape[1] <= 0)
+    {
+        throw std::runtime_error(
+            "ONNX " + role
+            + " feature dimension must be fixed and positive");
+    }
+    static_cast<void>(checkedElementCount(
+        tensor.shape, "ONNX " + role + " shape"));
+}
+#endif
 } // namespace
 
 const std::vector<TensorMetadata>& Model::input_metadata() const
@@ -55,6 +112,7 @@ ONNXModel::~ONNXModel()
 
 bool ONNXModel::load(const std::string& model_path)
 {
+    reset_loaded_state();
     try
     {
 #ifdef USE_ONNX
@@ -74,6 +132,7 @@ bool ONNXModel::load(const std::string& model_path)
         std::cout << LOGGER::INFO << "Successfully loaded ONNX model: " << model_path << std::endl;
         return true;
 #else
+        static_cast<void>(model_path);
         std::cout << LOGGER::WARNING << "ONNX support not compiled. Please define USE_ONNX." << std::endl;
         loaded_ = false;
         return false;
@@ -82,7 +141,7 @@ bool ONNXModel::load(const std::string& model_path)
     catch (const std::exception& e)
     {
         std::cout << LOGGER::ERROR << "Failed to load ONNX model: " << e.what() << std::endl;
-        loaded_ = false;
+        reset_loaded_state();
         return false;
     }
 }
@@ -97,16 +156,35 @@ std::vector<float> ONNXModel::forward(const std::vector<std::vector<float>>& inp
 #ifdef USE_ONNX
     try
     {
-        // Create memory info
-        Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        if (inputs.size() != 1)
+        {
+            throw std::invalid_argument(
+                "ONNX inference requires exactly one input tensor");
+        }
+        if (input_metadata_.size() != 1
+            || output_metadata_.size() != 1
+            || input_node_names_.size() != 1
+            || output_node_names_.size() != 1)
+        {
+            throw std::logic_error(
+                "ONNX model cache is inconsistent with the single-tensor contract");
+        }
 
-        // Get input (use first input only)
-        const auto& input = inputs[0];
-        auto input_shape = session_->GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape();
+        const auto& input = inputs.front();
+        const auto& input_shape = input_metadata_.front().shape;
+        const std::size_t expected_input_count = checkedElementCount(
+            input_shape, "cached ONNX input shape");
+        if (input.size() != expected_input_count)
+        {
+            throw std::invalid_argument(
+                "ONNX input element count must be "
+                + std::to_string(expected_input_count) + ", got "
+                + std::to_string(input.size()));
+        }
 
         // Create input tensor
         auto input_tensor = Ort::Value::CreateTensor<float>(
-            memory_info,
+            memory_info_,
             const_cast<float*>(input.data()),
             input.size(),
             input_shape.data(),
@@ -136,8 +214,22 @@ std::vector<float> ONNXModel::forward(const std::vector<std::vector<float>>& inp
         throw;
     }
 #else
+    static_cast<void>(inputs);
     throw std::runtime_error("ONNX support not compiled");
 #endif
+}
+
+void ONNXModel::reset_loaded_state() noexcept
+{
+    loaded_ = false;
+    model_path_.clear();
+#ifdef USE_ONNX
+    session_.reset();
+    input_node_names_.clear();
+    output_node_names_.clear();
+#endif
+    input_metadata_.clear();
+    output_metadata_.clear();
 }
 
 #ifdef USE_ONNX
@@ -145,15 +237,25 @@ void ONNXModel::setup_input_output_info()
 {
     input_node_names_.clear();
     output_node_names_.clear();
-    input_shapes_.clear();
-    output_shapes_.clear();
     input_metadata_.clear();
     output_metadata_.clear();
 
-    // Get input node information
-    size_t num_input_nodes = session_->GetInputCount();
+    const size_t num_input_nodes = session_->GetInputCount();
+    const size_t num_output_nodes = session_->GetOutputCount();
+    if (num_input_nodes != 1)
+    {
+        throw std::runtime_error(
+            "ONNX model must expose exactly one input tensor, got "
+            + std::to_string(num_input_nodes));
+    }
+    if (num_output_nodes != 1)
+    {
+        throw std::runtime_error(
+            "ONNX model must expose exactly one output tensor, got "
+            + std::to_string(num_output_nodes));
+    }
+
     input_node_names_.reserve(num_input_nodes);
-    input_shapes_.reserve(num_input_nodes);
 
     for (size_t i = 0; i < num_input_nodes; ++i)
     {
@@ -163,6 +265,11 @@ void ONNXModel::setup_input_output_info()
 
         // Get input shape
         Ort::TypeInfo input_type_info = session_->GetInputTypeInfo(i);
+        if (input_type_info.GetONNXType() != ONNX_TYPE_TENSOR)
+        {
+            throw std::runtime_error(
+                "ONNX input must be a tensor");
+        }
         auto input_tensor_info = input_type_info.GetTensorTypeAndShapeInfo();
         auto input_dims = input_tensor_info.GetShape();
 
@@ -170,30 +277,13 @@ void ONNXModel::setup_input_output_info()
             {input_node_names_.back(),
              input_dims,
              input_tensor_info.GetElementType()
-                     == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+                 == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
                  ? TensorElementType::Float32
                  : TensorElementType::Unknown});
-
-        std::vector<int64_t> shape;
-        for (auto dim : input_dims)
-        {
-            // Handle dynamic dimensions
-            if (dim == -1)
-            {
-                shape.push_back(1);
-            }
-            else
-            {
-                shape.push_back(dim);
-            }
-        }
-        input_shapes_.push_back(shape);
+        requireStaticSingleSampleTensor(input_metadata_.back(), "input");
     }
 
-    // Get output node information
-    size_t num_output_nodes = session_->GetOutputCount();
     output_node_names_.reserve(num_output_nodes);
-    output_shapes_.reserve(num_output_nodes);
 
     for (size_t i = 0; i < num_output_nodes; ++i)
     {
@@ -203,6 +293,11 @@ void ONNXModel::setup_input_output_info()
 
         // Get output shape
         Ort::TypeInfo output_type_info = session_->GetOutputTypeInfo(i);
+        if (output_type_info.GetONNXType() != ONNX_TYPE_TENSOR)
+        {
+            throw std::runtime_error(
+                "ONNX output must be a tensor");
+        }
         auto output_tensor_info = output_type_info.GetTensorTypeAndShapeInfo();
         auto output_dims = output_tensor_info.GetShape();
 
@@ -210,51 +305,56 @@ void ONNXModel::setup_input_output_info()
             {output_node_names_.back(),
              output_dims,
              output_tensor_info.GetElementType()
-                     == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+                 == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
                  ? TensorElementType::Float32
                  : TensorElementType::Unknown});
-
-        std::vector<int64_t> shape;
-        for (auto dim : output_dims)
-        {
-            // Handle dynamic dimensions
-            if (dim == -1)
-            {
-                shape.push_back(1);
-            }
-            else
-            {
-                shape.push_back(dim);
-            }
-        }
-        output_shapes_.push_back(shape);
+        requireStaticSingleSampleTensor(output_metadata_.back(), "output");
     }
 }
 
 std::vector<float> ONNXModel::extract_output_data(const std::vector<Ort::Value>& outputs)
 {
-    if (outputs.empty())
+    if (outputs.size() != 1)
     {
-        throw std::runtime_error("No outputs from ONNX model");
+        throw std::runtime_error(
+            "ONNX Runtime must return exactly one output tensor");
+    }
+    if (output_metadata_.size() != 1)
+    {
+        throw std::logic_error("ONNX output metadata cache is inconsistent");
     }
 
-    // Get first output tensor
-    auto& output = outputs[0];
-    float* output_data = const_cast<float*>(output.GetTensorData<float>());
-
-    // Calculate total number of output elements
-    auto output_shape = output.GetTensorTypeAndShapeInfo().GetShape();
-
-    int64_t num_elements = 1;
-    for (auto dim : output_shape)
+    const auto& output = outputs.front();
+    if (!output.IsTensor())
     {
-        if (dim > 0)
-        {
-            num_elements *= dim;
-        }
+        throw std::runtime_error("ONNX Runtime output is not a tensor");
     }
 
-    // Copy output data to vector
+    const auto output_info = output.GetTensorTypeAndShapeInfo();
+    if (output_info.GetElementType()
+        != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)
+    {
+        throw std::runtime_error(
+            "ONNX Runtime output tensor must use float32");
+    }
+    const auto output_shape = output_info.GetShape();
+    if (output_shape != output_metadata_.front().shape)
+    {
+        throw std::runtime_error(
+            "ONNX Runtime output shape differs from the loaded static contract");
+    }
+
+    const std::size_t num_elements = checkedElementCount(
+        output_shape, "ONNX Runtime output shape");
+    const std::size_t expected_elements = checkedElementCount(
+        output_metadata_.front().shape, "cached ONNX output shape");
+    if (num_elements != expected_elements)
+    {
+        throw std::runtime_error(
+            "ONNX Runtime output element count differs from the loaded contract");
+    }
+
+    const float* output_data = output.GetTensorData<float>();
     std::vector<float> result(output_data, output_data + num_elements);
 
     return result;

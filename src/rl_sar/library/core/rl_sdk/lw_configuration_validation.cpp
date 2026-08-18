@@ -289,12 +289,19 @@ void validateTensor(
             "ONNX " + role + " tensor must have rank 2, got rank "
                 + std::to_string(tensor.shape.size()));
     }
-    if (tensor.shape[0] != 1 && tensor.shape[0] != -1)
+    if (tensor.shape[0] != 1)
     {
         fail(
             source,
-            "ONNX " + role + " batch dimension must be 1 or dynamic, got "
+            "ONNX " + role + " batch dimension must be fixed at 1, got "
                 + std::to_string(tensor.shape[0]));
+    }
+    if (tensor.shape[1] <= 0)
+    {
+        fail(
+            source,
+            "ONNX " + role
+                + " feature dimension must be fixed and positive");
     }
     if (tensor.shape[1] != static_cast<std::int64_t>(expected_features))
     {

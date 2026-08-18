@@ -851,6 +851,21 @@ if(BUILD_TESTING)
         COMMAND test_lw_configuration_validation
     )
 
+    if(USE_ONNX)
+        add_executable(
+            test_inference_runtime
+            test/test_inference_runtime.cpp
+        )
+        target_link_libraries(
+            test_inference_runtime
+            PRIVATE inference_runtime
+        )
+        add_test(
+            NAME inference_runtime_contract
+            COMMAND test_inference_runtime
+        )
+    endif()
+
     add_executable(
         test_lw_sim_torque_validation
         test/test_lw_sim_torque_validation.cpp

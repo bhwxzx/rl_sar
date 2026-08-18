@@ -123,7 +123,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 11 | LW-047 | P2 / low | resolved | Classify FDILink 8-bit sequence anomalies without inventing frame loss |
 | 12 | LW-048 | P1 / high | resolved | Bind installed ONNX Runtime library bytes to the approved archive |
 | 13 | LW-049 | P2 / medium | resolved | Make retained Gazebo controllers bounded, URDF-ready, and allocation-stable |
-| 14 | LW-050 | P2 / medium | pending | Unify the ONNX dynamic-batch contract and cached tensor resources |
+| 14 | LW-050 | P2 / medium | resolved | Unify the ONNX dynamic-batch contract and cached tensor resources |
 | 15 | LW-051 | P2 / medium | pending | Make MuJoCo downloads digest-pinned and installation atomic |
 | 16 | LW-052 | P2 / low | pending | Harden generic rl_sim joystick bounds and temporary-file lifecycle |
 | 17 | LW-053 | P2 / low | pending | Cache the rl_sim_LW debug message layout |
@@ -4088,7 +4088,7 @@ finite positive duration.
 ## [LW-050] Unify the ONNX dynamic-batch contract and cached tensor resources
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-013
 
 ### Problem
@@ -4113,11 +4113,12 @@ or behave inconsistently at inference time.
 ### Intended Scope
 
 - Define one explicit single-sample contract: exactly one float32 input and one
-  float32 output, rank two, fixed batch one or a dynamic batch resolved to one,
-  and fixed positive feature dimensions.
-- Resolve approved dynamic batch dimensions once during load and use the cached
-  concrete shapes for every input tensor; reject dynamic feature dimensions or
-  any other unsupported shape at the same boundary.
+  float32 output, rank two, fixed batch one, and fixed positive feature
+  dimensions. Per the approved product decision, reject every dynamic dimension,
+  including a dynamic batch, during model loading.
+- Cache the validated static shapes once during load and use them for every
+  input tensor; reject dynamic dimensions or any other unsupported shape at the
+  same boundary.
 - Validate input cardinality and element count before accessing buffers or
   calling ONNX Runtime, and calculate output size with checked positive runtime
   dimensions.
@@ -4129,8 +4130,8 @@ or behave inconsistently at inference time.
 
 ### Acceptance Criteria
 
-- Fixed `[1, features]` and dynamic `[-1, features]` models both execute as a
-  concrete batch of one after passing the same validation contract.
+- Fixed `[1, features]` models execute as a single sample; dynamic
+  `[-1, features]` and other non-static shapes are rejected during loading.
 - Empty, multiple, wrong-sized, wrong-type, wrong-rank, dynamic-feature, and
   unsupported-batch inputs/models fail deterministically before inference.
 - Forward no longer queries a raw dynamic input shape or constructs a new
@@ -4139,6 +4140,32 @@ or behave inconsistently at inference time.
   exactly the verified output element count.
 - Synthetic fixed/dynamic model tests, all four deployed LW policies, the full
   strict suite, sanitizer checks, and `git diff --check` pass.
+
+### Resolution
+
+- **Resolved**: 2026-08-18T18:06:30+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 将 ONNX 推理契约统一为恰好一个 float32、rank 2、静态
+  `[1, features]` 输入和输出，按用户确认的一般策略部署形态拒绝动态 batch、
+  动态特征维、其他 batch、类型、rank 或输入输出数量。模型加载时缓存唯一的
+  张量元数据和节点名称，推理复用既有 CPU `Ort::MemoryInfo`，调用运行时前验证
+  外层输入数量和元素数量，返回结果前验证实际输出类型、形状及经溢出检查的
+  元素数量；失败的替换加载清空旧会话及元数据。
+- **Changed Files**: `src/rl_sar/library/core/inference_runtime/inference_runtime.hpp`、
+  `src/rl_sar/library/core/inference_runtime/inference_runtime.cpp`、
+  `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp`、
+  `src/rl_sar/CMakeLists.txt`、`src/rl_sar/test/test_inference_runtime.cpp`、
+  `src/rl_sar/test/test_lw_configuration_validation.cpp` 和本记录。
+- **Verification**: 通过运行时生成的离线 ONNX protobuf 模型验证静态 batch 1
+  推理，并覆盖动态输入 batch、动态输入及输出特征维、batch 2、错误 rank、
+  int64、多输入、多输出、输入数量及长度错误和失败重载清理。目标 CTest 2/2 通过；
+  ASan+UBSan 测试通过且无报告；无 ONNX 宏路径以
+  `-Wall -Wextra -Wpedantic -Werror` 单独编译通过；
+  `scripts/validate_lw_strict_build.sh` 严格构建全部维护目标并通过完整 46/46
+  CTest，其中配置契约覆盖全部四个实际部署策略。`git diff --check` 通过；
+  未启动 Gazebo、MuJoCo GUI、ROS 真机节点或访问任何硬件，用户未跟踪技能
+  目录保持未修改。
+- **Remaining Follow-ups**: LW-051, LW-052, LW-053
 
 ---
 
