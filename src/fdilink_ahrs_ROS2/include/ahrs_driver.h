@@ -15,6 +15,7 @@
 #include <fdilink_frame_parser.h>
 #include <fdilink_payload_decoder.h>
 #include <fdilink_payload_validation.h>
+#include <fdilink_sequence_tracker.h>
 //#include <sensor_msgs/Imu.h>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
@@ -58,11 +59,9 @@ private:
 
   bool if_debug_ = false;
   //sum info
-  int sn_lost_ = 0;
   int crc_error_ = 0;
   std::uint64_t semantic_error_ = 0;
-  uint8_t read_sn_ = 0;
-  bool first_sequence_received_ = false;
+  SequenceTracker sequence_tracker_;
   int device_type_ = 1;
 
   //serial

@@ -13,6 +13,24 @@ namespace
 {
 constexpr std::uint32_t kSerialReadTimeoutMs = 20;
 constexpr std::size_t kSerialReadBufferSize = 256;
+
+const char* sequenceEventName(SequenceEvent event) noexcept
+{
+  switch (event)
+  {
+    case SequenceEvent::ForwardGap:
+      return "forward gap";
+    case SequenceEvent::Duplicate:
+      return "duplicate";
+    case SequenceEvent::Discontinuity:
+      return "discontinuity";
+    case SequenceEvent::First:
+      return "first";
+    case SequenceEvent::InOrder:
+      return "in order";
+  }
+  return "unknown";
+}
 }  // namespace
 
 ahrsBringup::ahrsBringup()
@@ -457,27 +475,27 @@ void ahrsBringup::reportSemanticRejection(
 
 void ahrsBringup::updateSequence(std::uint8_t serial_number)
 {
-  if (!first_sequence_received_)
+  const SequenceObservation observation =
+      sequence_tracker_.observe(serial_number);
+  if (!if_debug_
+      || observation.event == SequenceEvent::First
+      || observation.event == SequenceEvent::InOrder)
   {
-    read_sn_ = serial_number;
-    first_sequence_received_ = true;
     return;
   }
 
-  const std::uint8_t expected = static_cast<std::uint8_t>(read_sn_ + 1);
-  if (expected != serial_number)
-  {
-    sn_lost_ += static_cast<std::uint8_t>(serial_number - expected);
-    if (if_debug_)
-    {
-      RCLCPP_WARN(
-          get_logger(),
-          "Detected FDILink sequence loss: expected %u, received %u",
-          static_cast<unsigned int>(expected),
-          static_cast<unsigned int>(serial_number));
-    }
-  }
-  read_sn_ = serial_number;
+  const SequenceStatistics& statistics = sequence_tracker_.statistics();
+  RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "FDILink sequence %s: expected %u, received %u, missing %u; "
+      "confirmed_lost=%llu, duplicates=%llu, discontinuities=%llu",
+      sequenceEventName(observation.event),
+      static_cast<unsigned int>(observation.expected),
+      static_cast<unsigned int>(observation.received),
+      static_cast<unsigned int>(observation.missing),
+      static_cast<unsigned long long>(statistics.confirmed_lost),
+      static_cast<unsigned long long>(statistics.duplicates),
+      static_cast<unsigned long long>(statistics.discontinuities));
 }
 
 }  // namespace FDILink
