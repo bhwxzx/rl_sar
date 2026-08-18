@@ -99,42 +99,43 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 5 | LW-004 | P0 / critical | resolved | Remove invalid FSM transition targets and validate all transitions |
 | 6 | LW-005 | P0 / critical | resolved | Enforce finite commands and state-aware attitude protection |
 | 7 | LW-006 | P0 / critical | resolved | Latch joystick disconnects, clear commands, and validate indices |
-| 8 | LW-024 | P1 / high | resolved | Make the Sim2Sim physics-thread lifecycle bounded and joinable |
-| 9 | LW-025 | P1 / high | resolved | Preserve keyboard velocity commands instead of replacing them every control cycle |
-| 10 | LW-026 | P1 / high | resolved | Bind configuration candidates to one exact deployment and comparable reports |
-| 11 | LW-027 | P1 / high | resolved | Make the ONNX Runtime dependency reproducible and integrity-verified |
-| 12 | LW-007 | P1 / high | resolved | Remove cross-thread data races with coherent snapshots |
-| 13 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
-| 14 | LW-009 | P1 / high | resolved | Use the configured 60 Hz wheel-to-leg reference rate |
-| 15 | LW-010 | P1 / high | resolved | Make deployed binary, configuration, and models reproducible |
-| 16 | LW-016 | P1 / high | resolved | Audit every safety trigger for proportional and recoverable behavior |
-| 17 | LW-013 | P1 / high | resolved | Validate YAML, mappings, observation sizes, and model outputs |
-| 18 | LW-011 | P1 / high | resolved | Make the control loop suitable for deterministic real-time execution |
-| 19 | LW-017 | P1 / high | resolved | Bundle and verify the LW IMU/serial runtime dependencies |
-| 20 | LW-019 | P1 / high | resolved | Enable a real-robot terminal keyboard recovery channel |
-| 21 | LW-020 | P1 / high | resolved | Make the Jetson production inference bootstrap architecture-safe and ONNX-only |
-| 22 | LW-021 | P1 / high | resolved | Make Sim2Sim and real deployment share one testable control and safety core |
-| 23 | LW-022 | P1 / high | resolved | Measure suspended real-runtime behavior and generate review-only configuration candidates |
-| 24 | LW-028 | P2 / medium | resolved | Replace unsafe Sim2Sim signal-handler work with a signal-safe shutdown request |
-| 25 | LW-029 | P2 / medium | resolved | Resolve optional actuator models through the selected Sim2Sim policy root |
-| 26 | LW-030 | P2 / medium | resolved | Keep inhibited commands and gait-phase observations coherent |
-| 27 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
-| 28 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
-| 29 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
-| 30 | LW-031 | P2 / low | resolved | Restore a warning-clean strict build for maintained LW code and tests |
-| 31 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
-| 32 | LW-032 | P0 / critical | resolved | Require complete, initialized, independently fresh IMU and AHRS data end to end |
-| 33 | LW-033 | P1 / high | resolved | Bind policy-output freshness to the robot-state input snapshot |
-| 34 | LW-034 | P1 / high | resolved | Verify downloaded inference runtimes against pinned trusted digests |
-| 35 | LW-035 | P2 / medium | resolved | Bind the production launch file into deployment integrity verification |
-| 36 | LW-036 | P2 / medium | resolved | Validate optional actuator-network outputs on every Sim2Sim inference |
-| 37 | LW-037 | P2 / medium | resolved | Make Sim2Sim SIGTERM and normal ROS shutdown stop the render loop |
-| 38 | LW-038 | P2 / medium | resolved | Remove repeated configuration decoding and allocation from the real control cycle |
-| 39 | LW-039 | P2 / low | resolved | Reject actuator-model symlinks and policy-root escapes |
-| 40 | LW-040 | P2 / low | resolved | Make the polymorphic RL base destruction contract safe |
-| 41 | LW-041 | P2 / low | resolved | Make high-rate Sim2Sim plot publishing explicitly opt-in |
-| 42 | LW-042 | P2 / medium | resolved | Make real debug telemetry nonblocking, source-fresh, and rate-bounded |
-| 43 | LW-043 | P2 / medium | resolved | Retire the Sim2Sim actuator-model runtime while preserving offline training |
+| 8 | LW-044 | P1 / high | resolved | Make FDILink frame ingestion complete, initialized, and failure-visible |
+| 9 | LW-024 | P1 / high | resolved | Make the Sim2Sim physics-thread lifecycle bounded and joinable |
+| 10 | LW-025 | P1 / high | resolved | Preserve keyboard velocity commands instead of replacing them every control cycle |
+| 11 | LW-026 | P1 / high | resolved | Bind configuration candidates to one exact deployment and comparable reports |
+| 12 | LW-027 | P1 / high | resolved | Make the ONNX Runtime dependency reproducible and integrity-verified |
+| 13 | LW-007 | P1 / high | resolved | Remove cross-thread data races with coherent snapshots |
+| 14 | LW-008 | P1 / high | resolved | Replace split policy queues with one coherent output frame |
+| 15 | LW-009 | P1 / high | resolved | Use the configured 60 Hz wheel-to-leg reference rate |
+| 16 | LW-010 | P1 / high | resolved | Make deployed binary, configuration, and models reproducible |
+| 17 | LW-016 | P1 / high | resolved | Audit every safety trigger for proportional and recoverable behavior |
+| 18 | LW-013 | P1 / high | resolved | Validate YAML, mappings, observation sizes, and model outputs |
+| 19 | LW-011 | P1 / high | resolved | Make the control loop suitable for deterministic real-time execution |
+| 20 | LW-017 | P1 / high | resolved | Bundle and verify the LW IMU/serial runtime dependencies |
+| 21 | LW-019 | P1 / high | resolved | Enable a real-robot terminal keyboard recovery channel |
+| 22 | LW-020 | P1 / high | resolved | Make the Jetson production inference bootstrap architecture-safe and ONNX-only |
+| 23 | LW-021 | P1 / high | resolved | Make Sim2Sim and real deployment share one testable control and safety core |
+| 24 | LW-022 | P1 / high | resolved | Measure suspended real-runtime behavior and generate review-only configuration candidates |
+| 25 | LW-028 | P2 / medium | resolved | Replace unsafe Sim2Sim signal-handler work with a signal-safe shutdown request |
+| 26 | LW-029 | P2 / medium | resolved | Resolve optional actuator models through the selected Sim2Sim policy root |
+| 27 | LW-030 | P2 / medium | resolved | Keep inhibited commands and gait-phase observations coherent |
+| 28 | LW-018 | P2 / medium | resolved | Unify the build entry point and Jetson detection |
+| 29 | LW-012 | P2 / medium | resolved | Harden motion loading and correct its time convention |
+| 30 | LW-015 | P2 / medium | resolved | Remove non-LW robot implementations while preserving future extension points |
+| 31 | LW-031 | P2 / low | resolved | Restore a warning-clean strict build for maintained LW code and tests |
+| 32 | LW-014 | P2 / low | resolved | Isolate and correct production debug/plot publishing |
+| 33 | LW-032 | P0 / critical | resolved | Require complete, initialized, independently fresh IMU and AHRS data end to end |
+| 34 | LW-033 | P1 / high | resolved | Bind policy-output freshness to the robot-state input snapshot |
+| 35 | LW-034 | P1 / high | resolved | Verify downloaded inference runtimes against pinned trusted digests |
+| 36 | LW-035 | P2 / medium | resolved | Bind the production launch file into deployment integrity verification |
+| 37 | LW-036 | P2 / medium | resolved | Validate optional actuator-network outputs on every Sim2Sim inference |
+| 38 | LW-037 | P2 / medium | resolved | Make Sim2Sim SIGTERM and normal ROS shutdown stop the render loop |
+| 39 | LW-038 | P2 / medium | resolved | Remove repeated configuration decoding and allocation from the real control cycle |
+| 40 | LW-039 | P2 / low | resolved | Reject actuator-model symlinks and policy-root escapes |
+| 41 | LW-040 | P2 / low | resolved | Make the polymorphic RL base destruction contract safe |
+| 42 | LW-041 | P2 / low | resolved | Make high-rate Sim2Sim plot publishing explicitly opt-in |
+| 43 | LW-042 | P2 / medium | resolved | Make real debug telemetry nonblocking, source-fresh, and rate-bounded |
+| 44 | LW-043 | P2 / medium | resolved | Retire the Sim2Sim actuator-model runtime while preserving offline training |
 
 ---
 
@@ -3560,6 +3561,95 @@ simulator to load or execute TorchScript.
   模型 SHA-256 与基线完全一致，安装后脚本存在；当前机器的现有
   Python 环境均未安装 `torch`，因此未新增依赖也未重复 Python 前向推理。
   未启动真机节点、AHRS、串口、电机或 MuJoCo GUI；用户未跟踪技能目录保持未修改。
+- **Remaining Follow-ups**: none
+
+---
+
+## [LW-044] Complete and failure-visible FDILink frame ingestion
+
+**Priority**: P1 / high
+**Status**: resolved
+**Dependencies**: LW-017, LW-032
+
+### Problem
+
+The production FDILink node passes an uninitialized `serial_timeout_` to the
+serial library and reads `frist_sn_` before initialization. Its receive loop
+records byte counts but continues parsing after short reads, so a partial frame
+can be combined with stale or uninitialized storage before CRC and publication.
+Serial-open failures also terminate with `exit(0)`, hiding a required runtime
+failure from launch and service supervision.
+
+### Evidence
+
+- `src/fdilink_ahrs_ROS2/include/ahrs_driver.h:63-81`
+- `src/fdilink_ahrs_ROS2/src/ahrs_driver.cpp:74-101`
+- `src/fdilink_ahrs_ROS2/src/ahrs_driver.cpp:110-205`
+- `src/fdilink_ahrs_ROS2/src/ahrs_driver.cpp:302-440`
+- `src/serial_ros2/src/impl/unix.cc:533-606`
+
+### Intended Scope
+
+- Replace piecemeal union-backed parsing with a fixed-capacity, incrementally
+  fed protocol parser that emits only complete frames with an approved
+  type/length, valid header CRC8, valid payload CRC16, and the required end
+  marker.
+- Make arbitrary read fragmentation, leading noise, malformed frames, timeout
+  reset, and deterministic resynchronization testable without ROS hardware.
+- Initialize all sequence and sensor-cache state, update sequence accounting
+  only after complete-frame validation, and never publish an IMU orientation or
+  magnetic sample from a cache that has not received its corresponding frame.
+- Use a deterministic bounded serial-read timeout and ensure shutdown cannot be
+  held by an indeterminate wait.
+- Return failure for serial-open, disconnect, and receive exceptions while
+  preserving a successful status for normal ROS shutdown.
+- Preserve production topics, remaps, coordinate transforms, the real-runtime
+  IMU/AHRS guard, motor handling, policies, and the serial library.
+
+### Acceptance Criteria
+
+- No uninitialized scalar or sensor cache influences serial setup, sequence
+  accounting, CRC validation, or a published message.
+- A partial header or body, including bytes split at every frame boundary, is
+  never published before completion; a timeout discards the incomplete frame
+  rather than joining it to later bytes.
+- Invalid type/length, CRC8, CRC16, and end-marker frames are rejected and a
+  later valid frame is recovered without restarting the node.
+- An IMU packet is not published before the first complete AHRS packet, and a
+  magnetic sample is not published before the first complete IMU packet.
+- An unavailable serial port exits promptly with a nonzero status; normal ROS
+  shutdown closes the port and exits successfully within the bounded read
+  timeout.
+- The `fdilink_ahrs` package, full LW build/test suite, strict maintained build,
+  deployment-related checks, syntax checks, and `git diff --check` pass without
+  accessing a real serial device, IMU, or motor.
+
+### Resolution
+
+- **Resolved**: 2026-08-18T12:46:04+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 将 FDILink 串口接收改为固定容量、增量式完整帧解析；
+  只有类型、长度、CRC8、CRC16 和结束标记全部有效时才更新序号并发布。
+  初始化串口、序号及传感器缓存状态，丢弃超时或短读留下的不完整帧；在
+  AHRS/IMU 对应缓存首次有效前禁止发布依赖该缓存的消息。串口读取使用
+  20 ms 有界超时，串口打开或接收异常以非零状态退出，正常 ROS 关闭在
+  有界等待后成功退出；保持既有话题、坐标变换和下游真机安全守卫不变。
+- **Changed Files**: `src/fdilink_ahrs_ROS2/CMakeLists.txt`、
+  `src/fdilink_ahrs_ROS2/package.xml`、
+  `src/fdilink_ahrs_ROS2/include/{ahrs_driver.h,fdilink_frame_parser.h}`、
+  `src/fdilink_ahrs_ROS2/src/{ahrs_driver.cpp,fdilink_frame_parser.cpp}`、
+  `src/fdilink_ahrs_ROS2/test/{test_fdilink_frame_parser.cpp,test_fdilink_process_lifecycle.py}`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 隔离构建 `serial`、`fdilink_ahrs`、`rl_sar` 三个包成功；
+  FDILink 的 6 个 GTest 用例覆盖全部支持帧型、每个截断边界、噪声与连续帧、
+  非法类型/长度/CRC8/CRC16/结束标记、超时复位和后续恢复，2 个 Python
+  进程用例验证不存在的串口及时非零退出，以及空 PTY 上 SIGTERM 在 1 秒内
+  成功退出。两项 CTest 均通过。变更目标在
+  `-Wall -Wextra -Wpedantic -Werror` 下构建并再次通过两项 CTest；完整 LW
+  CTest 45/45 通过，包含部署包、清单、运行时依赖、策略资产、构建工作流
+  和启动禁用集成检查。`scripts/validate_lw_strict_build.sh` 构建全部维护目标
+  并通过 45/45 CTest；`git diff --check` 通过。所有验证均未访问真机串口、
+  AHRS、IMU 或电机；用户已有快速启动文档、错误记录和未跟踪技能目录保持不变。
 - **Remaining Follow-ups**: none
 
 ---

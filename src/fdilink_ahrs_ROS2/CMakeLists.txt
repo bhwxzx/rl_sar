@@ -36,6 +36,8 @@ find_package(tf2_geometry_msgs REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  find_package(ament_cmake_gtest REQUIRED)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   # the following line skips the linter which checks for copyrights
   # uncomment the line when a copyright and license is not present in all source files
   #set(ament_cmake_copyright_FOUND TRUE)
@@ -52,12 +54,38 @@ include_directories(
 )
 
 
-add_executable(ahrs_driver_node src/ahrs_driver.cpp src/crc_table.cpp)
+add_library(fdilink_protocol STATIC
+  src/crc_table.cpp
+  src/fdilink_frame_parser.cpp
+)
+target_include_directories(fdilink_protocol PUBLIC include)
+
+add_executable(ahrs_driver_node src/ahrs_driver.cpp)
+target_link_libraries(ahrs_driver_node fdilink_protocol)
 ament_target_dependencies(ahrs_driver_node rclcpp rclpy  std_msgs  sensor_msgs  serial tf2_ros tf2 nav_msgs geometry_msgs)
 
 
 add_executable(imu_tf_node src/imu_tf.cpp)
 ament_target_dependencies(imu_tf_node rclcpp rclpy std_msgs sensor_msgs serial tf2_ros tf2 tf2_geometry_msgs)
+
+if(BUILD_TESTING)
+  ament_add_gtest(test_fdilink_frame_parser
+    test/test_fdilink_frame_parser.cpp
+  )
+  target_link_libraries(test_fdilink_frame_parser fdilink_protocol)
+
+  add_test(
+    NAME fdilink_process_lifecycle
+    COMMAND
+      "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/test_fdilink_process_lifecycle.py"
+      "$<TARGET_FILE:ahrs_driver_node>"
+  )
+  set_tests_properties(fdilink_process_lifecycle PROPERTIES
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+    TIMEOUT 10
+  )
+endif()
 
 # find_package(Boost 1.55.0 REQUIRED COMPONENTS system filesystem)
 # include_directories(ahrs_driver_node ${Boost_INCLOUDE_DIRS})
