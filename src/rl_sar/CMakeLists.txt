@@ -557,6 +557,15 @@ add_library(
 target_include_directories(lw_sim_torque_validation PUBLIC
     library/core/simulation
 )
+add_library(
+    lw_sim_debug_message
+    library/core/simulation/lw_sim_debug_message.cpp
+)
+target_include_directories(lw_sim_debug_message PUBLIC
+    library/core/simulation
+)
+target_link_libraries(lw_sim_debug_message rl_sdk)
+ament_target_dependencies(lw_sim_debug_message sensor_msgs)
 install(TARGETS inference_runtime DESTINATION lib/${PROJECT_NAME})
 
 # library for LW motion loader
@@ -888,6 +897,20 @@ if(BUILD_TESTING)
     )
 
     add_executable(
+        test_lw_sim_debug_message
+        test/test_lw_sim_debug_message.cpp
+    )
+    target_link_libraries(
+        test_lw_sim_debug_message
+        lw_sim_debug_message
+    )
+    ament_target_dependencies(test_lw_sim_debug_message sensor_msgs)
+    add_test(
+        NAME lw_sim_debug_message
+        COMMAND test_lw_sim_debug_message
+    )
+
+    add_executable(
         test_lw_config_profile
         test/test_lw_config_profile.cpp
     )
@@ -966,6 +989,7 @@ if(SYSTEM_TYPE STREQUAL "Linux"
 
         target_link_libraries(rl_sim_LW
             rl_sdk observation_buffer lw_sim_torque_validation
+            lw_sim_debug_message
             ${YAML_CPP_LIBRARIES} LW_sdk
             Threads::Threads mujoco_prebuilt glfw
             lw_mujoco_simulate_vendor lw_joystick_vendor

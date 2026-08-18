@@ -45,11 +45,6 @@ bool LWOperatorModeHasProgress(LWOperatorMode mode)
 RL_Real::RL_Real(int argc, char **argv)
     : plot_configuration_(ParseLWSimPlotConfiguration(argc, argv))
 {
-    if (plot_configuration_.enabled)
-    {
-        plot_snapshot_ =
-            std::make_unique<LWSnapshotBuffer<SimDebugSnapshot>>();
-    }
     runtime_core_.bind(
         *this,
         [this](const LWSafetyDecision& decision, const std::string& reason)
@@ -149,6 +144,26 @@ RL_Real::RL_Real(int argc, char **argv)
     this->control.gait_frequency = this->params.Get<std::vector<float>>("gait_command")[0];
     this->gait_phase_time = 0.0f;
     runtime_core_.publishInitialPolicyInput();
+
+    if (plot_configuration_.enabled)
+    {
+        const auto& runtime_configuration = GetLWBaseRuntimeConfiguration();
+        plot_snapshot_ =
+            std::make_unique<LWSnapshotBuffer<SimDebugSnapshot>>();
+        plot_read_snapshot_ = std::make_unique<SimDebugSnapshot>();
+        plot_read_snapshot_->robot_state.motor_state.resize(
+            static_cast<std::size_t>(runtime_configuration.num_dofs));
+        plot_read_snapshot_->robot_command.motor_command.resize(
+            static_cast<std::size_t>(runtime_configuration.num_dofs));
+        plot_message_cache_ = std::make_unique<LWSimDebugMessageCache>(
+            LWSimDebugMessageConfig{
+                static_cast<int>(runtime_configuration.num_dofs),
+                runtime_configuration.joint_mapping,
+                runtime_configuration.wheel_indices});
+        const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
+        RefreshMuJoCoPointersLocked();
+        InitializePlotDebugResourcesLocked();
+    }
 
     // loop
     const auto loop_error_handler = [this](
@@ -258,14 +273,142 @@ void RL_Real::RefreshMuJoCoPointersLocked() noexcept
     mj_data = physics_lifecycle_ ? physics_lifecycle_->data() : nullptr;
 }
 
+void RL_Real::InitializePlotDebugResourcesLocked()
+{
+    if (!mj_model)
+    {
+        throw std::runtime_error(
+            "LW Sim2Sim debug setup requires an initialized MuJoCo model");
+    }
+
+    const auto site_id = [this](const char* name)
+    {
+        const int id = mj_name2id(mj_model, mjOBJ_SITE, name);
+        if (id >= mj_model->nsite)
+        {
+            throw std::runtime_error(
+                std::string("LW Sim2Sim debug site is out of range: ") + name);
+        }
+        return id;
+    };
+    const auto sensor_address = [this](const char* name, int required_dimension)
+    {
+        const int id = mj_name2id(mj_model, mjOBJ_SENSOR, name);
+        if (id < 0)
+        {
+            return -1;
+        }
+        if (id >= mj_model->nsensor
+            || mj_model->sensor_dim[id] < required_dimension)
+        {
+            throw std::runtime_error(
+                std::string("LW Sim2Sim debug sensor has invalid dimension: ")
+                + name);
+        }
+        const int address = mj_model->sensor_adr[id];
+        if (address < 0
+            || address + required_dimension > mj_model->nsensordata)
+        {
+            throw std::runtime_error(
+                std::string("LW Sim2Sim debug sensor is out of range: ") + name);
+        }
+        return address;
+    };
+
+    plot_mujoco_cache_.left_foot_site = site_id("left_foot_site");
+    plot_mujoco_cache_.right_foot_site = site_id("right_foot_site");
+    plot_mujoco_cache_.left_foot_force_address =
+        sensor_address("left_foot_force_sensor", 3);
+    plot_mujoco_cache_.right_foot_force_address =
+        sensor_address("right_foot_force_sensor", 3);
+    plot_mujoco_cache_.frame_position_address =
+        sensor_address("frame_pos", 3);
+    plot_mujoco_cache_.frame_velocity_address =
+        sensor_address("frame_vel", 3);
+    plot_mujoco_cache_.angular_velocity_address =
+        sensor_address("imu_gyro", 3);
+    plot_mujoco_cache_.quaternion_address =
+        sensor_address("imu_quat", 4);
+}
+
+LWSimDebugTelemetry RL_Real::ReadPlotTelemetryLocked() const noexcept
+{
+    LWSimDebugTelemetry telemetry;
+    const auto& cache = plot_mujoco_cache_;
+    telemetry.gait_available =
+        cache.left_foot_site >= 0
+        && cache.right_foot_site >= 0
+        && cache.left_foot_force_address >= 0
+        && cache.right_foot_force_address >= 0;
+    if (telemetry.gait_available)
+    {
+        for (std::size_t axis = 0; axis < 3; ++axis)
+        {
+            telemetry.left_foot_position[axis] =
+                mj_data->site_xpos[3 * cache.left_foot_site + axis];
+            telemetry.right_foot_position[axis] =
+                mj_data->site_xpos[3 * cache.right_foot_site + axis];
+        }
+        constexpr double force_threshold = 10.0;
+        telemetry.left_contact =
+            mj_data->sensordata[cache.left_foot_force_address + 2]
+                    > force_threshold
+                ? 1.0 : 0.0;
+        telemetry.right_contact =
+            mj_data->sensordata[cache.right_foot_force_address + 2]
+                    > force_threshold
+                ? 1.0 : 0.0;
+    }
+
+    const auto read_three = [this](
+        int address,
+        bool& available,
+        std::array<double, 3>& values)
+    {
+        available = address >= 0;
+        if (available)
+        {
+            for (std::size_t axis = 0; axis < values.size(); ++axis)
+            {
+                values[axis] = mj_data->sensordata[address + axis];
+            }
+        }
+    };
+    read_three(
+        cache.frame_position_address,
+        telemetry.frame_position_available,
+        telemetry.frame_position);
+    read_three(
+        cache.frame_velocity_address,
+        telemetry.frame_velocity_available,
+        telemetry.frame_velocity);
+    read_three(
+        cache.angular_velocity_address,
+        telemetry.angular_velocity_available,
+        telemetry.angular_velocity);
+
+    telemetry.quaternion_available = cache.quaternion_address >= 0;
+    if (telemetry.quaternion_available)
+    {
+        for (std::size_t component = 0;
+             component < telemetry.quaternion.size();
+             ++component)
+        {
+            telemetry.quaternion[component] =
+                mj_data->sensordata[cache.quaternion_address + component];
+        }
+    }
+    return telemetry;
+}
+
 void RL_Real::jointstate_plot_callback(void)
 {
-    if (!plot_snapshot_ || !jointstate_plot_publisher_)
+    if (!plot_snapshot_ || !plot_read_snapshot_ || !plot_message_cache_
+        || !jointstate_plot_publisher_)
     {
         return;
     }
-    SimDebugSnapshot snapshot;
-    if (!plot_snapshot_->read(snapshot))
+    if (!plot_snapshot_->read(*plot_read_snapshot_))
     {
         return;
     }
@@ -279,145 +422,18 @@ void RL_Real::jointstate_plot_callback(void)
     {
         return;
     }
-    sensor_msgs::msg::JointState msg;
-    // 强烈建议加上时间戳，保证 ROS 2 Bag 的时间对齐
-    msg.header.stamp = this->ros2_node->get_clock()->now();
-
-    // ================= 1. 定义消息名称列表 =================
-    // 关节顺序与 base.yaml 里一致
-    std::vector<std::string> joint_now_names = {
-        "right_hip_now", "left_hip_now", "right_thigh_now", "left_thigh_now",
-        "right_shank_now", "left_shank_now", "right_foot_now", "left_foot_now",
-        "right_wheel_now", "left_wheel_now"
-    };
-    std::vector<std::string> joint_target_names = {
-        "right_hip_target", "left_hip_target", "right_thigh_target", "left_thigh_target",
-        "right_shank_target", "left_shank_target", "right_foot_target", "left_foot_target",
-        "right_wheel_target", "left_wheel_target"
-    };
-    std::vector<std::string> gait_data_names = {
-        "l_foot_x", "l_foot_y", "l_foot_z", "l_contact",
-        "r_foot_x", "r_foot_y", "r_foot_z", "r_contact"
-    };
-    std::vector<std::string> tracking_data_names = {
-        "cmd_vel_x", "cmd_vel_yaw",           // 期望线速度 (X) 和 期望角速度 (Z)
-        "base_p_x", "base_p_y", "base_p_z",   // 机身全局位置
-        "base_v_x", "base_v_y", "base_v_z",   // 机身全局线速度
-        "base_w_x", "base_w_y", "base_w_z",   // 机身全局角速度
-        "base_q_w", "base_q_x", "base_q_y", "base_q_z" // 机身全局姿态四元数
-    };
-
-    // 合并所有名称
-    std::vector<std::string> joint_names;
-    joint_names.reserve(joint_now_names.size() + joint_target_names.size() + 
-                        gait_data_names.size() + tracking_data_names.size());
-    joint_names.insert(joint_names.end(), joint_now_names.begin(), joint_now_names.end());
-    joint_names.insert(joint_names.end(), joint_target_names.begin(), joint_target_names.end());
-    joint_names.insert(joint_names.end(), gait_data_names.begin(), gait_data_names.end());
-    joint_names.insert(joint_names.end(), tracking_data_names.begin(), tracking_data_names.end());
-
-    // ================= 2. 初始化 msg 数组 =================
-    size_t total_size = joint_names.size();
-    msg.name = joint_names;
-    msg.position.resize(total_size, 0.0); // 默认填充 0.0
-    msg.velocity.resize(total_size, 0.0);
-    msg.effort.resize(total_size, 0.0);
-
-    // ================= 3. 填充关节与命令状态 =================
-    int num_of_dofs = this->params.Get<int>("num_of_dofs");
-    auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
-    auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
-
-    for (int i = 0; i < num_of_dofs; ++i)
+    const LWSimDebugTelemetry telemetry = ReadPlotTelemetryLocked();
+    if (!plot_message_cache_->Populate(
+            plot_read_snapshot_->robot_state,
+            plot_read_snapshot_->robot_command,
+            plot_read_snapshot_->control,
+            telemetry))
     {
-        msg.position[i] = snapshot.robot_state.motor_state.q[i];
-        msg.velocity[i] = snapshot.robot_state.motor_state.dq[i];
-        msg.effort[i] = snapshot.robot_state.motor_state.tau_est[i];
+        return;
     }
-    for (int i = num_of_dofs; i < 2 * num_of_dofs; ++i)
-    {
-        msg.position[i] =
-            snapshot.robot_command.motor_command.q[
-                i - num_of_dofs];
-    }
-    for (int i : wheel_indices)
-    {
-        msg.position[i + num_of_dofs] = 0.0f;
-        msg.velocity[i + num_of_dofs] =
-            snapshot.robot_command.motor_command.dq[i];
-    }
-
-    // ================= 4. 填充步态数据 (脚端信息) =================
-    const int id_l_site = mj_name2id(mj_model, mjOBJ_SITE, "left_foot_site");
-    const int id_r_site = mj_name2id(mj_model, mjOBJ_SITE, "right_foot_site");
-    const int id_l_sensor = mj_name2id(mj_model, mjOBJ_SENSOR, "left_foot_force_sensor");
-    const int id_r_sensor = mj_name2id(mj_model, mjOBJ_SENSOR, "right_foot_force_sensor");
-
-    int offset_gait = joint_now_names.size() + joint_target_names.size();
-
-    if (id_l_site >= 0 && id_r_site >= 0 && id_l_sensor >= 0 && id_r_sensor >= 0) 
-    {
-        // 获取 Z 轴方向的受力 (+2 对应 Z 轴)
-        double l_force = mj_data->sensordata[mj_model->sensor_adr[id_l_sensor] + 2];
-        double r_force = mj_data->sensordata[mj_model->sensor_adr[id_r_sensor] + 2];
-        double force_threshold = 10.0; 
-
-        msg.position[offset_gait + 0] = mj_data->site_xpos[3 * id_l_site + 0];
-        msg.position[offset_gait + 1] = mj_data->site_xpos[3 * id_l_site + 1];
-        msg.position[offset_gait + 2] = mj_data->site_xpos[3 * id_l_site + 2];
-        msg.position[offset_gait + 3] = (l_force > force_threshold) ? 1.0 : 0.0;
-
-        msg.position[offset_gait + 4] = mj_data->site_xpos[3 * id_r_site + 0];
-        msg.position[offset_gait + 5] = mj_data->site_xpos[3 * id_r_site + 1];
-        msg.position[offset_gait + 6] = mj_data->site_xpos[3 * id_r_site + 2];
-        msg.position[offset_gait + 7] = (r_force > force_threshold) ? 1.0 : 0.0;
-    }
-
-    // ================= 5. 填充全局追踪与位姿信息 =================
-    const int id_frame_pos = mj_name2id(mj_model, mjOBJ_SENSOR, "frame_pos");
-    const int id_frame_vel = mj_name2id(mj_model, mjOBJ_SENSOR, "frame_vel");
-    const int id_imu_gyro  = mj_name2id(mj_model, mjOBJ_SENSOR, "imu_gyro");
-    const int id_imu_quat  = mj_name2id(mj_model, mjOBJ_SENSOR, "imu_quat");
-
-    int offset_track = offset_gait + gait_data_names.size();
-
-    // 记录期望指令
-    msg.position[offset_track + 0] = snapshot.control.x;
-    msg.position[offset_track + 1] = snapshot.control.yaw;
-
-    // 提取传感器数据
-    if (id_frame_pos >= 0) {
-        int adr = mj_model->sensor_adr[id_frame_pos];
-        msg.position[offset_track + 2] = mj_data->sensordata[adr + 0]; // base_p_x
-        msg.position[offset_track + 3] = mj_data->sensordata[adr + 1]; // base_p_y
-        msg.position[offset_track + 4] = mj_data->sensordata[adr + 2]; // base_p_z
-    }
-    
-    if (id_frame_vel >= 0) {
-        int adr = mj_model->sensor_adr[id_frame_vel];
-        msg.position[offset_track + 5] = mj_data->sensordata[adr + 0]; // base_v_x
-        msg.position[offset_track + 6] = mj_data->sensordata[adr + 1]; // base_v_y
-        msg.position[offset_track + 7] = mj_data->sensordata[adr + 2]; // base_v_z
-    }
-
-    if (id_imu_gyro >= 0) {
-        int adr = mj_model->sensor_adr[id_imu_gyro];
-        msg.position[offset_track + 8] = mj_data->sensordata[adr + 0]; // base_w_x
-        msg.position[offset_track + 9] = mj_data->sensordata[adr + 1]; // base_w_y
-        msg.position[offset_track + 10] = mj_data->sensordata[adr + 2]; // base_w_z
-    }
-
-    if (id_imu_quat >= 0) {
-        int adr = mj_model->sensor_adr[id_imu_quat];
-        msg.position[offset_track + 11] = mj_data->sensordata[adr + 0]; // base_q_w
-        msg.position[offset_track + 12] = mj_data->sensordata[adr + 1]; // base_q_x
-        msg.position[offset_track + 13] = mj_data->sensordata[adr + 2]; // base_q_y
-        msg.position[offset_track + 14] = mj_data->sensordata[adr + 3]; // base_q_z
-    }
-
-    // ==============================================================================
-    this->jointstate_plot_publisher_->publish(msg);
-
+    auto& message = plot_message_cache_->message();
+    message.header.stamp = this->ros2_node->get_clock()->now();
+    this->jointstate_plot_publisher_->publish(message);
 }
 
 void RL_Real::OperatorStatusCallback()

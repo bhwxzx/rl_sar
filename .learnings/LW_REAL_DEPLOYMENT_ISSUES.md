@@ -126,7 +126,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 14 | LW-050 | P2 / medium | resolved | Unify the ONNX dynamic-batch contract and cached tensor resources |
 | 15 | LW-051 | P2 / medium | resolved | Make MuJoCo downloads digest-pinned and installation atomic |
 | 16 | LW-052 | P2 / low | resolved | Harden generic rl_sim joystick bounds and temporary-file lifecycle |
-| 17 | LW-053 | P2 / low | pending | Cache the rl_sim_LW debug message layout |
+| 17 | LW-053 | P2 / low | resolved | Cache the rl_sim_LW debug message layout |
 | 18 | LW-024 | P1 / high | resolved | Make the Sim2Sim physics-thread lifecycle bounded and joinable |
 | 19 | LW-025 | P1 / high | resolved | Preserve keyboard velocity commands instead of replacing them every control cycle |
 | 20 | LW-026 | P1 / high | resolved | Bind configuration candidates to one exact deployment and comparable reports |
@@ -4323,7 +4323,7 @@ leave stale files or replace an unrelated path.
 ## [LW-053] Cache the rl_sim_LW debug message layout
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-041
 
 ### Problem
@@ -4366,6 +4366,30 @@ to the configured 200 Hz debug rate.
   cached message layout.
 - Sim2Sim debug tests, synchronization/lifecycle tests, strict build, and
   `git diff --check` pass without opening the MuJoCo GUI.
+
+### Resolution
+
+- **Resolved**: 2026-08-18T19:12:21+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 仅缓存可选 MuJoCo `rl_sim_LW` 的调试消息布局、配置和
+  MuJoCo site/sensor 查询结果；保持 `/LW_joint_states`、43 字段顺序与数值
+  语义、1-200 Hz 开关、快照交接和 MuJoCo 互斥边界不变，不修改真机
+  `LWDebugPublisher`。
+- **Changed Files**: `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`、
+  `src/rl_sar/CMakeLists.txt`、`src/rl_sar/include/rl_sim_LW.hpp`、
+  `src/rl_sar/src/rl_sim_LW.cpp`、
+  `src/rl_sar/library/core/simulation/lw_sim_debug_message.hpp`、
+  `src/rl_sar/library/core/simulation/lw_sim_debug_message.cpp`、
+  `src/rl_sar/test/test_lw_sim_debug_message.cpp`、
+  `src/rl_sar/test/test_lw_sim_lifecycle_integration.py`。
+- **Verification**: 新增单元测试逐项核对 43 个名称、数组长度、当前/目标
+  关节值、轮关节速度目标、步态与跟踪字段、缺失可选传感器清零、非法配置
+  拒绝及预热后 10000 次填充零分配；定向构建和测试通过。完整
+  `LW_STRICT_WARNINGS=ON` 构建及 48/48 CTest 通过，新增测试在
+  AddressSanitizer/UndefinedBehaviorSanitizer 下通过，`git diff --check`
+  通过。未启动 MuJoCo GUI、ROS 节点或访问任何硬件，用户未跟踪技能目录
+  保持未修改。
+- **Remaining Follow-ups**: none
 
 ---
 

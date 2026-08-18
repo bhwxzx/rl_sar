@@ -7,6 +7,12 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SIM_SOURCE = ROOT / "src" / "rl_sim_LW.cpp"
 SIM_HEADER = ROOT / "include" / "rl_sim_LW.hpp"
+SIM_DEBUG_HEADER = (
+    ROOT / "library" / "core" / "simulation" / "lw_sim_debug_message.hpp"
+)
+SIM_DEBUG_SOURCE = (
+    ROOT / "library" / "core" / "simulation" / "lw_sim_debug_message.cpp"
+)
 LEGACY_SIM_SOURCE = ROOT / "src" / "rl_sim_mujoco.cpp"
 LEGACY_SIM_HEADER = ROOT / "include" / "rl_sim_mujoco.hpp"
 MUJOCO_UTILS = (
@@ -145,6 +151,8 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
     ) -> None:
         source = SIM_SOURCE.read_text(encoding="utf-8")
         header = SIM_HEADER.read_text(encoding="utf-8")
+        debug_header = SIM_DEBUG_HEADER.read_text(encoding="utf-8")
+        debug_source = SIM_DEBUG_SOURCE.read_text(encoding="utf-8")
         constructor = source[
             source.index("RL_Real::RL_Real(") : source.index("RL_Real::~RL_Real()")
         ]
@@ -165,6 +173,10 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
         self.assertNotIn("loop_plot", header)
         self.assertIn(
             "std::unique_ptr<LWSnapshotBuffer<SimDebugSnapshot>> plot_snapshot_",
+            header,
+        )
+        self.assertIn(
+            "std::unique_ptr<LWSimDebugMessageCache> plot_message_cache_",
             header,
         )
         self.assertIn(
@@ -192,8 +204,12 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
         self.assertIn("plot_snapshot_->publish(", control)
         self.assertNotIn("debug_snapshot_", source)
 
-        self.assertIn("plot_snapshot_->read(snapshot)", callback)
-        self.assertIn("jointstate_plot_publisher_->publish(msg)", callback)
+        self.assertIn("plot_snapshot_->read(*plot_read_snapshot_)", callback)
+        self.assertIn("plot_message_cache_->Populate(", callback)
+        self.assertIn("jointstate_plot_publisher_->publish(message)", callback)
+        self.assertNotIn("params.Get", callback)
+        self.assertNotIn("mj_name2id", callback)
+        self.assertNotIn("resize(", callback)
         for payload_name in (
             "right_hip_now",
             "right_hip_target",
@@ -201,7 +217,9 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
             "cmd_vel_x",
             "base_q_w",
         ):
-            self.assertIn(payload_name, callback)
+            self.assertIn(payload_name, debug_source)
+        self.assertIn("LW_SIM_DEBUG_FIELD_COUNT = 43", debug_header)
+        self.assertIn("InitializePlotDebugResourcesLocked();", constructor)
 
     def test_pd_ff_mujoco_torques_are_validated_transactionally(self) -> None:
         source = SIM_SOURCE.read_text(encoding="utf-8")

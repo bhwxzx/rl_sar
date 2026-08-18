@@ -17,6 +17,7 @@
 #include "lw_runtime_core.hpp"
 #include "lw_safety_policy.hpp"
 #include "lw_signal_shutdown.hpp"
+#include "lw_sim_debug_message.hpp"
 #include "lw_sim_plot_config.hpp"
 #include "lw_sim_torque_validation.hpp"
 #include "fsm_LW.hpp"
@@ -119,12 +120,28 @@ private:
         RobotCommand<float> robot_command;
         LWControlSnapshot control;
     };
+    struct SimDebugMuJoCoCache
+    {
+        int left_foot_site = -1;
+        int right_foot_site = -1;
+        int left_foot_force_address = -1;
+        int right_foot_force_address = -1;
+        int frame_position_address = -1;
+        int frame_velocity_address = -1;
+        int angular_velocity_address = -1;
+        int quaternion_address = -1;
+    };
     LWSimPlotConfiguration plot_configuration_;
     std::unique_ptr<LWSnapshotBuffer<SimDebugSnapshot>> plot_snapshot_;
+    std::unique_ptr<SimDebugSnapshot> plot_read_snapshot_;
+    std::unique_ptr<LWSimDebugMessageCache> plot_message_cache_;
+    SimDebugMuJoCoCache plot_mujoco_cache_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr jointstate_plot_publisher_;
     rclcpp::TimerBase::SharedPtr plot_timer_;
     rclcpp::TimerBase::SharedPtr operator_status_timer_;
     void jointstate_plot_callback(void);
+    void InitializePlotDebugResourcesLocked();
+    LWSimDebugTelemetry ReadPlotTelemetryLocked() const noexcept;
     void OperatorStatusCallback();
     std::uint64_t last_operator_status_sequence_ = 0;
     bool operator_status_seen_ = false;
