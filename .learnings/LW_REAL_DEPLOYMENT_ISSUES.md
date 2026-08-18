@@ -125,7 +125,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 13 | LW-049 | P2 / medium | resolved | Make retained Gazebo controllers bounded, URDF-ready, and allocation-stable |
 | 14 | LW-050 | P2 / medium | resolved | Unify the ONNX dynamic-batch contract and cached tensor resources |
 | 15 | LW-051 | P2 / medium | resolved | Make MuJoCo downloads digest-pinned and installation atomic |
-| 16 | LW-052 | P2 / low | pending | Harden generic rl_sim joystick bounds and temporary-file lifecycle |
+| 16 | LW-052 | P2 / low | resolved | Harden generic rl_sim joystick bounds and temporary-file lifecycle |
 | 17 | LW-053 | P2 / low | pending | Cache the rl_sim_LW debug message layout |
 | 18 | LW-024 | P1 / high | resolved | Make the Sim2Sim physics-thread lifecycle bounded and joinable |
 | 19 | LW-025 | P1 / high | resolved | Preserve keyboard velocity commands instead of replacing them every control cycle |
@@ -4252,7 +4252,7 @@ development dependency or install unapproved bytes.
 ## [LW-052] Harden generic rl_sim joystick bounds and temporary-file lifecycle
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-049
 
 ### Problem
@@ -4297,6 +4297,26 @@ leave stale files or replace an unrelated path.
   startup failures without leaking temporary files.
 - Targeted helper/lifecycle tests, sanitizer checks, the maintained build, and
   `git diff --check` pass without starting Gazebo or real hardware.
+
+### Resolution
+
+- **Resolved**: 2026-08-18T18:43:47+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 本项不恢复或修补已退役的通用 ROS/Gazebo `rl_sim`。
+  LW-049 的提交 `ef0af1d` 已按用户决定删除 `src/rl_sar/src/rl_sim.cpp`、
+  `src/rl_sar/include/rl_sim.hpp`、`robot_joint_controller`、`robot_msgs`、
+  Gazebo launch 和 world，从而整体移除本项描述的 ROS Joy 越界、共享
+  `/tmp/robot_joint_controller_params.yaml` 及 shell spawner 生命周期风险。
+  保留的 MuJoCo `rl_sim_LW` 使用独立的固定容量手柄安全路径，不在本项范围内。
+- **Changed Files**: 仅 `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: `test_lw_repository_scope.py` 通过，并持续断言通用
+  `rl_sim`、Gazebo、控制器和专用消息路径不得重新出现；维护源码及脚本中无
+  `robot_joint_controller_params.yaml` 或 controller-manager spawner 调用。
+  当前严格构建基线在 LW-051 后为完整 47/47 CTest 通过，其中仓库范围、
+  MuJoCo 和手柄安全测试均通过；本项没有可运行的已退役代码，因此无需新增
+  sanitizer 目标。`git diff --check` 通过；未启动 Gazebo、MuJoCo GUI、ROS
+  节点或访问硬件，用户未跟踪技能目录保持未修改。
+- **Remaining Follow-ups**: LW-053
 
 ---
 
