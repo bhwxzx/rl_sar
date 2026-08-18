@@ -4,7 +4,6 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <limits>
 #include <stdexcept>
 
@@ -14,30 +13,6 @@ namespace
 {
 constexpr std::uint32_t kSerialReadTimeoutMs = 20;
 constexpr std::size_t kSerialReadBufferSize = 256;
-
-static_assert(
-    sizeof(imu_frame_read) == FDILINK_HEADER_SIZE + IMU_LEN + 1,
-    "IMU frame storage must match the wire format");
-static_assert(
-    sizeof(ahrs_frame_read) == FDILINK_HEADER_SIZE + AHRS_LEN + 1,
-    "AHRS frame storage must match the wire format");
-static_assert(
-    sizeof(insgps_frame_read) == FDILINK_HEADER_SIZE + INSGPS_LEN + 1,
-    "INSGPS frame storage must match the wire format");
-static_assert(
-    sizeof(Geodetic_Position_frame_read)
-        == FDILINK_HEADER_SIZE + GEODETIC_POS_LEN + 1,
-    "geodetic-position frame storage must match the wire format");
-
-template <typename FrameStorage>
-void copyValidatedFrame(const ValidatedFrame& source, FrameStorage& destination)
-{
-  if (source.frame_size != sizeof(destination.read_tmp))
-  {
-    throw std::runtime_error("validated FDILink frame has an unexpected size");
-  }
-  std::memcpy(destination.read_tmp, source.bytes.data(), source.frame_size);
-}
 }  // namespace
 
 ahrsBringup::ahrsBringup()
@@ -215,8 +190,11 @@ void ahrsBringup::handleValidatedFrame(const ValidatedFrame& frame)
   switch (frame.type)
   {
     case TYPE_IMU:
-      copyValidatedFrame(frame, imu_frame_);
-      checkSN(TYPE_IMU);
+      if (!decodeImuPayload(frame, imu_payload_))
+      {
+        throw std::runtime_error("validated FDILink IMU payload did not decode");
+      }
+      updateSequence(frame.serial_number);
       has_valid_imu_ = true;
       if (has_valid_ahrs_)
       {
@@ -230,39 +208,36 @@ void ahrsBringup::handleValidatedFrame(const ValidatedFrame& frame)
       }
       break;
     case TYPE_AHRS:
-      copyValidatedFrame(frame, ahrs_frame_);
-      checkSN(TYPE_AHRS);
+      if (!decodeAhrsPayload(frame, ahrs_payload_))
+      {
+        throw std::runtime_error("validated FDILink AHRS payload did not decode");
+      }
+      updateSequence(frame.serial_number);
       has_valid_ahrs_ = true;
       publishAhrsFrame();
       break;
     case TYPE_INSGPS:
-      copyValidatedFrame(frame, insgps_frame_);
-      checkSN(TYPE_INSGPS);
+      if (!decodeInsGpsPayload(frame, insgps_payload_))
+      {
+        throw std::runtime_error(
+            "validated FDILink INSGPS payload did not decode");
+      }
+      updateSequence(frame.serial_number);
       publishInsGpsFrame();
       break;
     case TYPE_GEODETIC_POS:
-      copyValidatedFrame(frame, Geodetic_Position_frame_);
-      checkSN(TYPE_GEODETIC_POS);
+      if (!decodeGeodeticPositionPayload(
+          frame, geodetic_position_payload_))
+      {
+        throw std::runtime_error(
+            "validated FDILink geodetic-position payload did not decode");
+      }
+      updateSequence(frame.serial_number);
       publishGeodeticPositionFrame();
       break;
     case TYPE_GROUND:
     case TYPE_GROUND_EXTENDED:
-      if (!first_sequence_received_)
-      {
-        read_sn_ = frame.serial_number;
-        first_sequence_received_ = true;
-      }
-      else
-      {
-        const std::uint8_t expected =
-            static_cast<std::uint8_t>(read_sn_ + 1);
-        if (expected != frame.serial_number)
-        {
-          sn_lost_ += static_cast<std::uint8_t>(
-              frame.serial_number - expected);
-        }
-        read_sn_ = frame.serial_number;
-      }
+      updateSequence(frame.serial_number);
       break;
     default:
       throw std::runtime_error("validated an unsupported FDILink frame type");
@@ -276,10 +251,10 @@ void ahrsBringup::publishImuFrame()
   imu_data.header.frame_id = imu_frame_id_;
 
   const Eigen::Quaterniond q_ahrs(
-      ahrs_frame_.frame.data.data_pack.Qw,
-      ahrs_frame_.frame.data.data_pack.Qx,
-      ahrs_frame_.frame.data.data_pack.Qy,
-      ahrs_frame_.frame.data.data_pack.Qz);
+      ahrs_payload_.quaternion_w,
+      ahrs_payload_.quaternion_x,
+      ahrs_payload_.quaternion_y,
+      ahrs_payload_.quaternion_z);
   const Eigen::Quaterniond q_r =
       Eigen::AngleAxisd(PI, Eigen::Vector3d::UnitZ())
       * Eigen::AngleAxisd(PI, Eigen::Vector3d::UnitY())
@@ -291,19 +266,16 @@ void ahrsBringup::publishImuFrame()
 
   if (device_type_ == 0)
   {
-    imu_data.orientation.w = ahrs_frame_.frame.data.data_pack.Qw;
-    imu_data.orientation.x = ahrs_frame_.frame.data.data_pack.Qx;
-    imu_data.orientation.y = ahrs_frame_.frame.data.data_pack.Qy;
-    imu_data.orientation.z = ahrs_frame_.frame.data.data_pack.Qz;
-    imu_data.angular_velocity.x = imu_frame_.frame.data.data_pack.gyroscope_x;
-    imu_data.angular_velocity.y = imu_frame_.frame.data.data_pack.gyroscope_y;
-    imu_data.angular_velocity.z = imu_frame_.frame.data.data_pack.gyroscope_z;
-    imu_data.linear_acceleration.x =
-        imu_frame_.frame.data.data_pack.accelerometer_x;
-    imu_data.linear_acceleration.y =
-        imu_frame_.frame.data.data_pack.accelerometer_y;
-    imu_data.linear_acceleration.z =
-        imu_frame_.frame.data.data_pack.accelerometer_z;
+    imu_data.orientation.w = ahrs_payload_.quaternion_w;
+    imu_data.orientation.x = ahrs_payload_.quaternion_x;
+    imu_data.orientation.y = ahrs_payload_.quaternion_y;
+    imu_data.orientation.z = ahrs_payload_.quaternion_z;
+    imu_data.angular_velocity.x = imu_payload_.gyroscope_x;
+    imu_data.angular_velocity.y = imu_payload_.gyroscope_y;
+    imu_data.angular_velocity.z = imu_payload_.gyroscope_z;
+    imu_data.linear_acceleration.x = imu_payload_.accelerometer_x;
+    imu_data.linear_acceleration.y = imu_payload_.accelerometer_y;
+    imu_data.linear_acceleration.z = imu_payload_.accelerometer_z;
   }
   else
   {
@@ -312,15 +284,12 @@ void ahrsBringup::publishImuFrame()
     imu_data.orientation.x = q_out.x();
     imu_data.orientation.y = q_out.y();
     imu_data.orientation.z = q_out.z();
-    imu_data.angular_velocity.x = imu_frame_.frame.data.data_pack.gyroscope_x;
-    imu_data.angular_velocity.y = -imu_frame_.frame.data.data_pack.gyroscope_y;
-    imu_data.angular_velocity.z = -imu_frame_.frame.data.data_pack.gyroscope_z;
-    imu_data.linear_acceleration.x =
-        imu_frame_.frame.data.data_pack.accelerometer_x;
-    imu_data.linear_acceleration.y =
-        -imu_frame_.frame.data.data_pack.accelerometer_y;
-    imu_data.linear_acceleration.z =
-        -imu_frame_.frame.data.data_pack.accelerometer_z;
+    imu_data.angular_velocity.x = imu_payload_.gyroscope_x;
+    imu_data.angular_velocity.y = -imu_payload_.gyroscope_y;
+    imu_data.angular_velocity.z = -imu_payload_.gyroscope_z;
+    imu_data.linear_acceleration.x = imu_payload_.accelerometer_x;
+    imu_data.linear_acceleration.y = -imu_payload_.accelerometer_y;
+    imu_data.linear_acceleration.z = -imu_payload_.accelerometer_z;
   }
   imu_pub_->publish(imu_data);
 }
@@ -328,21 +297,21 @@ void ahrsBringup::publishImuFrame()
 void ahrsBringup::publishAhrsFrame()
 {
   geometry_msgs::msg::Pose2D pose_2d;
-  pose_2d.theta = ahrs_frame_.frame.data.data_pack.Heading;
+  pose_2d.theta = ahrs_payload_.heading;
   mag_pose_pub_->publish(pose_2d);
 
   geometry_msgs::msg::Vector3 euler_angles;
-  euler_angles.x = ahrs_frame_.frame.data.data_pack.Roll;
-  euler_angles.y = ahrs_frame_.frame.data.data_pack.Pitch;
-  euler_angles.z = ahrs_frame_.frame.data.data_pack.Heading;
+  euler_angles.x = ahrs_payload_.roll;
+  euler_angles.y = ahrs_payload_.pitch;
+  euler_angles.z = ahrs_payload_.heading;
   Euler_angles_pub_->publish(euler_angles);
 
   if (has_valid_imu_)
   {
     geometry_msgs::msg::Vector3 magnetic;
-    magnetic.x = imu_frame_.frame.data.data_pack.magnetometer_x;
-    magnetic.y = imu_frame_.frame.data.data_pack.magnetometer_y;
-    magnetic.z = imu_frame_.frame.data.data_pack.magnetometer_z;
+    magnetic.x = imu_payload_.magnetometer_x;
+    magnetic.y = imu_payload_.magnetometer_y;
+    magnetic.z = imu_payload_.magnetometer_z;
     Magnetic_pub_->publish(magnetic);
   }
 }
@@ -352,11 +321,9 @@ void ahrsBringup::publishGeodeticPositionFrame()
   sensor_msgs::msg::NavSatFix gps_data;
   gps_data.header.stamp = now();
   gps_data.header.frame_id = "navsat_link";
-  gps_data.latitude =
-      Geodetic_Position_frame_.frame.data.data_pack.Latitude / DEG_TO_RAD;
-  gps_data.longitude =
-      Geodetic_Position_frame_.frame.data.data_pack.Longitude / DEG_TO_RAD;
-  gps_data.altitude = Geodetic_Position_frame_.frame.data.data_pack.Height;
+  gps_data.latitude = geodetic_position_payload_.latitude / DEG_TO_RAD;
+  gps_data.longitude = geodetic_position_payload_.longitude / DEG_TO_RAD;
+  gps_data.altitude = geodetic_position_payload_.height;
   gps_pub_->publish(gps_data);
 }
 
@@ -364,24 +331,18 @@ void ahrsBringup::publishInsGpsFrame()
 {
   nav_msgs::msg::Odometry odom_msg;
   odom_msg.header.stamp = now();
-  odom_msg.pose.pose.position.x =
-      insgps_frame_.frame.data.data_pack.Location_North;
-  odom_msg.pose.pose.position.y =
-      insgps_frame_.frame.data.data_pack.Location_East;
-  odom_msg.pose.pose.position.z =
-      insgps_frame_.frame.data.data_pack.Location_Down;
-  odom_msg.twist.twist.linear.x =
-      insgps_frame_.frame.data.data_pack.Velocity_North;
-  odom_msg.twist.twist.linear.y =
-      insgps_frame_.frame.data.data_pack.Velocity_East;
-  odom_msg.twist.twist.linear.z =
-      insgps_frame_.frame.data.data_pack.Velocity_Down;
+  odom_msg.pose.pose.position.x = insgps_payload_.location_north;
+  odom_msg.pose.pose.position.y = insgps_payload_.location_east;
+  odom_msg.pose.pose.position.z = insgps_payload_.location_down;
+  odom_msg.twist.twist.linear.x = insgps_payload_.velocity_north;
+  odom_msg.twist.twist.linear.y = insgps_payload_.velocity_east;
+  odom_msg.twist.twist.linear.z = insgps_payload_.velocity_down;
   NED_odom_pub_->publish(odom_msg);
 
   geometry_msgs::msg::Twist speed_msg;
-  speed_msg.linear.x = insgps_frame_.frame.data.data_pack.BodyVelocity_X;
-  speed_msg.linear.y = insgps_frame_.frame.data.data_pack.BodyVelocity_Y;
-  speed_msg.linear.z = insgps_frame_.frame.data.data_pack.BodyVelocity_Z;
+  speed_msg.linear.x = insgps_payload_.body_velocity_x;
+  speed_msg.linear.y = insgps_payload_.body_velocity_y;
+  speed_msg.linear.z = insgps_payload_.body_velocity_z;
   twist_pub_->publish(speed_msg);
 }
 
@@ -404,27 +365,8 @@ void ahrsBringup::magCalculateYaw(
   }
 }
 
-void ahrsBringup::checkSN(int type)
+void ahrsBringup::updateSequence(std::uint8_t serial_number)
 {
-  std::uint8_t serial_number = 0;
-  switch (type)
-  {
-    case TYPE_IMU:
-      serial_number = imu_frame_.frame.header.serial_num;
-      break;
-    case TYPE_AHRS:
-      serial_number = ahrs_frame_.frame.header.serial_num;
-      break;
-    case TYPE_INSGPS:
-      serial_number = insgps_frame_.frame.header.serial_num;
-      break;
-    case TYPE_GEODETIC_POS:
-      serial_number = Geodetic_Position_frame_.frame.header.serial_num;
-      break;
-    default:
-      return;
-  }
-
   if (!first_sequence_received_)
   {
     read_sn_ = serial_number;

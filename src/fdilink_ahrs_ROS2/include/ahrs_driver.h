@@ -11,8 +11,8 @@
 #include <serial/serial.h> //ROS的串口包 http://wjwwood.io/serial/doc/1.1.0/index.html
 #include <math.h>
 #include <fstream>
-#include <fdilink_data_struct.h>
 #include <fdilink_frame_parser.h>
+#include <fdilink_payload_decoder.h>
 //#include <sensor_msgs/Imu.h>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
@@ -43,11 +43,11 @@ public:
   ahrsBringup();
   ~ahrsBringup();
   void processLoop();
-  void checkSN(int type);
   void magCalculateYaw(double roll, double pitch, double &magyaw, double magx, double magy, double magz);
 
 private:
   void handleValidatedFrame(const ValidatedFrame& frame);
+  void updateSequence(std::uint8_t serial_number);
   void publishImuFrame();
   void publishAhrsFrame();
   void publishGeodeticPositionFrame();
@@ -67,11 +67,10 @@ private:
   std::uint32_t serial_baud_ = 921600;
   FrameParser frame_parser_;
   //data
-  FDILink::imu_frame_read  imu_frame_{};
-  FDILink::ahrs_frame_read ahrs_frame_{};
-  FDILink::insgps_frame_read insgps_frame_{};
-  //FDILink::lanlon_frame_read latlon_frame_;
-  FDILink::Geodetic_Position_frame_read Geodetic_Position_frame_{};
+  ImuPayload imu_payload_{};
+  AhrsPayload ahrs_payload_{};
+  InsGpsPayload insgps_payload_{};
+  GeodeticPositionPayload geodetic_position_payload_{};
   bool has_valid_imu_ = false;
   bool has_valid_ahrs_ = false;
   //frame name
