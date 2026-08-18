@@ -36,6 +36,44 @@
 
 ---
 
+## [ERR-20260818-001] python-compileall-readonly-review
+
+**Logged**: 2026-08-18T11:55:31+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+只读代码审查中使用 `python3 -m compileall`，在源码测试目录生成了忽略的
+`__pycache__`，违反了审查不写工作区的约束。
+
+### Error
+```text
+scripts/__pycache__
+src/rl_sar/test/__pycache__
+```
+
+### Context
+- 操作：批量检查 Python 语法。
+- 原因：`compileall` 默认把 `.pyc` 写到各源码目录。
+- 影响：只产生缓存文件，没有修改跟踪文件；交接标记的 `.agents` 技能缓存未触碰。
+
+### Suggested Fix
+只读审查应设置 `PYTHONDONTWRITEBYTECODE=1` 并使用 AST 解析，或把 `py_compile`
+输出显式定向到临时目录；不得对源码树直接运行默认 `compileall`。
+
+### Metadata
+- Reproducible: yes
+- Related Files: scripts/, src/rl_sar/test/
+- See Also: N/A
+
+### Resolution
+- **Resolved**: 2026-08-18T11:55:31+08:00
+- **Commit/PR**: N/A
+- **Notes**: 已精确删除本次生成的两个缓存目录，并确认未触碰用户技能目录。
+
+---
+
 ## [ERR-20260816-001] rg-shell-quoting
 
 **Logged**: 2026-08-16T15:44:04+08:00
