@@ -113,8 +113,6 @@ find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(realtime_tools REQUIRED)
 ament_package()
-add_compile_options(${GAZEBO_CXX_FLAGS})
-# find_package(gazebo REQUIRED)
 
 # Inference Runtime
 
@@ -1155,7 +1153,7 @@ if(LW_PRODUCTION_DEPLOYMENT)
         )
     else()
         install(
-            DIRECTORY launch worlds
+            DIRECTORY launch
             DESTINATION share/${PROJECT_NAME}/${dir}
         )
         install(

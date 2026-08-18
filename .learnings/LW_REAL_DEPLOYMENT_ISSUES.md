@@ -122,7 +122,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 10 | LW-046 | P2 / medium | resolved | Reject semantically invalid FDILink samples before ROS publication |
 | 11 | LW-047 | P2 / low | resolved | Classify FDILink 8-bit sequence anomalies without inventing frame loss |
 | 12 | LW-048 | P1 / high | resolved | Bind installed ONNX Runtime library bytes to the approved archive |
-| 13 | LW-049 | P2 / medium | pending | Make retained Gazebo controllers bounded, URDF-ready, and allocation-stable |
+| 13 | LW-049 | P2 / medium | resolved | Make retained Gazebo controllers bounded, URDF-ready, and allocation-stable |
 | 14 | LW-050 | P2 / medium | pending | Unify the ONNX dynamic-batch contract and cached tensor resources |
 | 15 | LW-051 | P2 / medium | pending | Make MuJoCo downloads digest-pinned and installation atomic |
 | 16 | LW-052 | P2 / low | pending | Harden generic rl_sim joystick bounds and temporary-file lifecycle |
@@ -4010,7 +4010,7 @@ origin file can become a new internally consistent deployment baseline.
 ## [LW-049] Make retained Gazebo controllers bounded, URDF-ready, and allocation-stable
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-015
 
 ### Problem
@@ -4056,6 +4056,32 @@ finite positive duration.
   a regression test detects update-cycle allocation.
 - Targeted controller tests, a Gazebo smoke test where available, the strict LW
   suite, warning-as-error build, and `git diff --check` pass without real motors.
+
+### Resolution
+
+- **Resolved**: 2026-08-18T17:44:25+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 用户决定删除已退出产品范围的 Gazebo 仿真功能，而非
+  继续修复其控制器。删除完整 `robot_joint_controller` 包、仅由该路径使用的
+  `robot_msgs` 包、未构建的旧通用 `RL_Sim` 源码、Gazebo launch 和 world；
+  移除 CMake 中残留的 Gazebo 编译及安装入口，并把仓库范围测试改为拒绝这些
+  路径重新出现。保留 MuJoCo `rl_sim_LW`、LW MJCF、真机运行时、策略、FSM
+  和安全核心不变。
+- **Changed Files**: 删除 `src/robot_joint_controller/`、`src/robot_msgs/`、
+  `src/rl_sar/{include/rl_sim.hpp,src/rl_sim.cpp,launch/gazebo.launch.py,worlds/}`；
+  修改 `src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp`、
+  `src/rl_sar/test/{test_build_workflow.py,test_generate_lw_deployment_manifest.py,test_lw_deployment_bundle.cpp,test_lw_repository_scope.py}`
+  和本记录。
+- **Verification**: 仓库范围测试通过并验证所有退役路径不存在；部署清单生成器
+  20/20、构建流程 27/27 通过。`scripts/validate_lw_strict_build.sh` 以
+  `-Wall -Wextra -Wpedantic -Werror` 构建全部维护目标并通过完整 45/45 CTest，
+  其中 `rl_sim_LW` 与三个 MuJoCo 测试成功。Colcon 只发现 `serial`、
+  `fdilink_ahrs`、`rl_sar`、`lw_description`，维护源码中无 Gazebo、控制器或
+  专用消息引用（禁止重新引入的测试断言除外）。Python 编译和
+  `git diff --check` 通过；批准清单中的旧 build/install 产物及 Gazebo 安装
+  符号链接已删除。未启动 Gazebo、MuJoCo GUI、ROS 真机节点或任何硬件。
+- **Remaining Follow-ups**: LW-050, LW-051, LW-052, LW-053
 
 ---
 

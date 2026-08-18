@@ -426,7 +426,7 @@ void testExtraProductionLaunchFails()
 {
     Fixture fixture;
     writeFile(
-        fixture.prefix / "share/rl_sar/launch/gazebo.launch.py",
+        fixture.prefix / "share/rl_sar/launch/unapproved.launch.py",
         "development launch\n");
     requireFailure(
         [&]() {

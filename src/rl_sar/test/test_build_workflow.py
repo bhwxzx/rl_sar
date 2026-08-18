@@ -340,8 +340,6 @@ class BuildWorkflowTests(unittest.TestCase):
         repository_root = BUILD_SCRIPT.parent
         for relative_package in (
             "src/rl_sar",
-            "src/robot_joint_controller",
-            "src/robot_msgs",
         ):
             package_dir = repository_root / relative_package
             manifest = package_dir / "package.xml"
@@ -478,8 +476,9 @@ class BuildWorkflowTests(unittest.TestCase):
         )
 
         self.assertIn("FILES launch/rl_real_LW.launch.py", production_block)
-        self.assertNotIn("DIRECTORY launch worlds", production_block)
-        self.assertIn("DIRECTORY launch worlds", development_block)
+        self.assertNotIn("DIRECTORY launch", production_block)
+        self.assertIn("DIRECTORY launch", development_block)
+        self.assertNotIn("worlds", development_block)
 
     def test_offline_actuator_training_assets_remain_installed(self) -> None:
         cmake = CMAKE_FILE.read_text(encoding="utf-8")

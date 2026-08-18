@@ -190,7 +190,7 @@ class ManifestGeneratorTests(unittest.TestCase):
             self.generate()
 
     def test_rejects_extra_production_launch(self) -> None:
-        extra = self.prefix / "share/rl_sar/launch/gazebo.launch.py"
+        extra = self.prefix / "share/rl_sar/launch/unapproved.launch.py"
         extra.write_text("development launch\n", encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "exact approved file set"):
             self.generate()

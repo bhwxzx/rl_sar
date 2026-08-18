@@ -226,8 +226,8 @@ std::vector<float> RL::ComputeObservation()
         }
         else if (observation == "ang_vel")
         {
-            // Legacy Gazebo integrations may report angular velocity in the world frame.
-            // Current Gazebo, MuJoCo, and real-robot paths use the body frame.
+            // Maintained LW simulation and real-robot paths use the body frame.
+            // Keep the world-frame conversion for compatible external adapters.
             if (this->ang_vel_axis == "body")
             {
                 obs_list.push_back(this->obs.ang_vel * this->params.Get<float>("ang_vel_scale"));

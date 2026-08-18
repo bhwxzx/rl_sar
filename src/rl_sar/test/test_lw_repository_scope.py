@@ -22,8 +22,15 @@ REMOVED_ROBOTS = {
 
 ROS2_PACKAGE_DIRECTORIES = (
     "src/rl_sar",
+)
+
+RETIRED_GAZEBO_PATHS = (
     "src/robot_joint_controller",
     "src/robot_msgs",
+    "src/rl_sar/include/rl_sim.hpp",
+    "src/rl_sar/src/rl_sim.cpp",
+    "src/rl_sar/launch/gazebo.launch.py",
+    "src/rl_sar/worlds",
 )
 
 
@@ -144,19 +151,17 @@ def main() -> int:
                     f"legacy manifest remains: {relative_directory}/{legacy_manifest}",
                     errors)
 
-    require(not (root / "src/robot_joint_controller/ros").exists(),
-            "ROS 1 controller sources are still present", errors)
-    require(not (root / "src/rl_sar/launch/gazebo.launch").exists(),
-            "ROS 1 Gazebo launch file is still present", errors)
+    for relative_path in RETIRED_GAZEBO_PATHS:
+        require(
+            not (root / relative_path).exists(),
+            f"retired Gazebo path is present: {relative_path}",
+            errors,
+        )
 
     ros2_only_files = [
         root / "build.sh",
         root / "src/fdilink_ahrs_ROS2/CMakeLists.txt",
         root / "src/rl_sar/CMakeLists.txt",
-        root / "src/rl_sar/include/rl_sim.hpp",
-        root / "src/rl_sar/src/rl_sim.cpp",
-        root / "src/robot_joint_controller/CMakeLists.txt",
-        root / "src/robot_msgs/CMakeLists.txt",
     ]
     legacy_ros_pattern = re.compile(
         r"\b(?:catkin|noetic|USE_ROS1|package\.ros1\.xml|package\.ros2\.xml)\b",
