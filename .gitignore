@@ -33,6 +33,7 @@ MUJOCO_LOG.TXT
 .cache
 *.json
 !scripts/inference_runtime_archives.json
+!scripts/mujoco_archives.json
 
 # temp
 *.zip

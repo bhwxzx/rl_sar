@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "archives": [
+    {
+      "version": "3.2.7",
+      "os": "Linux",
+      "architecture": "x86_64",
+      "archive_name": "mujoco-3.2.7-linux-x86_64.tar.gz",
+      "archive_format": "tgz",
+      "root_directory": "mujoco-3.2.7",
+      "url": "https://github.com/google-deepmind/mujoco/releases/download/3.2.7/mujoco-3.2.7-linux-x86_64.tar.gz",
+      "sha256": "520a65fbb0b75cac5245cc07526840545c01faa354f18c623a5e62b36571ed61",
+      "required_files": [
+        "include/mujoco/mujoco.h",
+        "lib/libmujoco.so.3.2.7",
+        "bin/simulate"
+      ]
+    },
+    {
+      "version": "3.2.7",
+      "os": "Linux",
+      "architecture": "aarch64",
+      "archive_name": "mujoco-3.2.7-linux-aarch64.tar.gz",
+      "archive_format": "tgz",
+      "root_directory": "mujoco-3.2.7",
+      "url": "https://github.com/google-deepmind/mujoco/releases/download/3.2.7/mujoco-3.2.7-linux-aarch64.tar.gz",
+      "sha256": "3ef2e82658aa6b81ae7ceeb01ed6e8ef4c1ac6d2a45fd5c93aaaf2ec49025998",
+      "required_files": [
+        "include/mujoco/mujoco.h",
+        "lib/libmujoco.so.3.2.7",
+        "bin/simulate"
+      ]
+    },
+    {
+      "version": "3.2.7",
+      "os": "Windows",
+      "architecture": "x86_64",
+      "archive_name": "mujoco-3.2.7-windows-x86_64.zip",
+      "archive_format": "zip",
+      "root_directory": ".",
+      "url": "https://github.com/google-deepmind/mujoco/releases/download/3.2.7/mujoco-3.2.7-windows-x86_64.zip",
+      "sha256": "dba33636fce9f7fe91be3d7b0c462ecfad605533b19f7538fc7ad820dde29e38",
+      "required_files": [
+        "include/mujoco/mujoco.h",
+        "bin/mujoco.dll",
+        "lib/mujoco.lib",
+        "bin/simulate.exe"
+      ]
+    },
+    {
+      "version": "3.2.7",
+      "os": "Darwin",
+      "architecture": "x86_64",
+      "archive_name": "mujoco-3.2.7-macos-universal2.dmg",
+      "archive_format": "dmg",
+      "root_directory": "MuJoCo.app/Contents/Frameworks/MuJoCo.framework",
+      "url": "https://github.com/google-deepmind/mujoco/releases/download/3.2.7/mujoco-3.2.7-macos-universal2.dmg",
+      "sha256": "57458727426eadd1ab54476566b0335bf55c07dc48069c8ca5ad09b86151089e",
+      "required_files": [
+        "Headers/mujoco.h",
+        "Versions/Current/libmujoco.3.2.7.dylib"
+      ]
+    },
+    {
+      "version": "3.2.7",
+      "os": "Darwin",
+      "architecture": "aarch64",
+      "archive_name": "mujoco-3.2.7-macos-universal2.dmg",
+      "archive_format": "dmg",
+      "root_directory": "MuJoCo.app/Contents/Frameworks/MuJoCo.framework",
+      "url": "https://github.com/google-deepmind/mujoco/releases/download/3.2.7/mujoco-3.2.7-macos-universal2.dmg",
+      "sha256": "57458727426eadd1ab54476566b0335bf55c07dc48069c8ca5ad09b86151089e",
+      "required_files": [
+        "Headers/mujoco.h",
+        "Versions/Current/libmujoco.3.2.7.dylib"
+      ]
+    }
+  ]
+}

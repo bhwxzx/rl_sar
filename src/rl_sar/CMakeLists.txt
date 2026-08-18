@@ -696,6 +696,14 @@ if(BUILD_TESTING)
                     ${PROJECT_ROOT_DIR}/scripts/validate_inference_runtime.sh
                     ${PROJECT_ROOT_DIR}/scripts/inference_runtime_archives.json
         )
+        add_test(
+            NAME lw_mujoco_download_integrity
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_mujoco_download_integrity.py
+                    ${PROJECT_ROOT_DIR}/scripts/manage_mujoco.py
+                    ${PROJECT_ROOT_DIR}/scripts/mujoco_archives.json
+                    ${PROJECT_ROOT_DIR}/scripts/download_mujoco.sh
+        )
         add_executable(
             test_lw_terminal_keyboard
             test/test_lw_terminal_keyboard.cpp

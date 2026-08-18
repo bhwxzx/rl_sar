@@ -124,7 +124,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 12 | LW-048 | P1 / high | resolved | Bind installed ONNX Runtime library bytes to the approved archive |
 | 13 | LW-049 | P2 / medium | resolved | Make retained Gazebo controllers bounded, URDF-ready, and allocation-stable |
 | 14 | LW-050 | P2 / medium | resolved | Unify the ONNX dynamic-batch contract and cached tensor resources |
-| 15 | LW-051 | P2 / medium | pending | Make MuJoCo downloads digest-pinned and installation atomic |
+| 15 | LW-051 | P2 / medium | resolved | Make MuJoCo downloads digest-pinned and installation atomic |
 | 16 | LW-052 | P2 / low | pending | Harden generic rl_sim joystick bounds and temporary-file lifecycle |
 | 17 | LW-053 | P2 / low | pending | Cache the rl_sim_LW debug message layout |
 | 18 | LW-024 | P1 / high | resolved | Make the Sim2Sim physics-thread lifecycle bounded and joinable |
@@ -4172,7 +4172,7 @@ or behave inconsistently at inference time.
 ## [LW-051] Make MuJoCo downloads digest-pinned and installation atomic
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: none
 
 ### Problem
@@ -4218,6 +4218,34 @@ development dependency or install unapproved bytes.
   candidates are rejected.
 - Offline fixture tests cover success, tamper, interruption/rollback, and
   concurrency; Bash syntax, relevant build tests, and `git diff --check` pass.
+
+### Resolution
+
+- **Resolved**: 2026-08-18T18:36:12+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 为 MuJoCo 3.2.7 的 Linux x86_64、Linux aarch64、
+  Windows x86_64 和 macOS universal2 官方资产固定精确名称、URL、归档格式、
+  根布局、必需文件和 SHA-256。下载脚本改为清单驱动的薄包装器；独立管理器
+  在解压前校验摘要，使用调用专属候选目录，拒绝路径穿越、绝对路径、链接
+  逃逸、特殊或重复条目及模糊根布局，并在同文件系统内通过安装锁、唯一备份、
+  原子重命名和失败回滚切换最终目录。保留版本、平台范围、`library/mujoco`
+  布局、`VERSION_NUMBER`、macOS install-name/签名处理和 CMake 发现方式。
+- **Changed Files**: `.gitignore`、`scripts/mujoco_archives.json`、
+  `scripts/manage_mujoco.py`、`scripts/download_mujoco.sh`、
+  `src/rl_sar/test/test_mujoco_download_integrity.py`、
+  `src/rl_sar/CMakeLists.txt` 和本记录。
+- **Verification**: 从 Google DeepMind 官方 GitHub Release 下载全部四个不同
+  资产并二次计算 SHA-256，结果与清单一致；使用真实归档在 `/tmp` 中完成
+  Linux x86_64、Linux aarch64 和 Windows x86_64 安装及来源检查，macOS DMG
+  在 Linux 上仅验证官方字节和目录项，未尝试挂载。Python 3.10 与 3.13 的
+  离线完整性测试均为 15/15，通过合法安装、Windows 反斜杠布局、篡改和平台
+  错配、下载失败、路径穿越、绝对路径、链接逃逸、多根目录、不完整候选、
+  最终重命名回滚、并发锁及危险目标符号链接覆盖。Bash、Python 和 JSON
+  语法检查通过；`scripts/validate_lw_strict_build.sh` 严格构建全部维护目标并
+  通过完整 47/47 CTest，`git diff --check` 通过。现有 `library/mujoco` 未安装、
+  替换或删除，未启动 MuJoCo GUI、ROS 节点或访问硬件，用户未跟踪技能目录
+  保持未修改。
+- **Remaining Follow-ups**: LW-052, LW-053
 
 ---
 
