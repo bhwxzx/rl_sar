@@ -190,12 +190,39 @@ void ahrsBringup::handleValidatedFrame(const ValidatedFrame& frame)
   switch (frame.type)
   {
     case TYPE_IMU:
-      if (!decodeImuPayload(frame, imu_payload_))
+    {
+      ImuPayload candidate;
+      if (!decodeImuPayload(frame, candidate))
       {
         throw std::runtime_error("validated FDILink IMU payload did not decode");
       }
       updateSequence(frame.serial_number);
+      const ImuPayloadValidation validation = validateImuPayload(candidate);
+      if (!validation.motion_valid)
+      {
+        has_valid_imu_ = false;
+        has_valid_magnetic_ = false;
+        reportSemanticRejection(frame.type, "non-finite IMU motion");
+        break;
+      }
+
+      imu_payload_ = candidate;
       has_valid_imu_ = true;
+      if (validation.magnetic_valid)
+      {
+        magnetic_field_ = {{
+            candidate.magnetometer_x,
+            candidate.magnetometer_y,
+            candidate.magnetometer_z,
+        }};
+        has_valid_magnetic_ = true;
+      }
+      else
+      {
+        has_valid_magnetic_ = false;
+        reportSemanticRejection(frame.type, "non-finite magnetic field");
+      }
+
       if (has_valid_ahrs_)
       {
         publishImuFrame();
@@ -207,34 +234,86 @@ void ahrsBringup::handleValidatedFrame(const ValidatedFrame& frame)
             "Ignoring IMU frame until a complete AHRS frame is available");
       }
       break;
+    }
     case TYPE_AHRS:
-      if (!decodeAhrsPayload(frame, ahrs_payload_))
+    {
+      AhrsPayload candidate;
+      if (!decodeAhrsPayload(frame, candidate))
       {
         throw std::runtime_error("validated FDILink AHRS payload did not decode");
       }
       updateSequence(frame.serial_number);
+      const AhrsPayloadValidationStatus validation =
+          validateAhrsPayload(candidate);
+      if (validation != AhrsPayloadValidationStatus::Valid)
+      {
+        has_valid_ahrs_ = false;
+        reportSemanticRejection(
+            frame.type,
+            validation == AhrsPayloadValidationStatus::NonFinite
+                ? "non-finite AHRS orientation"
+                : "AHRS quaternion norm out of range");
+        break;
+      }
+
+      ahrs_payload_ = candidate;
       has_valid_ahrs_ = true;
       publishAhrsFrame();
       break;
+    }
     case TYPE_INSGPS:
-      if (!decodeInsGpsPayload(frame, insgps_payload_))
+    {
+      InsGpsPayload candidate;
+      if (!decodeInsGpsPayload(frame, candidate))
       {
         throw std::runtime_error(
             "validated FDILink INSGPS payload did not decode");
       }
       updateSequence(frame.serial_number);
+      if (validateInsGpsPayload(candidate)
+          != InsGpsPayloadValidationStatus::Valid)
+      {
+        reportSemanticRejection(frame.type, "non-finite INSGPS output");
+        break;
+      }
+
+      insgps_payload_ = candidate;
       publishInsGpsFrame();
       break;
+    }
     case TYPE_GEODETIC_POS:
+    {
+      GeodeticPositionPayload candidate;
       if (!decodeGeodeticPositionPayload(
-          frame, geodetic_position_payload_))
+          frame, candidate))
       {
         throw std::runtime_error(
             "validated FDILink geodetic-position payload did not decode");
       }
       updateSequence(frame.serial_number);
+      const GeodeticPayloadValidationStatus validation =
+          validateGeodeticPositionPayload(candidate);
+      if (validation != GeodeticPayloadValidationStatus::Valid)
+      {
+        const char* reason = "non-finite geodetic position";
+        if (validation == GeodeticPayloadValidationStatus::LatitudeOutOfRange)
+        {
+          reason = "geodetic latitude out of range";
+        }
+        else if (
+            validation
+            == GeodeticPayloadValidationStatus::LongitudeOutOfRange)
+        {
+          reason = "geodetic longitude out of range";
+        }
+        reportSemanticRejection(frame.type, reason);
+        break;
+      }
+
+      geodetic_position_payload_ = candidate;
       publishGeodeticPositionFrame();
       break;
+    }
     case TYPE_GROUND:
     case TYPE_GROUND_EXTENDED:
       updateSequence(frame.serial_number);
@@ -306,12 +385,12 @@ void ahrsBringup::publishAhrsFrame()
   euler_angles.z = ahrs_payload_.heading;
   Euler_angles_pub_->publish(euler_angles);
 
-  if (has_valid_imu_)
+  if (has_valid_magnetic_)
   {
     geometry_msgs::msg::Vector3 magnetic;
-    magnetic.x = imu_payload_.magnetometer_x;
-    magnetic.y = imu_payload_.magnetometer_y;
-    magnetic.z = imu_payload_.magnetometer_z;
+    magnetic.x = magnetic_field_[0];
+    magnetic.y = magnetic_field_[1];
+    magnetic.z = magnetic_field_[2];
     Magnetic_pub_->publish(magnetic);
   }
 }
@@ -363,6 +442,17 @@ void ahrsBringup::magCalculateYaw(
   {
     magyaw += 2 * PI;
   }
+}
+
+void ahrsBringup::reportSemanticRejection(
+    std::uint8_t type, const char* reason)
+{
+  ++semantic_error_;
+  RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "Rejected semantically invalid FDILink frame 0x%02x (%s); total=%llu",
+      static_cast<unsigned int>(type), reason,
+      static_cast<unsigned long long>(semantic_error_));
 }
 
 void ahrsBringup::updateSequence(std::uint8_t serial_number)

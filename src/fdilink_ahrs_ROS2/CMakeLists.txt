@@ -58,6 +58,7 @@ add_library(fdilink_protocol STATIC
   src/crc_table.cpp
   src/fdilink_frame_parser.cpp
   src/fdilink_payload_decoder.cpp
+  src/fdilink_payload_validation.cpp
 )
 target_include_directories(fdilink_protocol PUBLIC include)
 
@@ -79,6 +80,11 @@ if(BUILD_TESTING)
     test/test_fdilink_payload_decoder.cpp
   )
   target_link_libraries(test_fdilink_payload_decoder fdilink_protocol)
+
+  ament_add_gtest(test_fdilink_payload_validation
+    test/test_fdilink_payload_validation.cpp
+  )
+  target_link_libraries(test_fdilink_payload_validation fdilink_protocol)
 
   add_test(
     NAME fdilink_process_lifecycle

@@ -3,6 +3,7 @@
 
 
 #include <inttypes.h>
+#include <array>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
 #include <tf2_ros/transform_broadcaster.h>
@@ -13,6 +14,7 @@
 #include <fstream>
 #include <fdilink_frame_parser.h>
 #include <fdilink_payload_decoder.h>
+#include <fdilink_payload_validation.h>
 //#include <sensor_msgs/Imu.h>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
@@ -47,6 +49,7 @@ public:
 
 private:
   void handleValidatedFrame(const ValidatedFrame& frame);
+  void reportSemanticRejection(std::uint8_t type, const char* reason);
   void updateSequence(std::uint8_t serial_number);
   void publishImuFrame();
   void publishAhrsFrame();
@@ -57,6 +60,7 @@ private:
   //sum info
   int sn_lost_ = 0;
   int crc_error_ = 0;
+  std::uint64_t semantic_error_ = 0;
   uint8_t read_sn_ = 0;
   bool first_sequence_received_ = false;
   int device_type_ = 1;
@@ -68,10 +72,12 @@ private:
   FrameParser frame_parser_;
   //data
   ImuPayload imu_payload_{};
+  std::array<float, 3> magnetic_field_{};
   AhrsPayload ahrs_payload_{};
   InsGpsPayload insgps_payload_{};
   GeodeticPositionPayload geodetic_position_payload_{};
   bool has_valid_imu_ = false;
+  bool has_valid_magnetic_ = false;
   bool has_valid_ahrs_ = false;
   //frame name
   //std::string imu_frame_id="gyro_link";
