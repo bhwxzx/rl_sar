@@ -164,9 +164,9 @@ void RL::StateController(
     RobotCommand<float>* command,
     bool apply_keyboard_velocity)
 {
-    auto updateState = [&](std::shared_ptr<FSMState> statePtr)
+    auto updateState = [&](FSMState* state_node)
     {
-        if (auto rl_fsm_state = std::dynamic_pointer_cast<RLFSMState>(statePtr))
+        if (auto* rl_fsm_state = dynamic_cast<RLFSMState*>(state_node))
         {
             rl_fsm_state->fsm_state = state;
             rl_fsm_state->fsm_command = command;
@@ -174,7 +174,7 @@ void RL::StateController(
     };
     for (auto& pair : fsm.states_)
     {
-        updateState(pair.second);
+        updateState(pair.second.get());
     }
 
     fsm.Run();
@@ -810,17 +810,31 @@ void RL::PublishLWMotionReference(
 void RL::PublishCurrentLWMotionReference(
     std::uint64_t generation)
 {
-    if (!this->motion_loader_lw)
+    const LWPolicyActivation* activation = LoadLWPolicyActivation();
+    if (!this->motion_loader_lw
+        || !activation
+        || generation != activation->generation)
     {
         return;
     }
-    PublishLWMotionReference(
-        LWMotionReferenceSnapshot{
-            generation,
-            this->motion_loader_lw->GetJointPos(),
-            this->motion_loader_lw->GetJointVel(),
-            this->motion_loader_lw->GetAnchorQuat(),
-            this->motion_loader_lw->GetInitQuat()});
+    LWMotionReferenceSnapshot& reference =
+        lw_motion_reference_.producerBuffer();
+    reference.generation = generation;
+    this->motion_loader_lw->WriteJointPos(reference.joint_pos);
+    this->motion_loader_lw->WriteJointVel(reference.joint_vel);
+    this->motion_loader_lw->WriteAnchorQuat(reference.anchor_quat);
+    const std::vector<float>& init_quat =
+        this->motion_loader_lw->GetInitQuat();
+    if (init_quat.size() != reference.init_quat.size())
+    {
+        throw std::runtime_error(
+            "LW motion initial quaternion has the wrong size");
+    }
+    std::copy(
+        init_quat.begin(),
+        init_quat.end(),
+        reference.init_quat.begin());
+    lw_motion_reference_.publishProducerBuffer();
 }
 
 const LWMotionReferenceSnapshot*

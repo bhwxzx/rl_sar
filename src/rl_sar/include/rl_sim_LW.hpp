@@ -134,6 +134,7 @@ private:
     };
     LWSimPlotConfiguration plot_configuration_;
     std::unique_ptr<LWSnapshotBuffer<SimDebugSnapshot>> plot_snapshot_;
+    std::unique_ptr<SimDebugSnapshot> plot_write_snapshot_;
     std::unique_ptr<SimDebugSnapshot> plot_read_snapshot_;
     std::unique_ptr<LWSimDebugMessageCache> plot_message_cache_;
     SimDebugMuJoCoCache plot_mujoco_cache_;

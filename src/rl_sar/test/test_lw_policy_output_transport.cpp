@@ -45,7 +45,7 @@ public:
     void Enter() override {}
     void Run() override {}
     void Exit() override {}
-    std::string CheckChange() override
+    std::string_view CheckChange() override
     {
         return state_name_;
     }

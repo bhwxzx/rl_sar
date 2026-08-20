@@ -1,7 +1,9 @@
-#include "rl_sdk.hpp"
+#include "fsm_LW.hpp"
+#include "lw_runtime_core.hpp"
 
 #include <atomic>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <new>
 #include <stdexcept>
@@ -72,13 +74,18 @@ public:
         return {};
     }
 
-    void GetState(RobotState<float>*) override
+    void GetState(RobotState<float>* state) override
     {
+        *state = source_state;
     }
 
     void SetCommand(const RobotCommand<float>*) override
     {
+        ++commands_delivered;
     }
+
+    RobotState<float> source_state;
+    std::uint64_t commands_delivered = 0;
 };
 
 class AllocationTestState : public RLFSMState
@@ -95,6 +102,15 @@ public:
 
     void Run() override
     {
+        for (std::size_t index = 0; index < kNumDofs; ++index)
+        {
+            fsm_command->motor_command.q[index] =
+                fsm_state->motor_state.q[index];
+            fsm_command->motor_command.dq[index] = 0.0f;
+            fsm_command->motor_command.tau[index] = 0.0f;
+            fsm_command->motor_command.kp[index] = 20.0f;
+            fsm_command->motor_command.kd[index] = 0.5f;
+        }
     }
 
     void Exit() override
@@ -173,6 +189,146 @@ void testSteadyStateConfigurationAndStateTransportDoNotAllocate()
         allocation_count.load(std::memory_order_relaxed) == 0,
         "configuration or policy-input transport allocated after warmup");
 }
+
+void initializeValidState(AllocationTestRL& rl)
+{
+    rl.InitJointNum(kNumDofs);
+    rl.source_state.motor_state.resize(kNumDofs);
+    rl.source_state.imu.quaternion = {1.0f, 0.0f, 0.0f, 0.0f};
+    rl.source_state.imu.gyroscope = {0.0f, 0.0f, 0.0f};
+    for (std::size_t index = 0; index < kNumDofs; ++index)
+    {
+        rl.source_state.motor_state.q[index] =
+            0.01f * static_cast<float>(index);
+        rl.source_state.motor_state.dq[index] = 0.0f;
+        rl.source_state.motor_state.tau_est[index] = 0.0f;
+    }
+    rl.robot_state = rl.source_state;
+}
+
+void testWarmedCompleteControlCycleDoesNotAllocate()
+{
+    AllocationTestRL rl;
+    rl.SetLWBaseRuntimeConfiguration(makeBaseConfiguration());
+    initializeValidState(rl);
+    const auto state = std::make_shared<AllocationTestState>(rl);
+    rl.fsm.AddState(state);
+    rl.fsm.SetInitialState("AllocationTestState");
+
+    LWRuntimeCore core;
+    core.bind(rl, {});
+    core.publishInitialPolicyInput();
+    std::uint64_t hook_calls = 0;
+    auto run_cycle = [&]()
+    {
+        core.runControlCycle(
+            LWControlCycleHooks{
+                [&]() { ++hook_calls; },
+                [&]() { ++hook_calls; },
+                []() { return true; },
+                []() { return true; },
+                [&]() { ++hook_calls; },
+                [&]() { ++hook_calls; }});
+    };
+    run_cycle();
+
+    allocation_count.store(0, std::memory_order_relaxed);
+    count_allocations.store(true, std::memory_order_release);
+    for (std::size_t iteration = 0; iteration < 10000; ++iteration)
+    {
+        run_cycle();
+    }
+    count_allocations.store(false, std::memory_order_release);
+
+    require(
+        rl.commands_delivered == 10001,
+        "complete control cycle did not deliver every command");
+    require(
+        hook_calls == 4 * 10001,
+        "complete control cycle did not invoke every adapter hook");
+    require(
+        allocation_count.load(std::memory_order_relaxed) == 0,
+        "warmed complete control cycle allocated");
+}
+
+void prepareTransitionPolicies(AllocationTestRL& rl)
+{
+    const std::filesystem::path policy_root =
+        std::filesystem::canonical(POLICY_DIR);
+    rl.SetPolicyRoot(policy_root);
+    rl.robot_name = "LW";
+    rl.ReadYaml("LW", "base.yaml");
+    rl.SetLWBaseRuntimeConfiguration(
+        ValidateLWBaseConfiguration(
+            rl.params.config_node,
+            (policy_root / "LW/base.yaml").string()));
+    initializeValidState(rl);
+    for (const std::string policy : {
+             "LW/robot_lab/leg_to_wheel",
+             "LW/robot_lab/wheel_to_leg"})
+    {
+        rl.PreloadModel(policy);
+        rl.PreloadLWPolicyContext(policy);
+    }
+}
+
+template <typename TransitionState>
+void requireWarmedTransitionRunDoesNotAllocate(
+    AllocationTestRL& rl,
+    const std::string& policy)
+{
+    TransitionState state(&rl);
+    state.fsm_state = &rl.robot_state;
+    state.fsm_command = &rl.robot_command;
+    state.Enter();
+    const LWPolicyActivation* activation = rl.LoadLWPolicyActivation();
+    require(
+        activation && activation->definition
+            && activation->definition->path == policy,
+        "transition did not activate the expected policy");
+
+    const auto source_time = std::chrono::steady_clock::now();
+    LWPolicyOutputFrame output;
+    output.generation = activation->generation;
+    output.frame = 1;
+    output.source_input_sequence = 1;
+    output.source_state_time = source_time;
+    output.dof_pos.assign(kNumDofs, 0.0f);
+    output.dof_vel.assign(kNumDofs, 0.0f);
+    output.dof_tau.assign(kNumDofs, 0.0f);
+    require(
+        rl.PublishLWPolicyOutput(output, *activation),
+        "transition output warmup publication failed");
+    rl.PublishLWPolicyProgress(activation->generation, 1);
+    state.Run();
+
+    allocation_count.store(0, std::memory_order_relaxed);
+    count_allocations.store(true, std::memory_order_release);
+    for (std::size_t iteration = 0; iteration < 100; ++iteration)
+    {
+        state.Run();
+    }
+    count_allocations.store(false, std::memory_order_release);
+
+    require(
+        allocation_count.load(std::memory_order_relaxed) == 0,
+        policy + " transition Run allocated after warmup");
+    state.Exit();
+}
+
+void testWarmedTransitionRunsDoNotAllocate()
+{
+    AllocationTestRL rl;
+    prepareTransitionPolicies(rl);
+    requireWarmedTransitionRunDoesNotAllocate<
+        LW_fsm::RLFSMStateRL_LegToWheel>(
+        rl,
+        "LW/robot_lab/leg_to_wheel");
+    requireWarmedTransitionRunDoesNotAllocate<
+        LW_fsm::RLFSMStateRL_WheelToLeg>(
+        rl,
+        "LW/robot_lab/wheel_to_leg");
+}
 } // namespace
 
 int main()
@@ -180,6 +336,8 @@ int main()
     try
     {
         testSteadyStateConfigurationAndStateTransportDoNotAllocate();
+        testWarmedCompleteControlCycleDoesNotAllocate();
+        testWarmedTransitionRunsDoNotAllocate();
     }
     catch (const std::exception& exception)
     {

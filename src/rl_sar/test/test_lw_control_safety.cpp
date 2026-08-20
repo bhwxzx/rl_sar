@@ -58,7 +58,10 @@ void testFeedbackFiniteValidation()
     state.imu.quaternion[2] = std::numeric_limits<float>::quiet_NaN();
     auto result = LWValidateFeedbackState(state, kNumDofs);
     require(result.code == LWValidationCode::NonFinite, "IMU NaN was accepted");
-    require(result.field == "imu.quaternion" && result.index == 2, "IMU NaN location was lost");
+    require(
+        result.field == LWValidationField::ImuQuaternion
+            && result.index == 2,
+        "IMU NaN location was lost");
 
     state = makeValidState();
     state.imu.gyroscope[1] = std::numeric_limits<float>::infinity();
@@ -110,7 +113,10 @@ void testPolicyFiniteValidationWithoutRangeChecks()
     const auto result =
         LWValidatePolicyOutputs(positions, velocities, torques, kNumDofs);
     require(result.code == LWValidationCode::NonFinite, "policy torque infinity was accepted");
-    require(result.field == "policy.output_tau" && result.index == 7, "policy output location was lost");
+    require(
+        result.field == LWValidationField::PolicyOutputTorque
+            && result.index == 7,
+        "policy output location was lost");
 }
 
 void testCommandFiniteAndNegativeGainValidation()
@@ -134,7 +140,10 @@ void testCommandFiniteAndNegativeGainValidation()
     command.motor_command.kp[6] = -0.01f;
     auto result = LWValidateRobotCommand(command, kNumDofs);
     require(result.code == LWValidationCode::NegativeGain, "negative Kp was accepted");
-    require(result.field == "command.kp" && result.index == 6, "negative Kp location was lost");
+    require(
+        result.field == LWValidationField::CommandKp
+            && result.index == 6,
+        "negative Kp location was lost");
 
     command = makeValidCommand();
     command.motor_command.kd[7] = -0.01f;

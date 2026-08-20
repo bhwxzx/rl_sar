@@ -74,11 +74,17 @@ public:
      */
     std::vector<float> GetJointPos() const;
 
+    /** Fill a pre-sized joint-position buffer without allocating. */
+    void WriteJointPos(std::vector<float>& result) const;
+
     /**
      * @brief Get interpolated joint velocities at current time
      * @return Joint velocities vector
      */
     std::vector<float> GetJointVel() const;
+
+    /** Fill a pre-sized joint-velocity buffer without allocating. */
+    void WriteJointVel(std::vector<float>& result) const;
 
     /**
      * @brief Get interpolated root quaternion at current time
@@ -86,11 +92,17 @@ public:
      */
     std::vector<float> GetRootQuat() const;
 
+    /** Fill a four-element root-quaternion buffer without allocating. */
+    void WriteRootQuat(std::vector<float>& result) const;
+
     /**
      * @brief Get anchor (torso) quaternion at current time
      * @return Anchor quaternion [w, x, y, z]
      */
     std::vector<float> GetAnchorQuat() const;
+
+    /** Fill a four-element anchor-quaternion buffer without allocating. */
+    void WriteAnchorQuat(std::vector<float>& result) const;
 
     /**
      * @brief Get motion duration in seconds
@@ -100,7 +112,10 @@ public:
     /**
      * @brief Get world to init transformation quaternion (yaw alignment)
      */
-    std::vector<float> GetInitQuat() const { return world_to_init_; }
+    const std::vector<float>& GetInitQuat() const noexcept
+    {
+        return world_to_init_;
+    }
 
     /**
      * @brief Compute torso quaternion from base quaternion
@@ -125,7 +140,11 @@ private:
      * @param t Interpolation parameter [0, 1]
      * @return Interpolated quaternion [w, x, y, z]
      */
-    std::vector<float> Slerp(const std::vector<float>& q0, const std::vector<float>& q1, float t) const;
+    void WriteSlerp(
+        const std::vector<float>& q0,
+        const std::vector<float>& q1,
+        float t,
+        std::vector<float>& result) const;
 
     PreparedMotionPtr prepared_motion_;
 

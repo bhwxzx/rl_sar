@@ -34,7 +34,7 @@ public:
     void Enter() override {}
     void Run() override {}
     void Exit() override {}
-    std::string CheckChange() override
+    std::string_view CheckChange() override
     {
         return next_;
     }
@@ -333,10 +333,11 @@ void requireKnownTarget(
     const std::unordered_set<std::string>& registered_names,
     const std::string& context)
 {
-    const std::string target = state->CheckChange();
+    const std::string_view target = state->CheckChange();
+    const std::string target_string(target);
     require(
-        registered_names.count(target) == 1,
-        context + " returned unregistered state " + target);
+        registered_names.count(target_string) == 1,
+        context + " returned unregistered state " + target_string);
 }
 
 struct TransitionCase
@@ -473,14 +474,16 @@ void testAcceptedTransitionTable(
         }
         rl.control.current_keyboard = transition.keyboard;
         rl.control.current_gamepad = transition.gamepad;
-        const std::string actual = state->CheckChange();
+        const std::string_view actual = state->CheckChange();
+        const std::string actual_string(actual);
         require(
             actual == transition.expected,
-            std::string(transition.state) + " returned " + actual
+            std::string(transition.state) + " returned " + actual_string
                 + " instead of " + transition.expected);
         require(
-            registered_names.count(actual) == 1,
-            std::string(transition.state) + " returned unregistered target " + actual);
+            registered_names.count(actual_string) == 1,
+            std::string(transition.state)
+                + " returned unregistered target " + actual_string);
     }
 }
 

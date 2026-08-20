@@ -183,7 +183,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 53 | LW-043 | P2 / medium | resolved | Retire the Sim2Sim actuator-model runtime while preserving offline training |
 | 54 | LW-054 | P1 / high | resolved | Preload morphology-transition motion assets before control workers |
 | 55 | LW-055 | P1 / high | resolved | Remove blocking synchronization from the real control deadline path |
-| 56 | LW-056 | P2 / medium | pending | Make the maintained complete control cycle allocation-stable |
+| 56 | LW-056 | P2 / medium | resolved | Make the maintained complete control cycle allocation-stable |
 | 57 | LW-057 | P2 / medium | pending | Validate the MuJoCo control adapter layout and test actual safety actions |
 
 ---
@@ -4607,7 +4607,7 @@ control-side read returns within a fixed bound.
 ## [LW-056] Make the maintained complete control cycle allocation-stable
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-038, LW-054, LW-055
 
 ### Problem
@@ -4656,6 +4656,54 @@ regress without any test observing allocations in the actual control flow.
   decisions remain behaviorally equivalent.
 - Whole-cycle allocation tests, transition tests, strict and sanitizer builds,
   and `git diff --check` pass without accessing hardware or opening a GUI.
+
+### Resolution Evidence
+
+- Resolved: 2026-08-20
+- Successful command and feedback validation now walks fixed stack descriptors
+  and records compact field identities. Human-readable diagnostic strings are
+  produced only on the exceptional rejection path. FSM transition requests use
+  non-owning string views and compare against retained state names without
+  constructing per-cycle strings.
+- Transition motion loaders fill pre-sized joint, velocity, root-quaternion,
+  and anchor-quaternion buffers in place. The control-owned motion-reference
+  producer slot is populated and published directly, avoiding temporary
+  vectors and shared-owner construction while preserving interpolation,
+  quaternion normalization, generation, and source-sequence behavior.
+- The retained MuJoCo adapter's state, command, and joystick hot paths now use
+  the startup-validated typed base configuration for DOF count, joint mapping,
+  wheel mask, torque limits, gait command, and velocity scales. The optional
+  plot callback also fills a retained pre-sized snapshot rather than rebuilding
+  vector-backed snapshots. LW-057's sensor/actuator-layout validation remains
+  deliberately unchanged.
+- The allocation regression now executes 10,000 warmed complete control cycles,
+  including the production runtime-core orchestration and hook aggregate, and
+  reports zero project-owned allocations. It also preloads the real
+  `leg_to_wheel` and `wheel_to_leg` policies and repeatedly executes both actual
+  transition-state `Run()` paths with zero allocations. Motion-loader tests
+  verify that every pre-sized fill API remains numerically equivalent to the
+  value-returning compatibility API and rejects incorrectly sized buffers.
+- The maintained Debug build and a fresh `LW_STRICT_WARNINGS=ON` build both
+  completed, including `rl_real_LW` and `rl_sim_LW`; both complete 48/48 CTest
+  suites passed. The allocation-bound, FSM-transition, runtime-parity, and
+  motion-loader tests then each passed 20 consecutive runs (80 runs total).
+  The MuJoCo lifecycle source checks passed 11/11 and Python compilation passed.
+- A fresh AddressSanitizer/UndefinedBehaviorSanitizer build of the four targeted
+  tests completed. Runtime execution was not usable as a sanitizer verdict:
+  repeated runs could nondeterministically enter a recursive
+  `AddressSanitizer:DEADLYSIGNAL` loop, including the motion-loader test that
+  does not load ONNX. Disabling ASan's signal interception exposed intermittent
+  raw SIGSEGV instead of a valid report. The affected executables mix the
+  system sanitizer runtimes with Conda Python/libstdc++ through the project's
+  global Python linkage and RPATH, so no sanitizer runtime pass or project-code
+  finding is claimed; the same tests passed in the complete Debug and strict
+  suites. Targeted `cppcheck` reported only deliberate lightweight
+  `std::string_view` by-value advisories and pre-existing
+  `CSVInit`/test-fixture performance suggestions. `git diff --check` passed.
+- No ROS node, MuJoCo GUI, serial device, IMU, joystick, real robot, or motor was
+  started. The user-owned untracked compaction-inspection skill directory was
+  preserved unchanged.
+- **Remaining Follow-ups**: LW-057
 
 ---
 

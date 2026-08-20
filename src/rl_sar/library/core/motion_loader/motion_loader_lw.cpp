@@ -327,8 +327,18 @@ void MotionLoaderLW::Reset(const std::vector<float>& robot_base_quat)
 
 std::vector<float> MotionLoaderLW::GetJointPos() const
 {
-    std::vector<float> result;
-    result.reserve(prepared_motion_->num_joints);
+    std::vector<float> result(prepared_motion_->num_joints);
+    WriteJointPos(result);
+    return result;
+}
+
+void MotionLoaderLW::WriteJointPos(std::vector<float>& result) const
+{
+    if (result.size() != prepared_motion_->num_joints)
+    {
+        throw std::invalid_argument(
+            "LW joint-position output has the wrong size");
+    }
     const auto& pos0 = prepared_motion_->joint_positions[index_0_];
     const auto& pos1 = prepared_motion_->joint_positions[index_1_];
 
@@ -336,17 +346,26 @@ std::vector<float> MotionLoaderLW::GetJointPos() const
          joint < prepared_motion_->num_joints;
          ++joint)
     {
-        result.push_back(
+        result[joint] =
             pos0[joint] * (1.0f - blend_)
-            + pos1[joint] * blend_);
+            + pos1[joint] * blend_;
     }
-    return result;
 }
 
 std::vector<float> MotionLoaderLW::GetJointVel() const
 {
-    std::vector<float> result;
-    result.reserve(prepared_motion_->num_joints);
+    std::vector<float> result(prepared_motion_->num_joints);
+    WriteJointVel(result);
+    return result;
+}
+
+void MotionLoaderLW::WriteJointVel(std::vector<float>& result) const
+{
+    if (result.size() != prepared_motion_->num_joints)
+    {
+        throw std::invalid_argument(
+            "LW joint-velocity output has the wrong size");
+    }
     const auto& vel0 = prepared_motion_->joint_velocities[index_0_];
     const auto& vel1 = prepared_motion_->joint_velocities[index_1_];
 
@@ -354,19 +373,26 @@ std::vector<float> MotionLoaderLW::GetJointVel() const
          joint < prepared_motion_->num_joints;
          ++joint)
     {
-        result.push_back(
+        result[joint] =
             vel0[joint] * (1.0f - blend_)
-            + vel1[joint] * blend_);
+            + vel1[joint] * blend_;
     }
-    return result;
 }
 
 std::vector<float> MotionLoaderLW::GetRootQuat() const
 {
-    return Slerp(
+    std::vector<float> result(4);
+    WriteRootQuat(result);
+    return result;
+}
+
+void MotionLoaderLW::WriteRootQuat(std::vector<float>& result) const
+{
+    WriteSlerp(
         prepared_motion_->root_quaternions[index_0_],
         prepared_motion_->root_quaternions[index_1_],
-        blend_);
+        blend_,
+        result);
 }
 
 std::vector<float> MotionLoaderLW::ComputeTorsoQuat(
@@ -389,41 +415,90 @@ std::vector<float> MotionLoaderLW::ComputeYawAlignment(
 
 std::vector<float> MotionLoaderLW::GetAnchorQuat() const
 {
-    return ComputeTorsoQuat(GetRootQuat());
+    std::vector<float> result(4);
+    WriteAnchorQuat(result);
+    return result;
 }
 
-std::vector<float> MotionLoaderLW::Slerp(
+void MotionLoaderLW::WriteAnchorQuat(std::vector<float>& result) const
+{
+    WriteRootQuat(result);
+    const float norm = std::sqrt(
+        result[0] * result[0]
+        + result[1] * result[1]
+        + result[2] * result[2]
+        + result[3] * result[3]);
+    if (norm < 1e-8f)
+    {
+        result[0] = 1.0f;
+        result[1] = 0.0f;
+        result[2] = 0.0f;
+        result[3] = 0.0f;
+        return;
+    }
+    for (float& value : result)
+    {
+        value /= norm;
+    }
+}
+
+void MotionLoaderLW::WriteSlerp(
     const std::vector<float>& q0,
     const std::vector<float>& q1,
-    float t) const
+    float t,
+    std::vector<float>& result) const
 {
+    if (q0.size() != 4 || q1.size() != 4 || result.size() != 4)
+    {
+        throw std::invalid_argument(
+            "LW quaternion interpolation requires four-element buffers");
+    }
     float dot = q0[0] * q1[0] + q0[1] * q1[1]
         + q0[2] * q1[2] + q0[3] * q1[3];
 
-    std::vector<float> q1_adjusted = q1;
+    float q1_sign = 1.0f;
     if (dot < 0.0f)
     {
-        q1_adjusted = {-q1[0], -q1[1], -q1[2], -q1[3]};
+        q1_sign = -1.0f;
         dot = -dot;
     }
 
     if (dot > 0.9995f)
     {
-        return QuaternionNormalize({
-            q0[0] + t * (q1_adjusted[0] - q0[0]),
-            q0[1] + t * (q1_adjusted[1] - q0[1]),
-            q0[2] + t * (q1_adjusted[2] - q0[2]),
-            q0[3] + t * (q1_adjusted[3] - q0[3])});
+        for (std::size_t index = 0; index < 4; ++index)
+        {
+            const float adjusted = q1_sign * q1[index];
+            result[index] = q0[index] + t * (adjusted - q0[index]);
+        }
+    }
+    else
+    {
+        const float theta = std::acos(std::clamp(dot, -1.0f, 1.0f));
+        const float sin_theta = std::sin(theta);
+        const float weight_0 = std::sin((1.0f - t) * theta) / sin_theta;
+        const float weight_1 = std::sin(t * theta) / sin_theta;
+        for (std::size_t index = 0; index < 4; ++index)
+        {
+            result[index] = q0[index] * weight_0
+                + q1_sign * q1[index] * weight_1;
+        }
     }
 
-    const float theta = std::acos(std::clamp(dot, -1.0f, 1.0f));
-    const float sin_theta = std::sin(theta);
-    const float weight_0 = std::sin((1.0f - t) * theta) / sin_theta;
-    const float weight_1 = std::sin(t * theta) / sin_theta;
-
-    return QuaternionNormalize({
-        q0[0] * weight_0 + q1_adjusted[0] * weight_1,
-        q0[1] * weight_0 + q1_adjusted[1] * weight_1,
-        q0[2] * weight_0 + q1_adjusted[2] * weight_1,
-        q0[3] * weight_0 + q1_adjusted[3] * weight_1});
+    const float norm = std::sqrt(
+        result[0] * result[0]
+        + result[1] * result[1]
+        + result[2] * result[2]
+        + result[3] * result[3]);
+    if (norm < 1e-8f)
+    {
+        result[0] = 1.0f;
+        result[1] = 0.0f;
+        result[2] = 0.0f;
+        result[3] = 0.0f;
+        return;
+    }
+    for (float& value : result)
+    {
+        value /= norm;
+    }
 }

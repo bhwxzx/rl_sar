@@ -574,9 +574,15 @@ public:
         if (!upper.empty() && !lower.empty())
         {
             const LWValidationResult upper_result =
-                LWValidateFiniteVector("clip_actions_upper", upper, num_dofs);
+                LWValidateFiniteVector(
+                    LWValidationField::ClipActionsUpper,
+                    upper,
+                    num_dofs);
             const LWValidationResult lower_result =
-                LWValidateFiniteVector("clip_actions_lower", lower, num_dofs);
+                LWValidateFiniteVector(
+                    LWValidationField::ClipActionsLower,
+                    lower,
+                    num_dofs);
             if (!upper_result.valid() || !lower_result.valid())
             {
                 const LWValidationResult& clip_result =

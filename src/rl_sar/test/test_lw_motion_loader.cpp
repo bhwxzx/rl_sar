@@ -203,6 +203,49 @@ void testPreparedMotionSurvivesSourceRemoval(const Fixture& fixture)
         "prepared motion must not be null");
 }
 
+void testPreallocatedReferenceFillMatchesValueGetters(const Fixture& fixture)
+{
+    const fs::path file = fixture.write(
+        "preallocated.csv", kRowA + kRowB + kRowC);
+    MotionLoaderLW loader(file.string(), 10.0f, 1, 2);
+    loader.Reset({1.0f, 0.0f, 0.0f, 0.0f});
+    loader.Update(0.15f);
+
+    std::vector<float> joint_pos(2);
+    std::vector<float> joint_vel(2);
+    std::vector<float> root_quat(4);
+    std::vector<float> anchor_quat(4);
+    loader.WriteJointPos(joint_pos);
+    loader.WriteJointVel(joint_vel);
+    loader.WriteRootQuat(root_quat);
+    loader.WriteAnchorQuat(anchor_quat);
+
+    requireVectorNear(joint_pos, loader.GetJointPos(), "preallocated q");
+    requireVectorNear(joint_vel, loader.GetJointVel(), "preallocated dq");
+    requireVectorNear(root_quat, loader.GetRootQuat(), "preallocated root quat");
+    requireVectorNear(
+        anchor_quat,
+        loader.GetAnchorQuat(),
+        "preallocated anchor quat");
+    requireVectorNear(
+        loader.GetInitQuat(),
+        {1.0f, 0.0f, 0.0f, 0.0f},
+        "retained initial quaternion");
+
+    requireFailure(
+        [&]() {
+            std::vector<float> wrong(1);
+            loader.WriteJointPos(wrong);
+        },
+        "joint-position output has the wrong size");
+    requireFailure(
+        [&]() {
+            std::vector<float> wrong(3);
+            loader.WriteAnchorQuat(wrong);
+        },
+        "four-element buffers");
+}
+
 void testConstructorAndCSVValidation(const Fixture& fixture)
 {
     const fs::path valid = fixture.write("valid.csv", kRowA + kRowB);
@@ -293,6 +336,7 @@ int main()
         testOffsetZeroSupportsFutureCSV(fixture);
         testManyFrameTimestamps(fixture);
         testPreparedMotionSurvivesSourceRemoval(fixture);
+        testPreallocatedReferenceFillMatchesValueGetters(fixture);
         testConstructorAndCSVValidation(fixture);
     }
     catch (const std::exception& exception)

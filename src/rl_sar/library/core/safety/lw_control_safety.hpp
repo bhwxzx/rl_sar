@@ -4,12 +4,13 @@
 #include "rl_sdk.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <limits>
 #include <sstream>
 #include <string>
-#include <utility>
+#include <string_view>
 #include <vector>
 
 enum class LWValidationCode
@@ -20,10 +21,74 @@ enum class LWValidationCode
     NegativeGain
 };
 
+enum class LWValidationField
+{
+    None,
+    ImuQuaternion,
+    ImuGyroscope,
+    MotorPosition,
+    MotorVelocity,
+    MotorTorqueEstimate,
+    PolicyAction,
+    PolicyOutputPosition,
+    PolicyOutputVelocity,
+    PolicyOutputTorque,
+    CommandPosition,
+    CommandVelocity,
+    CommandTorque,
+    CommandKp,
+    CommandKd,
+    ClipActionsUpper,
+    ClipActionsLower
+};
+
+inline constexpr std::string_view LWValidationFieldName(
+    LWValidationField field) noexcept
+{
+    switch (field)
+    {
+        case LWValidationField::ImuQuaternion:
+            return "imu.quaternion";
+        case LWValidationField::ImuGyroscope:
+            return "imu.gyroscope";
+        case LWValidationField::MotorPosition:
+            return "motor.q";
+        case LWValidationField::MotorVelocity:
+            return "motor.dq";
+        case LWValidationField::MotorTorqueEstimate:
+            return "motor.tau_est";
+        case LWValidationField::PolicyAction:
+            return "policy.action";
+        case LWValidationField::PolicyOutputPosition:
+            return "policy.output_q";
+        case LWValidationField::PolicyOutputVelocity:
+            return "policy.output_dq";
+        case LWValidationField::PolicyOutputTorque:
+            return "policy.output_tau";
+        case LWValidationField::CommandPosition:
+            return "command.q";
+        case LWValidationField::CommandVelocity:
+            return "command.dq";
+        case LWValidationField::CommandTorque:
+            return "command.tau";
+        case LWValidationField::CommandKp:
+            return "command.kp";
+        case LWValidationField::CommandKd:
+            return "command.kd";
+        case LWValidationField::ClipActionsUpper:
+            return "clip_actions_upper";
+        case LWValidationField::ClipActionsLower:
+            return "clip_actions_lower";
+        case LWValidationField::None:
+            return {};
+    }
+    return {};
+}
+
 struct LWValidationResult
 {
     LWValidationCode code = LWValidationCode::Valid;
-    std::string field;
+    LWValidationField field = LWValidationField::None;
     size_t index = 0;
     size_t expected_size = 0;
     size_t actual_size = 0;
@@ -39,23 +104,26 @@ struct LWValidationResult
         std::ostringstream stream;
         if (code == LWValidationCode::SizeMismatch)
         {
-            stream << field << " size=" << actual_size
+            stream << LWValidationFieldName(field)
+                   << " size=" << actual_size
                    << ", expected=" << expected_size;
         }
         else if (code == LWValidationCode::NonFinite)
         {
-            stream << field << "[" << index << "] is not finite: " << value;
+            stream << LWValidationFieldName(field)
+                   << "[" << index << "] is not finite: " << value;
         }
         else if (code == LWValidationCode::NegativeGain)
         {
-            stream << field << "[" << index << "] is negative: " << value;
+            stream << LWValidationFieldName(field)
+                   << "[" << index << "] is negative: " << value;
         }
         return stream.str();
     }
 };
 
 inline LWValidationResult LWValidateFiniteVector(
-    const std::string& field,
+    LWValidationField field,
     const std::vector<float>& values,
     size_t expected_size)
 {
@@ -88,28 +156,29 @@ inline LWValidationResult LWValidateFeedbackState(
     const RobotState<float>& state,
     size_t num_dofs)
 {
-    const std::vector<std::pair<std::string, const std::vector<float>*>> fields = {
-        {"imu.quaternion", &state.imu.quaternion},
-        {"imu.gyroscope", &state.imu.gyroscope},
-        {"motor.q", &state.motor_state.q},
-        {"motor.dq", &state.motor_state.dq},
-        {"motor.tau_est", &state.motor_state.tau_est},
+    struct FieldDescriptor
+    {
+        LWValidationField field;
+        const std::vector<float>* values;
+        size_t expected_size;
     };
-    const std::vector<size_t> expected_sizes = {
-        4,
-        3,
-        num_dofs,
-        num_dofs,
-        num_dofs,
-    };
+    const std::array<FieldDescriptor, 5> fields{{
+        {LWValidationField::ImuQuaternion, &state.imu.quaternion, 4},
+        {LWValidationField::ImuGyroscope, &state.imu.gyroscope, 3},
+        {LWValidationField::MotorPosition, &state.motor_state.q, num_dofs},
+        {LWValidationField::MotorVelocity, &state.motor_state.dq, num_dofs},
+        {LWValidationField::MotorTorqueEstimate,
+         &state.motor_state.tau_est,
+         num_dofs},
+    }};
 
-    for (size_t index = 0; index < fields.size(); ++index)
+    for (const FieldDescriptor& field : fields)
     {
         const LWValidationResult result =
             LWValidateFiniteVector(
-                fields[index].first,
-                *fields[index].second,
-                expected_sizes[index]);
+                field.field,
+                *field.values,
+                field.expected_size);
         if (!result.valid())
         {
             return result;
@@ -122,7 +191,10 @@ inline LWValidationResult LWValidatePolicyActions(
     const std::vector<float>& actions,
     size_t num_dofs)
 {
-    return LWValidateFiniteVector("policy.action", actions, num_dofs);
+    return LWValidateFiniteVector(
+        LWValidationField::PolicyAction,
+        actions,
+        num_dofs);
 }
 
 inline LWValidationResult LWValidatePolicyOutputs(
@@ -132,38 +204,52 @@ inline LWValidationResult LWValidatePolicyOutputs(
     size_t num_dofs)
 {
     const LWValidationResult position_result =
-        LWValidateFiniteVector("policy.output_q", positions, num_dofs);
+        LWValidateFiniteVector(
+            LWValidationField::PolicyOutputPosition,
+            positions,
+            num_dofs);
     if (!position_result.valid())
     {
         return position_result;
     }
 
     const LWValidationResult velocity_result =
-        LWValidateFiniteVector("policy.output_dq", velocities, num_dofs);
+        LWValidateFiniteVector(
+            LWValidationField::PolicyOutputVelocity,
+            velocities,
+            num_dofs);
     if (!velocity_result.valid())
     {
         return velocity_result;
     }
 
-    return LWValidateFiniteVector("policy.output_tau", torques, num_dofs);
+    return LWValidateFiniteVector(
+        LWValidationField::PolicyOutputTorque,
+        torques,
+        num_dofs);
 }
 
 inline LWValidationResult LWValidateRobotCommand(
     const RobotCommand<float>& command,
     size_t num_dofs)
 {
-    const std::vector<std::pair<std::string, const std::vector<float>*>> fields = {
-        {"command.q", &command.motor_command.q},
-        {"command.dq", &command.motor_command.dq},
-        {"command.tau", &command.motor_command.tau},
-        {"command.kp", &command.motor_command.kp},
-        {"command.kd", &command.motor_command.kd},
+    struct FieldDescriptor
+    {
+        LWValidationField field;
+        const std::vector<float>* values;
     };
+    const std::array<FieldDescriptor, 5> fields{{
+        {LWValidationField::CommandPosition, &command.motor_command.q},
+        {LWValidationField::CommandVelocity, &command.motor_command.dq},
+        {LWValidationField::CommandTorque, &command.motor_command.tau},
+        {LWValidationField::CommandKp, &command.motor_command.kp},
+        {LWValidationField::CommandKd, &command.motor_command.kd},
+    }};
 
-    for (const auto& field : fields)
+    for (const FieldDescriptor& field : fields)
     {
         const LWValidationResult result =
-            LWValidateFiniteVector(field.first, *field.second, num_dofs);
+            LWValidateFiniteVector(field.field, *field.values, num_dofs);
         if (!result.valid())
         {
             return result;
@@ -176,7 +262,7 @@ inline LWValidationResult LWValidateRobotCommand(
         {
             LWValidationResult result;
             result.code = LWValidationCode::NegativeGain;
-            result.field = "command.kp";
+            result.field = LWValidationField::CommandKp;
             result.index = index;
             result.value = command.motor_command.kp[index];
             return result;
@@ -185,7 +271,7 @@ inline LWValidationResult LWValidateRobotCommand(
         {
             LWValidationResult result;
             result.code = LWValidationCode::NegativeGain;
-            result.field = "command.kd";
+            result.field = LWValidationField::CommandKd;
             result.index = index;
             result.value = command.motor_command.kd[index];
             return result;

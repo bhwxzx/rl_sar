@@ -107,6 +107,7 @@ RL_Real::RL_Real(int argc, char **argv)
         ValidateLWBaseConfiguration(
             this->params.config_node,
             this->ResolvePolicyPath(this->robot_name + "/base.yaml")));
+    const auto& runtime_configuration = GetLWBaseRuntimeConfiguration();
 
     // 提前加载所有的模型到内存
     this->PreloadModel(this->robot_name + "/robot_lab/leg_loco");
@@ -118,9 +119,9 @@ RL_Real::RL_Real(int argc, char **argv)
     this->PreloadLWPolicyContext(this->robot_name + "/robot_lab/leg_to_wheel");
     this->PreloadLWPolicyContext(this->robot_name + "/robot_lab/wheel_to_leg");
 
-    const int num_dofs = this->params.Get<int>("num_of_dofs");
-    mujoco_tau_candidates_.assign(static_cast<std::size_t>(num_dofs), 0.0f);
-    mujoco_tau_bounded_.assign(static_cast<std::size_t>(num_dofs), 0.0f);
+    const std::size_t num_dofs = runtime_configuration.num_dofs;
+    mujoco_tau_candidates_.assign(num_dofs, 0.0f);
+    mujoco_tau_bounded_.assign(num_dofs, 0.0f);
 
     // auto load FSM by robot_name
     if (FSMManager::GetInstance().IsTypeSupported(this->robot_name))
@@ -138,19 +139,23 @@ RL_Real::RL_Real(int argc, char **argv)
 
     // init robot
     this->lw_sdk.InitCmdData(this->lw_low_command);
-    this->InitJointNum(this->params.Get<int>("num_of_dofs"));
+    this->InitJointNum(num_dofs);
     this->InitOutputs();
     this->InitControl();
-    this->control.gait_frequency = this->params.Get<std::vector<float>>("gait_command")[0];
+    this->control.gait_frequency = runtime_configuration.gait_command[0];
     this->gait_phase_time = 0.0f;
     runtime_core_.publishInitialPolicyInput();
 
     if (plot_configuration_.enabled)
     {
-        const auto& runtime_configuration = GetLWBaseRuntimeConfiguration();
         plot_snapshot_ =
             std::make_unique<LWSnapshotBuffer<SimDebugSnapshot>>();
+        plot_write_snapshot_ = std::make_unique<SimDebugSnapshot>();
         plot_read_snapshot_ = std::make_unique<SimDebugSnapshot>();
+        plot_write_snapshot_->robot_state.motor_state.resize(
+            static_cast<std::size_t>(runtime_configuration.num_dofs));
+        plot_write_snapshot_->robot_command.motor_command.resize(
+            static_cast<std::size_t>(runtime_configuration.num_dofs));
         plot_read_snapshot_->robot_state.motor_state.resize(
             static_cast<std::size_t>(runtime_configuration.num_dofs));
         plot_read_snapshot_->robot_command.motor_command.resize(
@@ -598,14 +603,14 @@ void RL_Real::RobotControl()
     {
         hooks.after_command_delivery = [this]()
         {
-            plot_snapshot_->publish(
-                SimDebugSnapshot{
-                    robot_state,
-                    robot_command,
-                    {control.x,
-                     control.y,
-                     control.yaw,
-                     control.gait_frequency}});
+            plot_write_snapshot_->robot_state = robot_state;
+            plot_write_snapshot_->robot_command = robot_command;
+            plot_write_snapshot_->control = {
+                control.x,
+                control.y,
+                control.yaw,
+                control.gait_frequency};
+            plot_snapshot_->publish(*plot_write_snapshot_);
         };
     }
     runtime_core_.runControlCycle(hooks);
@@ -750,21 +755,30 @@ void RL_Real::GetState(RobotState<float> *state)
     RefreshMuJoCoPointersLocked();
     if (mj_data)
     {
+        const auto& runtime_configuration =
+            GetLWBaseRuntimeConfiguration();
+        const std::size_t num_dofs = runtime_configuration.num_dofs;
+        const auto& joint_mapping = runtime_configuration.joint_mapping;
+        const std::size_t imu_offset = 3 * num_dofs;
         // xml的sensor顺序为： jointpos jointvel jointtorque quat gyro accmeter
-        state->imu.quaternion[0] = mj_data->sensordata[3 * this->params.Get<int>("num_of_dofs") + 0];
-        state->imu.quaternion[1] = mj_data->sensordata[3 * this->params.Get<int>("num_of_dofs") + 1];
-        state->imu.quaternion[2] = mj_data->sensordata[3 * this->params.Get<int>("num_of_dofs") + 2];
-        state->imu.quaternion[3] = mj_data->sensordata[3 * this->params.Get<int>("num_of_dofs") + 3];
+        state->imu.quaternion[0] = mj_data->sensordata[imu_offset + 0];
+        state->imu.quaternion[1] = mj_data->sensordata[imu_offset + 1];
+        state->imu.quaternion[2] = mj_data->sensordata[imu_offset + 2];
+        state->imu.quaternion[3] = mj_data->sensordata[imu_offset + 3];
 
-        state->imu.gyroscope[0] = mj_data->sensordata[3 * this->params.Get<int>("num_of_dofs") + 4];
-        state->imu.gyroscope[1] = mj_data->sensordata[3 * this->params.Get<int>("num_of_dofs") + 5];
-        state->imu.gyroscope[2] = mj_data->sensordata[3 * this->params.Get<int>("num_of_dofs") + 6];
+        state->imu.gyroscope[0] = mj_data->sensordata[imu_offset + 4];
+        state->imu.gyroscope[1] = mj_data->sensordata[imu_offset + 5];
+        state->imu.gyroscope[2] = mj_data->sensordata[imu_offset + 6];
 
-        for (int i = 0; i < this->params.Get<int>("num_of_dofs"); ++i)
+        for (std::size_t i = 0; i < num_dofs; ++i)
         {
-            state->motor_state.q[i] = mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i]];
-            state->motor_state.dq[i] = mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i] + this->params.Get<int>("num_of_dofs")];
-            state->motor_state.tau_est[i] = mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i] + 2 * this->params.Get<int>("num_of_dofs")];
+            const std::size_t sensor_index =
+                static_cast<std::size_t>(joint_mapping[i]);
+            state->motor_state.q[i] = mj_data->sensordata[sensor_index];
+            state->motor_state.dq[i] =
+                mj_data->sensordata[sensor_index + num_dofs];
+            state->motor_state.tau_est[i] =
+                mj_data->sensordata[sensor_index + 2 * num_dofs];
         }
     }
 
@@ -779,27 +793,20 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
             "[Safety] Null LW command");
         return;
     }
-    auto joint_mapping = this->params.Get<std::vector<int>>("joint_mapping");
-    auto wheel_indices = this->params.Get<std::vector<int>>("wheel_indices");
-    auto torque_limits = this->params.Get<std::vector<float>>("torque_limits");
-    int num_dofs = this->params.Get<int>("num_of_dofs");
+    const auto& runtime_configuration = GetLWBaseRuntimeConfiguration();
+    const auto& joint_mapping = runtime_configuration.joint_mapping;
+    const auto& wheel_mask = runtime_configuration.wheel_mask;
+    const auto& torque_limits = runtime_configuration.torque_limits;
+    const std::size_t num_dofs = runtime_configuration.num_dofs;
 
-    for (int i = 0; i < num_dofs; ++i)
+    for (std::size_t i = 0; i < num_dofs; ++i)
     {
-        int motor_id = joint_mapping[i];
+        const int motor_id = joint_mapping[i];
         
         this->lw_low_command.motorCmd[motor_id].Kp = command->motor_command.kp[i];
         this->lw_low_command.motorCmd[motor_id].Kd = command->motor_command.kd[i];
 
-        bool is_wheel = false;
-        for (int k : wheel_indices) {
-            if (i == k) {
-                is_wheel = true;
-                break;
-            }
-        }
-
-        if (is_wheel) {
+        if (wheel_mask[i] != 0U) {
 
             this->lw_low_command.motorCmd[motor_id].action_set = command->motor_command.dq[i];
 
@@ -822,7 +829,7 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
                 "[Safety] MuJoCo command sink is unavailable");
             return;
         }
-        for (int i = 0; i < num_dofs; ++i)
+        for (std::size_t i = 0; i < num_dofs; ++i)
         {
             mujoco_tau_candidates_[i] = command->motor_command.tau[i]
                 + command->motor_command.kp[i]
@@ -848,7 +855,7 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
             return;
         }
 
-        for (int i = 0; i < num_dofs; ++i)
+        for (std::size_t i = 0; i < num_dofs; ++i)
         {
             mj_data->ctrl[joint_mapping[i]] = mujoco_tau_bounded_[i];
         }
@@ -1015,9 +1022,11 @@ void RL_Real::GetSysJoystick()
     if (this->sys_js_button[6].pressed && this->sys_js_button[7].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_RB);
 
     // 通过sys_js_max_value将各项指令归一化
-    float ly = (-float(this->sys_js_axis[1]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[0];
-    float lx = (-float(this->sys_js_axis[0]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[1];
-    float rx = (-float(this->sys_js_axis[2]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[2];
+    const auto& velocity_limits =
+        GetLWBaseRuntimeConfiguration().vel_command;
+    float ly = (-float(this->sys_js_axis[1]) / float(this->sys_js_max_value)) * velocity_limits[0];
+    float lx = (-float(this->sys_js_axis[0]) / float(this->sys_js_max_value)) * velocity_limits[1];
+    float rx = (-float(this->sys_js_axis[2]) / float(this->sys_js_max_value)) * velocity_limits[2];
 
 #endif
 
@@ -1062,9 +1071,11 @@ void RL_Real::GetSysJoystick()
     // float lx = -float(this->sys_js_axis[0]) / float(this->sys_js_max_value);
     // float rx = -float(this->sys_js_axis[3]) / float(this->sys_js_max_value);
 
-    float ly = (-float(this->sys_js_axis[1]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[0];
-    float lx = (-float(this->sys_js_axis[0]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[1];
-    float rx = (-float(this->sys_js_axis[3]) / float(this->sys_js_max_value)) * this->params.Get<std::vector<float>>("vel_command")[2];
+    const auto& velocity_limits =
+        GetLWBaseRuntimeConfiguration().vel_command;
+    float ly = (-float(this->sys_js_axis[1]) / float(this->sys_js_max_value)) * velocity_limits[0];
+    float lx = (-float(this->sys_js_axis[0]) / float(this->sys_js_max_value)) * velocity_limits[1];
+    float rx = (-float(this->sys_js_axis[3]) / float(this->sys_js_max_value)) * velocity_limits[2];
 #endif
 
     bool has_input = (ly != 0.0f || lx != 0.0f || rx != 0.0f);

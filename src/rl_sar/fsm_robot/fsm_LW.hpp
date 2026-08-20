@@ -45,7 +45,7 @@ public:
 
     void Exit() override {}
 
-    std::string CheckChange() override
+    std::string_view CheckChange() override
     {
         if (rl.control.current_keyboard == Input::Keyboard::Num0 || rl.control.current_gamepad == Input::Gamepad::A)
         {
@@ -108,7 +108,7 @@ public:
 
     void Exit() override {}
 
-    std::string CheckChange() override
+    std::string_view CheckChange() override
     {
         if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
         {
@@ -181,7 +181,7 @@ public:
 
     void Exit() override {}
 
-    std::string CheckChange() override
+    std::string_view CheckChange() override
     {
         if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
         {
@@ -234,7 +234,7 @@ public:
 
     void Exit() override {}
 
-    std::string CheckChange() override
+    std::string_view CheckChange() override
     {
         if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X || percent_getdown >= 1.0f)
         {
@@ -303,7 +303,7 @@ public:
         rl.DeactivateLWPolicy();
     }
 
-    std::string CheckChange() override
+    std::string_view CheckChange() override
     {
         if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
         {
@@ -376,7 +376,7 @@ public:
         rl.DeactivateLWPolicy();
     }
 
-    std::string CheckChange() override
+    std::string_view CheckChange() override
     {
         if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
         {
@@ -497,7 +497,7 @@ public:
         rl.motion_loader_lw = nullptr;
     }
 
-    std::string CheckChange() override
+    std::string_view CheckChange() override
     {
         if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
         {
@@ -610,7 +610,7 @@ public:
         rl.motion_loader_lw = nullptr;
     }
 
-    std::string CheckChange() override
+    std::string_view CheckChange() override
     {
         if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
         {

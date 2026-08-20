@@ -3,6 +3,7 @@
 
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <memory>
 #include <vector>
@@ -17,7 +18,7 @@ public:
     virtual void Enter() = 0;
     virtual void Run() = 0;
     virtual void Exit() = 0;
-    virtual std::string CheckChange() { return state_name_; }
+    virtual std::string_view CheckChange() { return state_name_; }
 
     const std::string &GetStateName() const { return state_name_; }
 
@@ -43,17 +44,19 @@ public:
         std::cout << LOGGER::INFO << "[FSM] Set initial state: " << name << std::endl;
     }
 
-    void RequestStateChange(const std::string& state_name)
+    void RequestStateChange(std::string_view state_name)
     {
-        if (states_.find(state_name) == states_.end())
+        const std::shared_ptr<FSMState>* requested = FindState(state_name);
+        if (!requested)
         {
             std::cout << LOGGER::ERROR << "[FSM] State '" << state_name << "' not found!" << std::endl;
             return;
         }
 
-        if (current_state_ && current_state_->GetStateName() != state_name)
+        if (current_state_
+            && std::string_view(current_state_->GetStateName()) != state_name)
         {
-            next_state_ = states_.at(state_name);
+            next_state_ = *requested;
             mode_ = Mode::CHANGE;
             std::cout << std::endl << LOGGER::INFO << "[FSM] Request switch from " << current_state_->GetStateName() << " to " << next_state_->GetStateName() << std::endl;
         }
@@ -67,11 +70,11 @@ public:
         if (mode_ == Mode::NORMAL)
         {
             current_state_->Run();
-            std::string next = current_state_->CheckChange();
-            if (next != current_state_->GetStateName())
+            const std::string_view next = current_state_->CheckChange();
+            if (next != std::string_view(current_state_->GetStateName()))
             {
-                const auto next_state = states_.find(next);
-                if (next_state == states_.end())
+                const std::shared_ptr<FSMState>* next_state = FindState(next);
+                if (!next_state)
                 {
                     std::cout << std::endl
                               << LOGGER::ERROR
@@ -83,7 +86,7 @@ public:
                 }
 
                 mode_ = Mode::CHANGE;
-                next_state_ = next_state->second;
+                next_state_ = *next_state;
                 std::cout << std::endl << LOGGER::NOTE << "[FSM] Switch from " << current_state_->GetStateName() << " to " << next_state_->GetStateName() << std::endl;
             }
         }
@@ -111,6 +114,19 @@ public:
         NORMAL,
         CHANGE
     };
+
+    const std::shared_ptr<FSMState>* FindState(
+        std::string_view state_name) const noexcept
+    {
+        for (const auto& entry : states_)
+        {
+            if (std::string_view(entry.first) == state_name)
+            {
+                return &entry.second;
+            }
+        }
+        return nullptr;
+    }
 
     std::unordered_map<std::string, std::shared_ptr<FSMState>> states_;
     std::shared_ptr<FSMState> current_state_;

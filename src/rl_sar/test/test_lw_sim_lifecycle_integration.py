@@ -180,6 +180,10 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
             header,
         )
         self.assertIn(
+            "std::unique_ptr<SimDebugSnapshot> plot_write_snapshot_",
+            header,
+        )
+        self.assertIn(
             "plot_configuration_(ParseLWSimPlotConfiguration(argc, argv))",
             constructor,
         )
@@ -201,7 +205,10 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
 
         self.assertIn("if (plot_snapshot_)", control)
         self.assertIn("hooks.after_command_delivery =", control)
-        self.assertIn("plot_snapshot_->publish(", control)
+        self.assertIn("plot_write_snapshot_->robot_state = robot_state", control)
+        self.assertIn("plot_write_snapshot_->robot_command = robot_command", control)
+        self.assertIn("plot_snapshot_->publish(*plot_write_snapshot_)", control)
+        self.assertNotIn("SimDebugSnapshot{", control)
         self.assertNotIn("debug_snapshot_", source)
 
         self.assertIn("plot_snapshot_->read(*plot_read_snapshot_)", callback)
@@ -243,6 +250,33 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
             command[prepare:first_write],
         )
         self.assertNotIn("mj_data->ctrl[", command[:prepare])
+
+    def test_mujoco_hot_paths_use_validated_runtime_configuration(self) -> None:
+        source = SIM_SOURCE.read_text(encoding="utf-8")
+        state = source[
+            source.index("void RL_Real::GetState(") : source.index(
+                "void RL_Real::SetCommand("
+            )
+        ]
+        command = source[
+            source.index("void RL_Real::SetCommand(") : source.index(
+                "void RL_Real::SetupSysJoystick("
+            )
+        ]
+        joystick = source[
+            source.index("void RL_Real::GetSysJoystick()") : source.index(
+                "int main("
+            )
+        ]
+
+        for hot_path in (state, command, joystick):
+            self.assertNotIn("params.Get", hot_path)
+            self.assertIn("GetLWBaseRuntimeConfiguration()", hot_path)
+        self.assertIn("runtime_configuration.joint_mapping", state)
+        self.assertIn("runtime_configuration.joint_mapping", command)
+        self.assertIn("runtime_configuration.wheel_mask", command)
+        self.assertIn("runtime_configuration.torque_limits", command)
+        self.assertIn("GetLWBaseRuntimeConfiguration().vel_command", joystick)
 
 
 if __name__ == "__main__":
