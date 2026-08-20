@@ -6,6 +6,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SIM_SOURCE = ROOT / "src" / "rl_sim_LW.cpp"
+REAL_SOURCE = ROOT / "src" / "rl_real_LW.cpp"
 SIM_HEADER = ROOT / "include" / "rl_sim_LW.hpp"
 SIM_DEBUG_HEADER = (
     ROOT / "library" / "core" / "simulation" / "lw_sim_debug_message.hpp"
@@ -50,6 +51,113 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
         self.assertIn("LWMuJoCoControlAdapter", constructor)
         self.assertIn("runtime_configuration.joint_names", constructor)
         self.assertIn("runtime_configuration.joint_mapping", constructor)
+
+    def test_real_and_sim_finish_fallible_setup_before_worker_start(self) -> None:
+        constructors = {}
+        for name, path in (("real", REAL_SOURCE), ("sim", SIM_SOURCE)):
+            source = path.read_text(encoding="utf-8")
+            constructors[name] = source[
+                source.index("RL_Real::RL_Real(") : source.index(
+                    "RL_Real::~RL_Real()"
+                )
+            ]
+
+        setup_markers = {
+            "real": (
+                "runtime_diagnostics_timer_ = ros2_node->create_wall_timer(",
+                "LWDebugPublisher::CreateIfEnabled(",
+                "this->CSVInit(this->robot_name);",
+                "startup_disable_->handOffToRuntime(",
+            ),
+            "sim": (
+                "operator_status_timer_ = ros2_node->create_wall_timer(",
+                "jointstate_plot_publisher_ =",
+                "plot_timer_ = ros2_node->create_wall_timer(",
+                "this->CSVInit(this->robot_name);",
+            ),
+        }
+
+        for name, constructor in constructors.items():
+            starts = [
+                constructor.index("this->loop_joystick->start();"),
+                constructor.index("this->loop_rl->start();"),
+                constructor.index("this->loop_control->start();"),
+            ]
+            self.assertEqual(
+                starts,
+                sorted(starts),
+                f"{name} worker startup order drifted",
+            )
+            first_start = starts[0]
+            for marker in setup_markers[name]:
+                marker_position = constructor.index(marker)
+                self.assertLess(
+                    marker_position,
+                    first_start,
+                    f"{name} performs fallible setup after worker startup: {marker}",
+                )
+
+            startup_tail = constructor[first_start:]
+            for marker in (
+                "create_wall_timer(",
+                "create_publisher<",
+                "CreateIfEnabled(",
+                "CSVInit(",
+            ):
+                self.assertNotIn(
+                    marker,
+                    startup_tail,
+                    f"{name} added fallible resource setup after worker startup",
+                )
+
+            shutdowns = [
+                startup_tail.index("this->loop_control->shutdown();"),
+                startup_tail.index("this->loop_rl->shutdown();"),
+                startup_tail.index("this->loop_joystick->shutdown();"),
+            ]
+            self.assertEqual(
+                shutdowns,
+                sorted(shutdowns),
+                f"{name} startup rollback order drifted",
+            )
+
+    def test_real_and_sim_join_workers_before_backend_shutdown(self) -> None:
+        real_source = REAL_SOURCE.read_text(encoding="utf-8")
+        sim_source = SIM_SOURCE.read_text(encoding="utf-8")
+        real_destructor = real_source[
+            real_source.index("RL_Real::~RL_Real()") : real_source.index(
+                "void RL_Real::RuntimeDiagnosticsCallback()"
+            )
+        ]
+        sim_destructor = sim_source[
+            sim_source.index("RL_Real::~RL_Real()") : sim_source.index(
+                "void RL_Real::RequestSimulationStop()"
+            )
+        ]
+
+        for name, destructor in (
+            ("real", real_destructor),
+            ("sim", sim_destructor),
+        ):
+            shutdowns = [
+                destructor.index("this->loop_control->shutdown();"),
+                destructor.index("this->loop_rl->shutdown();"),
+                destructor.index("this->loop_joystick->shutdown();"),
+            ]
+            self.assertEqual(
+                shutdowns,
+                sorted(shutdowns),
+                f"{name} destructor worker shutdown order drifted",
+            )
+
+        self.assertLess(
+            real_destructor.index("this->loop_joystick->shutdown();"),
+            real_destructor.index("startup_disable_->finalize();"),
+        )
+        self.assertLess(
+            sim_destructor.index("this->loop_joystick->shutdown();"),
+            sim_destructor.index("physics_lifecycle_->Stop();"),
+        )
 
     def test_destructor_joins_physics_after_business_workers(self) -> None:
         source = SIM_SOURCE.read_text(encoding="utf-8")

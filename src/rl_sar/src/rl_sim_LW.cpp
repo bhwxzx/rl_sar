@@ -218,22 +218,10 @@ RL_Real::RL_Real(int argc, char **argv)
         std::bind(&RL_Real::RunModel, this),
         -1,
         loop_error_handler);
-    try
-    {
-        this->loop_joystick->start();
-        this->loop_rl->start();
-        this->loop_control->start();
-    }
-    catch (...)
-    {
-        runtime_core_.reportSafetyEvent(
-            LWSafetyEvent::StartupLoopStartFailed,
-            "[Safety] Failed to start Sim2Sim worker loops");
-        this->loop_control->shutdown();
-        this->loop_rl->shutdown();
-        this->loop_joystick->shutdown();
-        throw;
-    }
+
+    // Match the real-robot lifecycle: finish every fallible resource setup
+    // before publishing this object to the worker callbacks. Worker startup
+    // must remain the final constructor stage.
     this->operator_status_timer_ = ros2_node->create_wall_timer(
         100ms,
         std::bind(&RL_Real::OperatorStatusCallback, this));
@@ -253,6 +241,23 @@ RL_Real::RL_Real(int argc, char **argv)
 #ifdef CSV_LOGGER
     this->CSVInit(this->robot_name);
 #endif
+
+    try
+    {
+        this->loop_joystick->start();
+        this->loop_rl->start();
+        this->loop_control->start();
+    }
+    catch (...)
+    {
+        runtime_core_.reportSafetyEvent(
+            LWSafetyEvent::StartupLoopStartFailed,
+            "[Safety] Failed to start Sim2Sim worker loops");
+        this->loop_control->shutdown();
+        this->loop_rl->shutdown();
+        this->loop_joystick->shutdown();
+        throw;
+    }
 
 }
 

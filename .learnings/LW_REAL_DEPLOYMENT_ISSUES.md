@@ -124,6 +124,30 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 - The untracked user-owned `.agents/skills/inspect-context-compactions/`
   directory was preserved and is not part of this review record.
 
+## 2026-08-20 Post-remediation Comprehensive Review Addendum
+
+- Reviewed and recorded: 2026-08-20
+- Repository HEAD during review: `3974843`
+- Review scope: maintained real and Sim2Sim startup/lifecycle paths, shared
+  runtime and policy-observation contracts, inference hot paths, the retained
+  FDILink driver, CMake and dependency integration, Python and shell tooling,
+  and the complete available automated-test surface after `LW-058`.
+- Verification: a fresh strict build completed and its full 50/50 CTest suite
+  passed. After forcing the stale FDILink build directory to reconfigure, all
+  five functional tests passed; its full suite passed 8/13 because the
+  copyright, cpplint, flake8, lint_cmake, and uncrustify checks remain red.
+  Maintained-code `cppcheck`, Python AST parsing, and Bash syntax checks found
+  no additional correctness failure.
+- No ROS node, MuJoCo GUI, serial device, IMU, joystick, real robot, or motor
+  was started. This review did not run a sanitizer build and therefore makes
+  no new sanitizer claim.
+- The review confirmed `LW-059` through `LW-066` below. Their authoritative
+  order first follows severity, then correctness-before-optimization
+  dependencies, and finally runtime relevance. Tests needed to close a defect
+  are part of that defect instead of being recorded as duplicate issues.
+- The untracked user-owned `.agents/skills/inspect-context-compactions/`
+  directory was preserved unchanged.
+
 ## Ordered Summary
 
 | Order | ID | Priority | Status | Summary |
@@ -186,6 +210,14 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 56 | LW-056 | P2 / medium | resolved | Make the maintained complete control cycle allocation-stable |
 | 57 | LW-057 | P2 / medium | resolved | Validate the MuJoCo control adapter layout and test actual safety actions |
 | 58 | LW-058 | P2 / medium | resolved | Isolate maintained C++ targets from the unused Python runtime |
+| 59 | LW-059 | P1 / high | resolved | Stop Sim2Sim workers on every partial-construction failure path |
+| 60 | LW-060 | P2 / medium | pending | Use the history-frame domain consistently in ObservationBuffer |
+| 61 | LW-061 | P2 / medium | pending | Make motion-reference validation and runtime gating semantically consistent |
+| 62 | LW-062 | P2 / low | pending | Reuse contiguous buffers throughout the inference hot path |
+| 63 | LW-063 | P2 / low | pending | Share the ONNX Runtime environment without weakening model isolation |
+| 64 | LW-064 | P2 / low | pending | Remove or correctly implement the misleading FDILink CRC32 API |
+| 65 | LW-065 | P2 / low | pending | Restore a clean FDILink lint and package-metadata baseline |
+| 66 | LW-066 | P2 / low | pending | Make dependency discovery ordered and build settings target-scoped |
 
 ---
 
@@ -4912,6 +4944,399 @@ usable project-code sanitizer verdict.
   `src/rl_sar/CMakeLists.txt`, `src/rl_sar/test/test_build_workflow.py`,
   `src/rl_sar/test/test_lw_runtime_linkage.py`.
 - **Remaining Follow-ups**: LW-057
+
+---
+
+## [LW-059] Stop Sim2Sim workers on every partial-construction failure path
+
+**Priority**: P1 / high
+**Status**: resolved
+**Dependencies**: LW-024, LW-057
+
+### Problem
+
+The Sim2Sim constructor starts the joystick, inference, and control workers,
+then performs additional fallible initialization for the operator-status timer,
+optional plot publisher/timer, and optional CSV logger. The existing catch
+block covers only the three `start()` calls. If later initialization throws,
+the complete-object destructor is not called. Because the worker handles are
+declared before most state touched by their callbacks, partial-construction
+unwinding destroys those later members before the worker handles finally stop
+their threads. A callback can therefore race with destruction of the runtime
+core, MuJoCo adapter, joystick mailbox, plot buffers, or other member state.
+
+### Evidence
+
+- `src/rl_sar/src/rl_sim_LW.cpp:205-255`
+- `src/rl_sar/src/rl_sim_LW.cpp:259-268`
+- `src/rl_sar/include/rl_sim_LW.hpp:72-155`
+- `src/rl_sar/test/test_lw_sim_lifecycle_integration.py`
+
+### Intended Scope
+
+- Ensure every fallible initialization needed by a worker is complete before
+  that worker can run, or install a construction guard that synchronously
+  stops all started workers before member unwinding can begin.
+- Preserve the normal shutdown ordering, worker timing, plotting opt-in
+  behavior, physics lifecycle, and existing safety-event semantics.
+- Add deterministic fault injection after worker startup at each remaining
+  fallible initialization boundary.
+
+### Acceptance Criteria
+
+- Every injected constructor failure stops and joins all started workers before
+  any callback-accessible member is destroyed.
+- No callback runs after partial-construction cleanup begins, and no worker is
+  detached or left waiting without a bound.
+- Normal startup and shutdown behavior is unchanged.
+- Lifecycle, strict, and supported sanitizer tests plus `git diff --check`
+  pass without opening a GUI, ROS node, or hardware device.
+
+### Resolution
+
+- **Resolved**: 2026-08-20T18:48:16+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 保持真机现有生命周期模式，不引入 Sim2Sim 专用的
+  二阶段启动或线程组抽象。将 Sim2Sim operator-status timer、可选 plot
+  publisher/timer 和可选 CSV logger 的全部可抛初始化移到首个业务 worker
+  启动之前，使 joystick、inference、control 的启动/回滚块成为构造函数最后
+  阶段。启动顺序和反向停止顺序与真机保持一致，未修改真机运行代码、控制核心、
+  策略、FSM、MuJoCo 数值或安全动作。
+- **Changed Files**: `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`、
+  `src/rl_sar/src/rl_sim_LW.cpp`、
+  `src/rl_sar/test/test_lw_sim_lifecycle_integration.py`。
+- **Verification**: Python 生命周期集成测试扩展为 13 项并全部通过；新增断言
+  同时检查真机和 Sim2Sim 的资源准备必须早于 worker 启动、共同启动顺序必须为
+  joystick/inference/control、异常回滚和析构停止顺序必须为
+  control/inference/joystick，并确保后端关闭发生在 join 之后。当前 Debug 构建
+  重新链接 `rl_sim_LW`，完整 50/50 CTest 通过；全新
+  `LW_STRICT_WARNINGS=ON` 构建及完整 50/50 CTest 通过。隔离
+  AddressSanitizer/UndefinedBehaviorSanitizer 构建成功编译 `rl_sim_LW`，
+  `lw_sim_lifecycle_integration` 和真实 `LoopFunc` 的 `loop_lifecycle` 测试
+  2/2 通过。Python 语法和 `git diff --check` 通过。未启动 ROS 节点、
+  MuJoCo GUI、串口、IMU、摇杆、真机或电机；用户未跟踪技能目录保持未修改。
+- **Remaining Follow-ups**: LW-060, LW-061, LW-062, LW-063, LW-064,
+  LW-065, LW-066
+
+---
+
+## [LW-060] Use the history-frame domain consistently in ObservationBuffer
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-013, LW-050
+
+### Problem
+
+`ObservationBuffer::get_obs_vec()` documents and later consumes `obs_ids` as
+history-frame indices in `[0, history_length)`, but its output-size prepass
+validates them against `obs_dims.size()` and sums `obs_dims[obs_id]` as though
+they were observation-term indices. A valid history request can therefore
+return an empty vector when the selected frame index is greater than or equal
+to the number of observation terms. Configurations that happen to contain a
+small frame index still produce the correct values, but reserve the wrong
+capacity and can reallocate in the inference thread.
+
+### Evidence
+
+- `src/rl_sar/library/core/observation_buffer/observation_buffer.cpp:100-132`
+- `src/rl_sar/library/core/observation_buffer/observation_buffer.cpp:134-179`
+- `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp:584-607`
+- `src/rl_sar/library/core/safety/lw_runtime_core.hpp:545-561`
+- `src/rl_sar/test/test_observation_buffer.cpp:1-67`
+
+### Intended Scope
+
+- Validate every requested index only against the history-frame domain.
+- Compute the exact output length from `num_envs`, selected frame count, and
+  the complete observation width, with overflow-safe arithmetic.
+- Preserve the documented time-priority and term-priority ordering.
+- Add assertions for sparse histories, a one-term buffer selecting frame one,
+  invalid indices, exact output dimensions, and both priority modes.
+- Leave caller-owned buffer reuse to dependent optimization `LW-062`.
+
+### Acceptance Criteria
+
+- Every validator-accepted history list produces exactly the model-contract
+  input length and ordering for both priorities.
+- `{1}` is valid for a one-term buffer with at least two history frames and
+  cannot be confused with observation term one.
+- Invalid frame indices are handled by one explicit, tested contract rather
+  than silently affecting only the reserve calculation.
+- Configuration, observation-buffer, inference, strict, and supported
+  sanitizer tests plus `git diff --check` pass.
+
+---
+
+## [LW-061] Make motion-reference validation and runtime gating semantically consistent
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-009, LW-012, LW-013, LW-054, LW-055
+
+### Problem
+
+Configuration validation classifies motion command, motion anchor orientation,
+and phase observations as requiring motion assets. That is appropriate for
+loading reference data or obtaining motion duration. The runtime flag that
+requires a current-generation motion-reference snapshot, however, is enabled
+only by `whole_body_tracking/motion_command`. An anchor-orientation-only policy
+also dereferences the snapshot but is allowed to continue with no reference or
+a mismatched generation, producing zero or stale orientation features. Phase
+uses the preloaded motion length but does not itself dereference the per-cycle
+snapshot, so asset requirements and live-reference requirements are distinct
+contracts that are currently represented by one local flag and one incomplete
+runtime flag.
+
+### Evidence
+
+- `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp:562-568`
+- `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp:618-641`
+- `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp:699-712`
+- `src/rl_sar/library/core/safety/lw_runtime_core.hpp:402-413`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:408-472`
+- `policy/LW/robot_lab/leg_to_wheel/config.yaml:4-5`
+- `policy/LW/robot_lab/wheel_to_leg/config.yaml:4-5`
+
+### Intended Scope
+
+- Represent and validate the need for a preloaded motion asset separately from
+  the need for a matching live motion-reference snapshot.
+- Require a current-generation snapshot for every observation that reads one,
+  including anchor orientation; keep phase dependent on valid motion duration
+  without imposing an unnecessary per-cycle snapshot read.
+- Preserve current transition-policy outputs and motion timing.
+- Add configuration matrices for command-only, anchor-only, phase-only, and
+  combined policies, including generation mismatch and missing-reference cases.
+
+### Acceptance Criteria
+
+- No observation dereferences an absent or cross-generation reference.
+- Anchor-only policies wait for the correct reference rather than silently
+  emitting zero/stale features.
+- Phase-only policies receive a validated nonzero motion duration while their
+  inference cycle does not require an otherwise unused live snapshot.
+- Existing transition assets remain numerically equivalent, and configuration,
+  runtime-parity, strict, and supported sanitizer tests pass.
+
+---
+
+## [LW-062] Reuse contiguous buffers throughout the inference hot path
+
+**Priority**: P2 / low
+**Status**: pending
+**Dependencies**: LW-050, LW-056, LW-060
+
+### Problem
+
+The inference cycle still creates intermediate `vector<vector<float>>`
+observation terms, flattens them into a new vector, obtains history through
+another value-returning vector, wraps input in a temporary nested vector for
+`Model::forward()`, and copies ONNX output into a newly allocated vector. These
+operations are outside the 200 Hz command loop but occur on every policy
+inference and add heap traffic and latency variance. The existing allocation
+regression covers the maintained control cycle, not this inference pipeline.
+
+### Evidence
+
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:357-475`
+- `src/rl_sar/library/core/observation_buffer/observation_buffer.cpp:108-179`
+- `src/rl_sar/library/core/safety/lw_runtime_core.hpp:533-561`
+- `src/rl_sar/library/core/inference_runtime/inference_runtime.cpp:195-209`
+- `src/rl_sar/library/core/inference_runtime/inference_runtime.cpp:315-336`
+- `src/rl_sar/test/test_lw_allocation_bound.cpp`
+
+### Intended Scope
+
+- Cache validated observation offsets and write directly into a pre-sized
+  contiguous buffer.
+- Add caller-owned/in-place history and inference-output APIs so capacities are
+  established during policy activation rather than each inference.
+- Avoid temporary nested input containers for the maintained single-input
+  model contract while preserving an explicit multi-input extension boundary.
+- Measure warmed inference-side project allocations and latency distribution;
+  do not misattribute opaque ONNX Runtime internal allocation to project code.
+
+### Acceptance Criteria
+
+- Warmed observation assembly, history flattening, input wrapping, and output
+  extraction perform no per-cycle project-owned dynamic allocation.
+- All four maintained models retain identical input ordering, dimensions, and
+  output values within the existing numerical tolerance.
+- Policy switching safely resizes retained buffers before their first use.
+- Allocation, inference-contract, runtime-parity, strict, and supported
+  sanitizer tests plus `git diff --check` pass.
+
+---
+
+## [LW-063] Share the ONNX Runtime environment without weakening model isolation
+
+**Priority**: P2 / low
+**Status**: pending
+**Dependencies**: LW-027, LW-050, LW-058
+
+### Problem
+
+Every `ONNXModel` constructs and owns a separate `Ort::Env`, although the
+runtime environment is process-wide infrastructure and the deployment preloads
+multiple models. This duplicates startup resources and obscures their lifetime.
+The environment is also assigned in the constructor body rather than
+initialized with the rest of the object. Sessions, model metadata, and tensor
+buffers still require independent ownership.
+
+### Evidence
+
+- `src/rl_sar/library/core/inference_runtime/inference_runtime.cpp:85-110`
+- `src/rl_sar/library/core/inference_runtime/inference_runtime.hpp:79-101`
+- `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp:752-778`
+
+### Intended Scope
+
+- Give all maintained ONNX sessions a clearly owned, process-lifetime shared
+  `Ort::Env` while keeping sessions and model-specific mutable state isolated.
+- Make initialization and teardown order deterministic and thread-safe.
+- Measure startup/resource impact so the optimization is retained only with
+  evidence and does not become an unnecessary global-state abstraction.
+
+### Acceptance Criteria
+
+- Concurrent creation, inference, and destruction of all maintained model
+  sessions cannot outlive the shared environment or share mutable session data.
+- Model validation, dynamic-batch behavior, runtime provenance, and numerical
+  outputs remain unchanged.
+- A focused regression verifies environment lifetime and multi-model teardown;
+  inference, strict, and supported sanitizer tests pass.
+
+---
+
+## [LW-064] Remove or correctly implement the misleading FDILink CRC32 API
+
+**Priority**: P2 / low
+**Status**: pending
+**Dependencies**: LW-044, LW-045
+
+### Problem
+
+`CRC32_Table()` is declared as a 32-bit checksum API but stores its state in a
+16-bit integer and indexes the CRC16 table. It therefore computes CRC16 and
+widens the result rather than computing CRC32. No maintained call site uses the
+function, so the current driver protocol is unaffected, but any future caller
+would silently receive an invalid checksum under a misleading public name.
+
+### Evidence
+
+- `src/fdilink_ahrs_ROS2/include/crc_table.h:8`
+- `src/fdilink_ahrs_ROS2/src/crc_table.cpp:140-158`
+- Repository-wide call-site search found only the declaration and definition.
+
+### Intended Scope
+
+- Confirm that the supported FDILink protocols do not require this API.
+- Remove the declaration and definition if it is dead, or implement a fully
+  specified CRC32 variant only if an external compatibility requirement is
+  demonstrated.
+- If retained, document polynomial, initial value, reflection, and final XOR,
+  and verify standard and protocol-specific known-answer vectors.
+
+### Acceptance Criteria
+
+- The codebase exposes no function named CRC32 that actually computes CRC16.
+- Existing CRC8/CRC16 packet verification is unchanged.
+- Parser/payload tests and any new known-answer tests pass under strict and
+  supported sanitizer builds.
+
+---
+
+## [LW-065] Restore a clean FDILink lint and package-metadata baseline
+
+**Priority**: P2 / low
+**Status**: pending
+**Dependencies**: LW-044, LW-045, LW-046, LW-047, LW-064
+
+### Problem
+
+After a forced reconfigure, all five FDILink functional tests pass, but five of
+the eight ament lint checks fail: copyright, cpplint, flake8, lint_cmake, and
+uncrustify. The package manifest still advertises version `0.0.0` and TODO
+description, maintainer email, and license fields. This does not currently
+demonstrate a runtime defect, but it leaves CI red, hides future regressions in
+baseline noise, and makes package provenance unsuitable for release.
+
+### Evidence
+
+- `src/fdilink_ahrs_ROS2/package.xml:5-8`
+- `src/fdilink_ahrs_ROS2/launch/ahrs_driver.launch.py`
+- `src/fdilink_ahrs_ROS2/launch/imu_tf.launch.py`
+- `src/fdilink_ahrs_ROS2/CMakeLists.txt:53`
+- `src/fdilink_ahrs_ROS2/CMakeLists.txt:121`
+- Reconfigured FDILink CTest result: 8/13 passed; the five functional tests
+  passed and the five listed lint tests failed.
+
+### Intended Scope
+
+- Establish accurate package ownership, description, license, maintainer, and
+  version metadata with user-confirmed values.
+- Apply behavior-preserving formatting and copyright cleanup only within the
+  FDILink package.
+- Keep launch parameters, topic names, protocol decoding, and process behavior
+  unchanged while making lint failures actionable again.
+
+### Acceptance Criteria
+
+- The reconfigured FDILink package passes all 13 registered CTest tests.
+- Package metadata contains no TODO placeholder and matches the repository's
+  actual licensing and ownership decisions.
+- Launch files produce the same nodes, parameters, and topics before and after
+  formatting.
+- No unrelated rl_sar formatting or behavior change is bundled.
+
+---
+
+## [LW-066] Make dependency discovery ordered and build settings target-scoped
+
+**Priority**: P2 / low
+**Status**: pending
+**Dependencies**: LW-018, LW-027, LW-058
+
+### Problem
+
+The production ONNX provenance command uses `${Python3_EXECUTABLE}` before this
+CMake file calls `find_package(Python3)`. The current ROS/ament environment
+happens to populate the variable early enough for validated builds, but that is
+an implicit ordering dependency. The package also retains global definitions,
+include directories, link directories, linker flags, and accumulated RPATH
+settings that can leak into unrelated libraries and tests and make dependency
+provenance harder to reason about.
+
+### Evidence
+
+- `src/rl_sar/CMakeLists.txt:105-107`
+- `src/rl_sar/CMakeLists.txt:195`
+- `src/rl_sar/CMakeLists.txt:236-259`
+- `src/rl_sar/CMakeLists.txt:311-334`
+- `src/rl_sar/CMakeLists.txt:457-477`
+- `src/rl_sar/CMakeLists.txt:531-548`
+- `src/rl_sar/CMakeLists.txt:947-983`
+
+### Intended Scope
+
+- Discover the Python interpreter before its first use and make the production
+  provenance check independent of incidental ament cache state.
+- Move maintained compile definitions, include paths, link search paths, linker
+  options, and runtime paths to the narrowest owning targets.
+- Preserve approved ONNX/MuJoCo runtime provenance, Jetson behavior, install
+  layout, and the no-Python-runtime linkage guarantee from `LW-058`.
+- Add clean configure/build checks that do not inherit a prior CMake cache.
+
+### Acceptance Criteria
+
+- A fresh production configure resolves and executes the intended Python
+  interpreter before any provenance command uses it.
+- Representative control and test targets expose only their required compile,
+  link, and RPATH properties; no Conda or unintended dependency is reintroduced.
+- Debug, strict, production Release, Jetson configuration, runtime-linkage, and
+  build-workflow regressions pass from clean build directories.
+- Generated deployment paths and installed runtime resolution remain unchanged.
 
 ---
 
