@@ -135,6 +135,11 @@ void testCurrentLWConfigurationsAndModels()
         ValidateLWBaseConfiguration(base, "LW/base.yaml");
     require(base_runtime.num_dofs == 10, "base runtime DOF count differs");
     require(
+        base_runtime.joint_names.size() == base_runtime.num_dofs
+            && base_runtime.joint_names.front() == "right_hip_joint"
+            && base_runtime.joint_names.back() == "left_wheel_joint",
+        "base runtime joint names were not retained");
+    require(
         base_runtime.joint_mapping.size() == base_runtime.num_dofs,
         "base runtime joint mapping was not retained");
     require(

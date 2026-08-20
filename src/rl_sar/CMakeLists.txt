@@ -961,6 +961,19 @@ if(SYSTEM_TYPE STREQUAL "Linux"
             IMPORTED_NO_SONAME TRUE
         )
 
+        add_library(
+            lw_mujoco_control_adapter
+            library/core/simulation/lw_mujoco_control_adapter.cpp
+        )
+        target_include_directories(lw_mujoco_control_adapter PUBLIC
+            library/core/simulation
+            library/core/safety
+        )
+        target_link_libraries(lw_mujoco_control_adapter PUBLIC
+            lw_sim_torque_validation
+            mujoco_prebuilt
+        )
+
         # Source files
         file(GLOB MUJOCO_SIMULATE_SRC library/thirdparty/mujoco_simulate/*.cc)
         add_library(
@@ -979,7 +992,7 @@ if(SYSTEM_TYPE STREQUAL "Linux"
         add_executable(rl_sim_LW src/rl_sim_LW.cpp)
 
         target_link_libraries(rl_sim_LW
-            rl_sdk observation_buffer lw_sim_torque_validation
+            rl_sdk observation_buffer lw_mujoco_control_adapter
             lw_sim_debug_message
             ${YAML_CPP_LIBRARIES} LW_sdk
             Threads::Threads mujoco_prebuilt glfw
@@ -997,9 +1010,27 @@ if(SYSTEM_TYPE STREQUAL "Linux"
             )
             target_link_libraries(
                 test_lw_description
-                PRIVATE mujoco_prebuilt
+                PRIVATE lw_mujoco_control_adapter
             )
             add_test(NAME lw_description COMMAND test_lw_description)
+
+            add_executable(
+                test_lw_mujoco_control_adapter
+                test/test_lw_mujoco_control_adapter.cpp
+            )
+            target_compile_definitions(
+                test_lw_mujoco_control_adapter
+                PRIVATE
+                    "LW_DESCRIPTION_MJCF_DIR=\"${PROJECT_ROOT_DIR}/src/rl_sar_zoo/LW_description/mjcf\""
+            )
+            target_link_libraries(
+                test_lw_mujoco_control_adapter
+                PRIVATE lw_mujoco_control_adapter
+            )
+            add_test(
+                NAME lw_mujoco_control_adapter
+                COMMAND test_lw_mujoco_control_adapter
+            )
 
             add_executable(
                 test_lw_mujoco_synchronization

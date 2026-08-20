@@ -33,6 +33,8 @@
 #include <mujoco/mujoco.h>
 #include "mujoco_utils.hpp"
 
+class LWMuJoCoControlAdapter;
+
 class RL_Real : public RL
 {
 public:
@@ -65,7 +67,6 @@ private:
     void ExecuteSafetyDecision(
         const LWSafetyDecision& decision,
         const std::string& reason) noexcept;
-    void ZeroActiveMuJoCoActuators() noexcept;
     void ApplySimulationControls();
 
     // loop
@@ -80,6 +81,7 @@ private:
     mjData *mj_data = nullptr;
     mjModel *mj_model = nullptr;
     std::unique_ptr<LWMuJoCoPhysicsLifecycle> physics_lifecycle_;
+    std::unique_ptr<LWMuJoCoControlAdapter> mujoco_control_adapter_;
     std::string scene_name;
     void RefreshMuJoCoPointersLocked() noexcept;
 

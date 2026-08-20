@@ -1,8 +1,11 @@
 #include <mujoco/mujoco.h>
 
+#include "lw_mujoco_control_adapter.hpp"
+
 #include <array>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -20,16 +23,25 @@ bool LoadAndValidate(const std::string& scene_name, bool expect_heightfield)
     }
 
     bool valid = true;
-    if (model->nu != 10)
+    const std::vector<std::string> joint_names = {
+        "right_hip_joint", "left_hip_joint",
+        "right_thigh_joint", "left_thigh_joint",
+        "right_shank_joint", "left_shank_joint",
+        "right_foot_joint", "left_foot_joint",
+        "right_wheel_joint", "left_wheel_joint"};
+    const std::vector<int> joint_mapping = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+    try
     {
-        std::cerr << scene_name << " has " << model->nu
-                  << " actuators; expected 10" << std::endl;
-        valid = false;
+        const LWMuJoCoControlAdapter adapter(
+            *model,
+            joint_names,
+            joint_mapping);
+        valid = valid && adapter.numDofs() == joint_names.size();
     }
-    if (model->nsensor < 37)
+    catch (const std::exception& error)
     {
-        std::cerr << scene_name << " has only " << model->nsensor
-                  << " sensors; expected at least 37" << std::endl;
+        std::cerr << scene_name << " has an invalid control layout: "
+                  << error.what() << std::endl;
         valid = false;
     }
     if ((model->nhfield > 0) != expect_heightfield)

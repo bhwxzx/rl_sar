@@ -121,6 +121,33 @@ void TestPendingRenderLoadCanBeCancelledAndJoined()
     Require(lifecycle.data() == nullptr, "shutdown retained data");
     lifecycle.Stop();
 }
+
+void TestValidationFailurePreventsWorkerStartup()
+{
+    HeadlessSimulation headless;
+    LWMuJoCoPhysicsLifecycle lifecycle(*headless.simulate);
+    bool validator_called = false;
+    bool diagnosed = false;
+    try
+    {
+        lifecycle.Start(
+            LW_TEST_SCENE,
+            [&validator_called](const mjModel& model, mjData& data)
+            {
+                validator_called = model.nq >= 0 && data.time == 0.0;
+                throw std::runtime_error("intentional layout rejection");
+            });
+    }
+    catch (const std::runtime_error& error)
+    {
+        diagnosed = std::string(error.what()) == "intentional layout rejection";
+    }
+    Require(validator_called, "pre-start validator did not receive model data");
+    Require(diagnosed, "pre-start validator diagnostic was not preserved");
+    Require(lifecycle.model() == nullptr, "rejected model was published");
+    Require(lifecycle.data() == nullptr, "rejected data was published");
+    lifecycle.Stop();
+}
 } // namespace
 
 int main()
@@ -128,6 +155,7 @@ int main()
     try
     {
         TestInvalidSceneFailsPromptly();
+        TestValidationFailurePreventsWorkerStartup();
         TestPendingRenderLoadCanBeCancelledAndJoined();
     }
     catch (const std::exception& error)

@@ -184,7 +184,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 54 | LW-054 | P1 / high | resolved | Preload morphology-transition motion assets before control workers |
 | 55 | LW-055 | P1 / high | resolved | Remove blocking synchronization from the real control deadline path |
 | 56 | LW-056 | P2 / medium | resolved | Make the maintained complete control cycle allocation-stable |
-| 57 | LW-057 | P2 / medium | pending | Validate the MuJoCo control adapter layout and test actual safety actions |
+| 57 | LW-057 | P2 / medium | resolved | Validate the MuJoCo control adapter layout and test actual safety actions |
 | 58 | LW-058 | P2 / medium | resolved | Isolate maintained C++ targets from the unused Python runtime |
 
 ---
@@ -4711,7 +4711,7 @@ regress without any test observing allocations in the actual control flow.
 ## [LW-057] Validate the MuJoCo control adapter layout and test actual safety actions
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-021, LW-036, LW-053, LW-056
 
 ### Problem
@@ -4758,6 +4758,63 @@ and safety-action writer.
   damping torque, S3/S4 zero all `nu` controls, and S4 requests exit.
 - Description, adapter, lifecycle, strict and sanitizer tests plus
   `git diff --check` pass without opening a GUI, ROS node, or real hardware.
+
+### Resolution Evidence
+
+- Resolved: 2026-08-20
+- The validated base runtime configuration now retains the unique joint names
+  that define hardware order. Policy index `i` is resolved through
+  `joint_mapping[i]` to a named MuJoCo joint instead of being reused as a raw
+  sensor or actuator index.
+- A headless `LWMuJoCoControlAdapter` resolves and caches every required joint,
+  position/velocity/torque sensor, actuator, IMU quaternion, and gyroscope by
+  name. Startup rejects missing, duplicated, incorrectly typed, incorrectly
+  dimensioned, out-of-range, or wrongly bound objects and ambiguous actuators.
+- The MuJoCo lifecycle now invokes layout validation after loading model/data
+  but before publishing them or starting its worker. The Sim2Sim constructor
+  validates YAML first, builds the adapter through that pre-start callback, and
+  starts joystick/control workers only after the model contract succeeds.
+- `GetState` and `SetCommand` use only cached addresses and actuator IDs. The
+  existing transactional torque validation remains ahead of all `ctrl` writes,
+  and state, command, and safety adapter paths are verified allocation-free.
+- The real safety writer now executes through the headless adapter: S2 produces
+  the expected passive damping torque through the normal command path, S3
+  zeros all `model->nu` controls without exiting, and S4 zeros all controls and
+  propagates `simulation_running=false`, `run=0`, and `exitrequest=1`.
+- Headless tests load both maintained scenes and synthetic reordered layouts.
+  They prove unrelated sensor/actuator insertion and nonidentity policy mapping
+  are handled, while missing, duplicate, wrong-type, wrong-dimension, and
+  wrong-binding layouts are rejected before worker startup.
+- The maintained Debug build and a fresh `LW_STRICT_WARNINGS=ON` build both
+  completed, including `rl_real_LW` and `rl_sim_LW`; both complete 50/50 CTest
+  suites passed. `git diff --check` also passed.
+- Fresh ASan-only and UBSan-only builds each ran `lw_runtime_parity`,
+  `lw_allocation_bound`, `lw_mujoco_control_adapter`, and
+  `lw_mujoco_lifecycle` for 20 consecutive repetitions per test. A fresh
+  combined ASan/UBSan build ran the same tests for 10 repetitions each. All
+  200 runs passed with sanitizer signal interception enabled and no sanitizer
+  finding or recursive `DEADLYSIGNAL`.
+- An isolated clean validation clone configured formal
+  `LW_PRODUCTION_DEPLOYMENT=ON` Release mode and built `rl_real_LW` plus
+  `lw_config_profiler`, confirming the retained joint-name configuration does
+  not regress the production build.
+- No ROS node, MuJoCo GUI, serial device, IMU, joystick, real robot, or motor was
+  started. The user-owned untracked compaction-inspection skill directory was
+  preserved unchanged.
+- **Changed Files**: `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`,
+  `src/rl_sar/CMakeLists.txt`, `src/rl_sar/include/rl_sim_LW.hpp`,
+  `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp`,
+  `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.hpp`,
+  `src/rl_sar/library/core/simulation/lw_mujoco_control_adapter.cpp`,
+  `src/rl_sar/library/core/simulation/lw_mujoco_control_adapter.hpp`,
+  `src/rl_sar/library/thirdparty/mujoco_simulate/mujoco_utils.hpp`,
+  `src/rl_sar/src/rl_sim_LW.cpp`,
+  `src/rl_sar/test/test_lw_configuration_validation.cpp`,
+  `src/rl_sar/test/test_lw_description.cpp`,
+  `src/rl_sar/test/test_lw_mujoco_control_adapter.cpp`,
+  `src/rl_sar/test/test_lw_mujoco_lifecycle.cpp`, and
+  `src/rl_sar/test/test_lw_sim_lifecycle_integration.py`.
+- **Remaining Follow-ups**: None
 
 ---
 

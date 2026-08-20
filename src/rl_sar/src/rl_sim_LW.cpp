@@ -1,5 +1,6 @@
 
 #include "rl_sim_LW.hpp"
+#include "lw_mujoco_control_adapter.hpp"
 
 #include <iomanip>
 #include <sstream>
@@ -71,6 +72,16 @@ RL_Real::RL_Real(int argc, char **argv)
     //     [this] (const sensor_msgs::msg::Imu::SharedPtr imu_msg) {this->ImuCallback(imu_msg);}
     // );
 
+    this->robot_name = "LW";
+    this->scene_name = "scene"; // "scene" "scene_terrain"
+    this->ang_vel_axis = "body";
+    this->ReadYaml(this->robot_name, "base.yaml");
+    SetLWBaseRuntimeConfiguration(
+        ValidateLWBaseConfiguration(
+            this->params.config_node,
+            this->ResolvePolicyPath(this->robot_name + "/base.yaml")));
+    const auto& runtime_configuration = GetLWBaseRuntimeConfiguration();
+
     // scan for libraries in the plugin directory to load additional plugins
     scanPluginLibraries();
 
@@ -85,12 +96,27 @@ RL_Real::RL_Real(int argc, char **argv)
         std::make_unique<mj::GlfwAdapter>(),
         &cam, &opt, &pert, /* is_passive = */ false);
 
-    this->robot_name = "LW";
-    this->scene_name = "scene"; // "scene" "scene_terrain"
     std::string filename = std::string(CMAKE_CURRENT_SOURCE_DIR) + "/../rl_sar_zoo/" + this->robot_name + "_description/mjcf/" + this->scene_name + ".xml";
 
     physics_lifecycle_ = std::make_unique<LWMuJoCoPhysicsLifecycle>(*sim);
-    physics_lifecycle_->Start(filename);
+    try
+    {
+        physics_lifecycle_->Start(
+            filename,
+            [this, &runtime_configuration](const mjModel& model, mjData&)
+            {
+                mujoco_control_adapter_ =
+                    std::make_unique<LWMuJoCoControlAdapter>(
+                        model,
+                        runtime_configuration.joint_names,
+                        runtime_configuration.joint_mapping);
+            });
+    }
+    catch (...)
+    {
+        mujoco_control_adapter_.reset();
+        throw;
+    }
     {
         const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
         RefreshMuJoCoPointersLocked();
@@ -98,16 +124,6 @@ RL_Real::RL_Real(int argc, char **argv)
     std::cout << LOGGER::INFO << "[MuJoCo] Data prepared" << std::endl;
 
     this->SetupSysJoystick("/dev/input/js1", 16);
-
-    // read params from yaml
-    this->ang_vel_axis = "body";
-    
-    this->ReadYaml(this->robot_name, "base.yaml");
-    SetLWBaseRuntimeConfiguration(
-        ValidateLWBaseConfiguration(
-            this->params.config_node,
-            this->ResolvePolicyPath(this->robot_name + "/base.yaml")));
-    const auto& runtime_configuration = GetLWBaseRuntimeConfiguration();
 
     // 提前加载所有的模型到内存
     this->PreloadModel(this->robot_name + "/robot_lab/leg_loco");
@@ -280,7 +296,7 @@ void RL_Real::RefreshMuJoCoPointersLocked() noexcept
 
 void RL_Real::InitializePlotDebugResourcesLocked()
 {
-    if (!mj_model)
+    if (!mj_model || !mujoco_control_adapter_)
     {
         throw std::runtime_error(
             "LW Sim2Sim debug setup requires an initialized MuJoCo model");
@@ -331,9 +347,9 @@ void RL_Real::InitializePlotDebugResourcesLocked()
     plot_mujoco_cache_.frame_velocity_address =
         sensor_address("frame_vel", 3);
     plot_mujoco_cache_.angular_velocity_address =
-        sensor_address("imu_gyro", 3);
+        mujoco_control_adapter_->gyroscopeAddress();
     plot_mujoco_cache_.quaternion_address =
-        sensor_address("imu_quat", 4);
+        mujoco_control_adapter_->quaternionAddress();
 }
 
 LWSimDebugTelemetry RL_Real::ReadPlotTelemetryLocked() const noexcept
@@ -529,47 +545,41 @@ void RL_Real::ExecuteSafetyDecision(
                << std::endl;
     }
 
-    if (decision.action == LWSafetyAction::HardDisable
-        || decision.action == LWSafetyAction::HardDisableAndShutdown
-        || decision.action == LWSafetyAction::AbortStartup
-        || decision.action == LWSafetyAction::OrderlyShutdown)
+    const bool requires_shutdown =
+        decision.action == LWSafetyAction::HardDisableAndShutdown
+        || decision.action == LWSafetyAction::AbortStartup;
+    if (sim)
     {
-        ZeroActiveMuJoCoActuators();
+        try
+        {
+            const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
+            RefreshMuJoCoPointersLocked();
+            if (mj_data && mujoco_control_adapter_)
+            {
+                mujoco_control_adapter_->ExecuteSafetyDecision(
+                    *mj_data,
+                    decision,
+                    {simulation_running, sim->run, sim->exitrequest});
+                return;
+            }
+        }
+        catch (...)
+        {
+        }
     }
-    if (decision.action == LWSafetyAction::HardDisableAndShutdown
-        || decision.action == LWSafetyAction::AbortStartup)
+    if (requires_shutdown)
     {
         simulation_running = false;
         if (sim)
         {
-            const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
-            sim->run = 0;
-            sim->exitrequest.store(1);
+            try
+            {
+                sim->RequestExit();
+            }
+            catch (...)
+            {
+            }
         }
-    }
-}
-
-void RL_Real::ZeroActiveMuJoCoActuators() noexcept
-{
-    if (!sim)
-    {
-        return;
-    }
-    try
-    {
-        const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
-        RefreshMuJoCoPointersLocked();
-        if (!mj_model || !mj_data)
-        {
-            return;
-        }
-        for (int actuator = 0; actuator < mj_model->nu; ++actuator)
-        {
-            mj_data->ctrl[actuator] = 0.0;
-        }
-    }
-    catch (...)
-    {
     }
 }
 
@@ -751,37 +761,27 @@ void RL_Real::GetState(RobotState<float> *state)
             "[Safety] MuJoCo state source is unavailable");
         return;
     }
-    const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
-    RefreshMuJoCoPointersLocked();
-    if (mj_data)
+    bool state_read = false;
     {
-        const auto& runtime_configuration =
-            GetLWBaseRuntimeConfiguration();
-        const std::size_t num_dofs = runtime_configuration.num_dofs;
-        const auto& joint_mapping = runtime_configuration.joint_mapping;
-        const std::size_t imu_offset = 3 * num_dofs;
-        // xml的sensor顺序为： jointpos jointvel jointtorque quat gyro accmeter
-        state->imu.quaternion[0] = mj_data->sensordata[imu_offset + 0];
-        state->imu.quaternion[1] = mj_data->sensordata[imu_offset + 1];
-        state->imu.quaternion[2] = mj_data->sensordata[imu_offset + 2];
-        state->imu.quaternion[3] = mj_data->sensordata[imu_offset + 3];
-
-        state->imu.gyroscope[0] = mj_data->sensordata[imu_offset + 4];
-        state->imu.gyroscope[1] = mj_data->sensordata[imu_offset + 5];
-        state->imu.gyroscope[2] = mj_data->sensordata[imu_offset + 6];
-
-        for (std::size_t i = 0; i < num_dofs; ++i)
+        const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
+        RefreshMuJoCoPointersLocked();
+        if (mj_data && mujoco_control_adapter_)
         {
-            const std::size_t sensor_index =
-                static_cast<std::size_t>(joint_mapping[i]);
-            state->motor_state.q[i] = mj_data->sensordata[sensor_index];
-            state->motor_state.dq[i] =
-                mj_data->sensordata[sensor_index + num_dofs];
-            state->motor_state.tau_est[i] =
-                mj_data->sensordata[sensor_index + 2 * num_dofs];
+            state_read = mujoco_control_adapter_->ReadState(
+                *mj_data,
+                state->motor_state.q,
+                state->motor_state.dq,
+                state->motor_state.tau_est,
+                state->imu.quaternion,
+                state->imu.gyroscope);
         }
     }
-
+    if (!state_read)
+    {
+        ApplySafetyEvent(
+            LWSafetyEvent::FeedbackReadFailed,
+            "[Safety] MuJoCo state layout is unavailable");
+    }
 }
 
 void RL_Real::SetCommand(const RobotCommand<float> *command)
@@ -820,31 +820,35 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
 
     if (sim)
     {
-        const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
-        RefreshMuJoCoPointersLocked();
-        if (!mj_data)
+        bool sink_available = false;
+        LWSimTorqueValidation validation{
+            LWSimTorqueFailure::SizeMismatch,
+            0};
+        {
+            const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
+            RefreshMuJoCoPointersLocked();
+            sink_available = mj_data && mujoco_control_adapter_;
+            if (sink_available)
+            {
+                validation = mujoco_control_adapter_->ApplyCommand(
+                    *mj_data,
+                    command->motor_command.q,
+                    command->motor_command.dq,
+                    command->motor_command.tau,
+                    command->motor_command.kp,
+                    command->motor_command.kd,
+                    torque_limits,
+                    mujoco_tau_candidates_,
+                    mujoco_tau_bounded_);
+            }
+        }
+        if (!sink_available)
         {
             ApplySafetyEvent(
                 LWSafetyEvent::ControlCommandIncomplete,
                 "[Safety] MuJoCo command sink is unavailable");
             return;
         }
-        for (std::size_t i = 0; i < num_dofs; ++i)
-        {
-            mujoco_tau_candidates_[i] = command->motor_command.tau[i]
-                + command->motor_command.kp[i]
-                    * (command->motor_command.q[i]
-                       - mj_data->sensordata[joint_mapping[i]])
-                + command->motor_command.kd[i]
-                    * (command->motor_command.dq[i]
-                       - mj_data->sensordata[joint_mapping[i] + num_dofs]);
-        }
-
-        const LWSimTorqueValidation validation =
-            PrepareLWSimTorques(
-                mujoco_tau_candidates_,
-                torque_limits,
-                mujoco_tau_bounded_);
         if (!validation.valid())
         {
             ApplySafetyEvent(
@@ -853,11 +857,6 @@ void RL_Real::SetCommand(const RobotCommand<float> *command)
                     + validation.failureName()
                     + " at joint " + std::to_string(validation.index));
             return;
-        }
-
-        for (std::size_t i = 0; i < num_dofs; ++i)
-        {
-            mj_data->ctrl[joint_mapping[i]] = mujoco_tau_bounded_[i];
         }
     }
 }

@@ -401,6 +401,8 @@ LWBaseRuntimeConfiguration ValidateLWBaseConfiguration(
     runtime.num_dofs = dofs;
     runtime.dt = config["dt"].as<float>();
     runtime.decimation = config["decimation"].as<int>();
+    runtime.joint_names =
+        config["joint_names"].as<std::vector<std::string>>();
     runtime.joint_mapping = config["joint_mapping"].as<std::vector<int>>();
     runtime.wheel_indices = config["wheel_indices"].as<std::vector<int>>();
     runtime.wheel_mask.assign(dofs, 0);

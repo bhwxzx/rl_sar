@@ -13,6 +13,9 @@ SIM_DEBUG_HEADER = (
 SIM_DEBUG_SOURCE = (
     ROOT / "library" / "core" / "simulation" / "lw_sim_debug_message.cpp"
 )
+MUJOCO_ADAPTER_SOURCE = (
+    ROOT / "library" / "core" / "simulation" / "lw_mujoco_control_adapter.cpp"
+)
 LEGACY_SIM_SOURCE = ROOT / "src" / "rl_sim_mujoco.cpp"
 LEGACY_SIM_HEADER = ROOT / "include" / "rl_sim_mujoco.hpp"
 MUJOCO_UTILS = (
@@ -37,9 +40,16 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
         self.assertNotIn(".detach()", constructor)
         self.assertNotIn("while (1)", constructor)
         self.assertLess(
-            constructor.index("physics_lifecycle_->Start(filename);"),
+            constructor.index("ValidateLWBaseConfiguration("),
+            constructor.index("physics_lifecycle_->Start("),
+        )
+        self.assertLess(
+            constructor.index("physics_lifecycle_->Start("),
             constructor.index("SetupSysJoystick"),
         )
+        self.assertIn("LWMuJoCoControlAdapter", constructor)
+        self.assertIn("runtime_configuration.joint_names", constructor)
+        self.assertIn("runtime_configuration.joint_mapping", constructor)
 
     def test_destructor_joins_physics_after_business_workers(self) -> None:
         source = SIM_SOURCE.read_text(encoding="utf-8")
@@ -68,9 +78,11 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
 
         load = lifecycle.index("mjModel* loaded_model = LoadModel")
         diagnostic = lifecycle.index("Failed to load MuJoCo scene")
+        validation = lifecycle.index("validate_before_start(*loaded_model")
         worker_start = lifecycle.index("worker_.start(")
         self.assertLess(load, diagnostic)
         self.assertLess(diagnostic, worker_start)
+        self.assertLess(validation, worker_start)
 
     def test_pending_render_load_is_cancellable(self) -> None:
         source = SIMULATE_SOURCE.read_text(encoding="utf-8")
@@ -230,26 +242,30 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
 
     def test_pd_ff_mujoco_torques_are_validated_transactionally(self) -> None:
         source = SIM_SOURCE.read_text(encoding="utf-8")
+        adapter = MUJOCO_ADAPTER_SOURCE.read_text(encoding="utf-8")
         command = source[
             source.index("void RL_Real::SetCommand(") : source.index(
                 "void RL_Real::SetupSysJoystick("
             )
         ]
 
-        self.assertIn("command->motor_command.tau[i]", command)
-        self.assertIn("command->motor_command.kp[i]", command)
-        self.assertIn("command->motor_command.kd[i]", command)
+        self.assertIn("command->motor_command.tau", command)
+        self.assertIn("command->motor_command.kp", command)
+        self.assertIn("command->motor_command.kd", command)
         self.assertNotIn("actuator_net", command)
+        self.assertIn("mujoco_control_adapter_->ApplyCommand(", command)
+        self.assertNotIn("sensordata[", command)
+        self.assertNotIn("mj_data->ctrl[", command)
 
-        prepare = command.index("PrepareLWSimTorques(")
-        first_write = command.index("mj_data->ctrl[")
+        prepare = adapter.index("PrepareLWSimTorques(")
+        first_write = adapter.index("data.ctrl[")
         self.assertLess(prepare, first_write)
-        self.assertIn("if (!validation.valid())", command[prepare:first_write])
+        self.assertIn("if (!validation.valid())", adapter[prepare:first_write])
         self.assertIn(
             "LWSafetyEvent::SimulationActuatorCommandInvalid",
-            command[prepare:first_write],
+            command,
         )
-        self.assertNotIn("mj_data->ctrl[", command[:prepare])
+        self.assertNotIn("data.ctrl[", adapter[:prepare])
 
     def test_mujoco_hot_paths_use_validated_runtime_configuration(self) -> None:
         source = SIM_SOURCE.read_text(encoding="utf-8")
@@ -271,11 +287,13 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
 
         for hot_path in (state, command, joystick):
             self.assertNotIn("params.Get", hot_path)
-            self.assertIn("GetLWBaseRuntimeConfiguration()", hot_path)
-        self.assertIn("runtime_configuration.joint_mapping", state)
-        self.assertIn("runtime_configuration.joint_mapping", command)
+        self.assertIn("mujoco_control_adapter_->ReadState(", state)
+        self.assertNotIn("sensordata[", state)
+        self.assertIn("GetLWBaseRuntimeConfiguration()", command)
+        self.assertIn("GetLWBaseRuntimeConfiguration()", joystick)
         self.assertIn("runtime_configuration.wheel_mask", command)
         self.assertIn("runtime_configuration.torque_limits", command)
+        self.assertNotIn("mj_data->ctrl[", command)
         self.assertIn("GetLWBaseRuntimeConfiguration().vel_command", joystick)
 
 

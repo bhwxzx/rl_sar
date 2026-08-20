@@ -23,6 +23,7 @@ struct LWBaseRuntimeConfiguration
     std::size_t num_dofs = 0;
     float dt = 0.0f;
     int decimation = 0;
+    std::vector<std::string> joint_names;
     std::vector<int> joint_mapping;
     std::vector<int> wheel_indices;
     std::vector<std::uint8_t> wheel_mask;

@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -450,6 +451,8 @@ void PhysicsLoop(mj::Simulate& sim, mjModel*& model, mjData*& data) {
 class LWMuJoCoPhysicsLifecycle
 {
 public:
+  using ModelValidator = std::function<void(const mjModel&, mjData&)>;
+
   explicit LWMuJoCoPhysicsLifecycle(mj::Simulate& sim)
       : sim_(sim), worker_([this]() { sim_.RequestExit(); }) {}
 
@@ -460,7 +463,9 @@ public:
   LWMuJoCoPhysicsLifecycle(const LWMuJoCoPhysicsLifecycle&) = delete;
   LWMuJoCoPhysicsLifecycle& operator=(const LWMuJoCoPhysicsLifecycle&) = delete;
 
-  void Start(const std::string& filename) {
+  void Start(
+      const std::string& filename,
+      const ModelValidator& validate_before_start = {}) {
     if (model_ || data_ || worker_.joinable()) {
       throw std::logic_error("MuJoCo physics lifecycle is already started");
     }
@@ -482,6 +487,17 @@ public:
       sim_.LoadMessageClear();
       throw std::runtime_error(
           "Failed to allocate MuJoCo data for scene '" + filename + "'");
+    }
+
+    try {
+      if (validate_before_start) {
+        validate_before_start(*loaded_model, *loaded_data);
+      }
+    } catch (...) {
+      mj_deleteData(loaded_data);
+      mj_deleteModel(loaded_model);
+      sim_.LoadMessageClear();
+      throw;
     }
 
     {
