@@ -674,8 +674,33 @@ void RL::PreloadLWPolicyContext(
             + robot_config_path);
     }
     definition->model = model_it->second;
+
+    std::unique_ptr<MotionLoaderLW> motion_player;
+    if (definition->runtime.needs_motion_reference)
+    {
+        const std::string motion_path = ResolvePolicyPath(
+            robot_config_path + "/"
+            + definition->runtime.motion_file);
+        definition->prepared_motion = MotionLoaderLW::Prepare(
+            motion_path,
+            definition->runtime.motion_fps,
+            definition->runtime.motion_time_offset_frames,
+            definition->runtime.num_dofs);
+        motion_player = std::make_unique<MotionLoaderLW>(
+            definition->prepared_motion);
+    }
+
     this->lw_policy_definitions_[robot_config_path] =
         std::move(definition);
+    if (motion_player)
+    {
+        this->preloaded_lw_motion_players_[robot_config_path] =
+            std::move(motion_player);
+    }
+    else
+    {
+        this->preloaded_lw_motion_players_.erase(robot_config_path);
+    }
 }
 
 std::shared_ptr<const LWPolicyDefinition>
@@ -689,6 +714,18 @@ RL::GetLWPolicyDefinition(
         return nullptr;
     }
     return it->second;
+}
+
+MotionLoaderLW* RL::GetPreloadedLWMotionPlayer(
+    const std::string& robot_config_path) const noexcept
+{
+    const auto it =
+        preloaded_lw_motion_players_.find(robot_config_path);
+    if (it == preloaded_lw_motion_players_.end())
+    {
+        return nullptr;
+    }
+    return it->second.get();
 }
 
 std::uint64_t RL::ActivateLWPolicy(

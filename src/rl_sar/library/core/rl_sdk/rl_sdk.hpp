@@ -196,6 +196,7 @@ struct LWPolicyDefinition
     YamlParams params;
     LWPolicyRuntimeConfiguration runtime;
     std::shared_ptr<InferenceRuntime::Model> model;
+    MotionLoaderLW::PreparedMotionPtr prepared_motion;
 };
 
 struct LWPolicyActivation
@@ -372,6 +373,8 @@ public:
     void PreloadLWPolicyContext(const std::string& robot_config_path);
     std::shared_ptr<const LWPolicyDefinition> GetLWPolicyDefinition(
         const std::string& robot_config_path) const;
+    MotionLoaderLW* GetPreloadedLWMotionPlayer(
+        const std::string& robot_config_path) const noexcept;
     std::uint64_t ActivateLWPolicy(
         const std::string& robot_config_path,
         float motion_length = 0.0f);
@@ -456,7 +459,9 @@ public:
     int InverseJointMapping(int idx) const;
 
     // Motion tracking (for mimic/dance tasks)
-    std::unique_ptr<MotionLoaderLW> motion_loader_lw;
+    // Non-owning pointer to the active transition's startup-preloaded player.
+    // The owning entry remains stable throughout worker execution.
+    MotionLoaderLW* motion_loader_lw = nullptr;
 
     // protect func
     bool TorqueProtect(const std::vector<float> &origin_output_dof_tau);
@@ -483,6 +488,8 @@ private:
     std::unordered_map<
         std::string,
         std::shared_ptr<const LWPolicyDefinition>> lw_policy_definitions_;
+    std::unordered_map<std::string, std::unique_ptr<MotionLoaderLW>>
+        preloaded_lw_motion_players_;
     LWAtomicSnapshot<LWPolicyActivation> lw_policy_activation_;
     LWAtomicSnapshot<LWMotionReferenceSnapshot> lw_motion_reference_;
     LWAtomicSnapshot<LWPolicyProgressSnapshot> lw_policy_progress_;

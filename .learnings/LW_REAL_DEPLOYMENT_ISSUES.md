@@ -106,6 +106,24 @@ This file is the authoritative remediation order for the LW real-robot deploymen
   IDs `LW-048` through `LW-053` rather than overwriting resolved history.
 - The review confirmed the new pending issues `LW-048` through `LW-053` below.
 
+## 2026-08-20 Comprehensive Re-review Addendum
+
+- Reviewed: 2026-08-18; recorded: 2026-08-20
+- Repository HEAD during review: `d85f680`
+- Review scope: real-node startup and safety paths, the maintained 200 Hz
+  control hot path and cross-thread handoffs, policy/configuration/ONNX
+  integration, retained MuJoCo adapter assumptions, and automated test coverage.
+- Verification: static inspection and targeted `cppcheck` completed; after the
+  missing test target was built, the maintained build's full 48/48 CTest suite
+  passed. No ROS node, simulator GUI, serial device, IMU, joystick, real robot,
+  or motor was started.
+- The review found no reason to reopen a resolved issue. Four newly confirmed
+  problems are recorded as `LW-054` through `LW-057`; their order first follows
+  deployment risk and then the dependencies needed for meaningful whole-cycle
+  verification.
+- The untracked user-owned `.agents/skills/inspect-context-compactions/`
+  directory was preserved and is not part of this review record.
+
 ## Ordered Summary
 
 | Order | ID | Priority | Status | Summary |
@@ -163,6 +181,10 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 51 | LW-041 | P2 / low | resolved | Make high-rate Sim2Sim plot publishing explicitly opt-in |
 | 52 | LW-042 | P2 / medium | resolved | Make real debug telemetry nonblocking, source-fresh, and rate-bounded |
 | 53 | LW-043 | P2 / medium | resolved | Retire the Sim2Sim actuator-model runtime while preserving offline training |
+| 54 | LW-054 | P1 / high | resolved | Preload morphology-transition motion assets before control workers |
+| 55 | LW-055 | P1 / high | pending | Remove blocking synchronization from the real control deadline path |
+| 56 | LW-056 | P2 / medium | pending | Make the maintained complete control cycle allocation-stable |
+| 57 | LW-057 | P2 / medium | pending | Validate the MuJoCo control adapter layout and test actual safety actions |
 
 ---
 
@@ -4390,6 +4412,257 @@ to the configured 200 Hz debug rate.
   通过。未启动 MuJoCo GUI、ROS 节点或访问任何硬件，用户未跟踪技能目录
   保持未修改。
 - **Remaining Follow-ups**: none
+
+---
+
+## [LW-054] Preload morphology-transition motion assets before control workers
+
+**Priority**: P1 / high
+**Status**: resolved
+**Dependencies**: LW-009, LW-011, LW-012, LW-038
+
+### Problem
+
+Both morphology-transition states construct `MotionLoaderLW` from their
+`Enter()` callbacks. Those callbacks execute in the 200 Hz control worker, but
+construction resolves a path, opens and parses a complete CSV, grows row and
+vector storage, derives velocities, and writes diagnostics. A requested
+leg-to-wheel or wheel-to-leg transition can therefore block the deadline path
+on filesystem latency and unbounded parsing/allocation while the motor boards
+retain the last command.
+
+### Evidence
+
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:407-448`
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:517-558`
+- `src/rl_sar/library/core/motion_loader/motion_loader_lw.cpp:91-255`
+- `src/rl_sar/test/test_lw_fsm_transitions.cpp:303-386`
+
+The transition tests currently exercise `CheckChange()` but do not enter the
+target state, so they cannot detect post-start filesystem access or parsing.
+
+### Intended Scope
+
+- Load and fully validate both transition CSV assets during fallible startup,
+  before any command-producing worker starts.
+- Bind immutable prepared motion data to the policy/state definition; make
+  `Enter()` perform only bounded cursor reset and yaw/reference alignment.
+- Preserve the current FPS, offset, interpolation, joint-order, policy, and
+  safety semantics, and fail startup before command delivery when either asset
+  is invalid.
+- Add tests that execute the real transition-entry path and prove it no longer
+  depends on the files after startup.
+
+### Acceptance Criteria
+
+- After successful startup, neither transition direction opens or parses a CSV
+  from `Enter()` or another control-cycle callback.
+- Transition entry has a measured bounded execution path without full-motion
+  allocation, while both motion trajectories remain numerically equivalent.
+- Missing, malformed, or incompatible transition assets fail before control
+  workers and motor-command delivery start.
+- Transition-entry regressions, the maintained strict build, sanitizer checks,
+  and `git diff --check` pass without accessing real hardware.
+
+### Resolution
+
+- **Resolved**: 2026-08-20T15:05:58+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 将 CSV 解析、完整轨迹校验、速度表计算和动作数据分配
+  从 `leg_to_wheel`/`wheel_to_leg` 的 200 Hz FSM `Enter()` 移到
+  `PreloadLWPolicyContext()`；策略定义持有不可变预处理动作，运行时复用启动期
+  创建的独立播放游标。`Enter()` 只选择已准备游标、复位时间/yaw 对齐并执行
+  原有策略激活；成功路径不再访问动作文件或输出重置日志。真实机预加载继续受
+  启动失能守卫保护并早于运行态交接和工作线程，MuJoCo 入口同样早于其工作线程。
+  保持 FPS、时间偏移、插值、关节顺序、ONNX、FSM 和 S1-S4 行为不变；未处理
+  LW-055 的同步或 LW-056 的逐周期快照分配。
+- **Changed Files**: `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`、
+  `src/rl_sar/fsm_robot/fsm_LW.hpp`、
+  `src/rl_sar/library/core/motion_loader/motion_loader_lw.{hpp,cpp}`、
+  `src/rl_sar/library/core/rl_sdk/rl_sdk.{hpp,cpp}`、
+  `src/rl_sar/test/test_lw_motion_loader.cpp`、
+  `src/rl_sar/test/test_lw_fsm_transitions.cpp`、
+  `src/rl_sar/test/test_lw_real_startup_disable_integration.py`。
+- **Verification**: 当前 Debug 完整构建成功并重新链接 `rl_real_LW`、
+  `rl_sim_LW` 和 `lw_config_profiler`，完整 48/48 CTest 通过。新增回归在临时
+  policy root 中预加载两个真实转换策略后删除 CSV，再执行两侧实际 `Enter()`，
+  均复用原播放游标并发布正确尺寸的首帧引用；缺失 CSV 在策略上下文预加载时
+  失败且不发布定义或游标。动作单测验证不可变预处理数据在源文件删除后仍可由
+  两个独立游标按原时间/速度语义播放。全新 `LW_STRICT_WARNINGS=ON` 完整构建
+  通过；两项定向测试在 AddressSanitizer/UndefinedBehaviorSanitizer 下通过。
+  定向 `cppcheck` 未发现新增问题，Python 语法和 `git diff --check` 通过。
+  未启动 ROS 节点、MuJoCo GUI、串口、IMU、摇杆、真机或电机，用户未跟踪技能
+  目录保持未修改。
+- **Remaining Follow-ups**: LW-055, LW-056, LW-057
+
+---
+
+## [LW-055] Remove blocking synchronization from the real control deadline path
+
+**Priority**: P1 / high
+**Status**: pending
+**Dependencies**: LW-007, LW-008, LW-011, LW-032, LW-033, LW-038
+
+### Problem
+
+The real 200 Hz control callback still obtains input through a blocking mutex,
+reads IMU/AHRS data through `realtime_tools::RealtimeBox` (whose supported ROS
+Humble implementation also takes a blocking mutex), and uses atomic
+`shared_ptr` snapshots for policy activation/output. On the deployed standard
+library those shared-pointer operations are not lock-free. If a lower-priority
+joystick, ROS, or inference writer is preempted while holding one of these
+internal locks, the `SCHED_FIFO` control thread can suffer unbounded priority
+inversion and miss its 5 ms deadline.
+
+### Evidence
+
+- `src/rl_sar/library/core/safety/lw_runtime_sync.hpp:58-136`
+- `src/rl_sar/include/rl_real_LW.hpp:114-126`
+- `src/rl_sar/src/rl_real_LW.cpp:547-565`
+- `src/rl_sar/src/rl_real_LW.cpp:630-710`
+- `src/rl_sar/src/rl_real_LW.cpp:822-833`
+- `src/rl_sar/library/core/safety/lw_runtime_core.hpp:273-338`
+- `src/rl_sar/library/core/safety/lw_runtime_core.hpp:617-636`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:1338-1426`
+- `src/rl_sar/test/test_lw_runtime_sync.cpp:128-162`
+- `src/rl_sar/test/test_lw_runtime_sync.cpp:245-310`
+- `/opt/ros/humble/include/realtime_tools/realtime_tools/realtime_box.hpp:45-72`
+
+Existing tests prove snapshot coherence and the policy-input publisher's
+try-lock fallback, but do not hold each remaining writer and prove that a
+control-side read returns within a fixed bound.
+
+### Intended Scope
+
+- Replace control-side blocking reads with bounded nonblocking latest-value
+  snapshots suitable for a single real-time reader, using explicit sequence or
+  revision validation and fixed storage where appropriate.
+- If a writer is active, retain the last coherent joystick, IMU/AHRS,
+  activation, or policy-output sample and let existing freshness/generation
+  checks decide whether operation remains safe.
+- Preserve single-owner command generation, activation generations, freshness
+  rules, safety latching, and fault-action semantics.
+- Add adversarial contention tests for every handoff used by the real control
+  callback, not only the policy-input publisher.
+
+### Acceptance Criteria
+
+- No control-side input, IMU/AHRS, activation, or policy-output read can wait
+  for a mutex or other writer-owned blocking primitive.
+- Tests pause each writer mid-publication and prove the control read returns
+  promptly with either the new coherent sample or the last coherent sample.
+- Torn samples, cross-generation outputs, and stale-data acceptance remain
+  impossible; existing S1-S4 behavior is unchanged.
+- Deadline stress, ThreadSanitizer where supported, the maintained strict build,
+  and `git diff --check` pass without starting a real node or hardware.
+
+---
+
+## [LW-056] Make the maintained complete control cycle allocation-stable
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-038, LW-054, LW-055
+
+### Problem
+
+The existing allocation regression covers isolated snapshot/interpolation
+helpers, not the maintained `runControlCycle()` orchestration. A nominal cycle
+still builds validation descriptor vectors, copies FSM state-name strings, and
+during transition motion repeatedly creates vector/shared-pointer reference
+objects. The MuJoCo adapter also repeatedly decodes unchanged YAML vectors in
+its high-rate state, command, and joystick paths. These costs can grow or
+regress without any test observing allocations in the actual control flow.
+
+### Evidence
+
+- `src/rl_sar/library/core/safety/lw_control_safety.hpp:87-119`
+- `src/rl_sar/library/core/safety/lw_control_safety.hpp:151-195`
+- `src/rl_sar/library/core/fsm/fsm.hpp:20-88`
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:462-484`
+- `src/rl_sar/fsm_robot/fsm_LW.hpp:572-594`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:154-172`
+- `src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:753-766`
+- `src/rl_sar/library/core/motion_loader/motion_loader_lw.cpp:289-350`
+- `src/rl_sar/src/rl_sim_LW.cpp:740-855`
+- `src/rl_sar/src/rl_sim_LW.cpp:1017-1066`
+- `src/rl_sar/test/test_lw_allocation_bound.cpp:123-175`
+
+### Intended Scope
+
+- Replace per-cycle validation descriptor containers and FSM state-name copies
+  with fixed/static descriptors and a nonallocating transition identity.
+- Reuse fixed transition-reference storage or retained slots instead of
+  allocating vectors/shared owners on every transition-motion cycle.
+- Make the retained MuJoCo adapter consume its already validated typed LW
+  runtime configuration instead of decoding YAML vectors repeatedly.
+- Extend allocation instrumentation to a warmed complete nominal control cycle
+  and both transition `Run()` paths; keep rich diagnostic allocation on an
+  exceptional fault path permissible and explicit.
+
+### Acceptance Criteria
+
+- Warmed successful real-like control cycles and transition-motion cycles
+  perform zero project-owned dynamic allocations.
+- The MuJoCo state/command/joystick hot paths perform no repeated YAML decoding
+  or configuration-vector copying.
+- FSM transitions, validation diagnostics, motion values, and runtime safety
+  decisions remain behaviorally equivalent.
+- Whole-cycle allocation tests, transition tests, strict and sanitizer builds,
+  and `git diff --check` pass without accessing hardware or opening a GUI.
+
+---
+
+## [LW-057] Validate the MuJoCo control adapter layout and test actual safety actions
+
+**Priority**: P2 / medium
+**Status**: pending
+**Dependencies**: LW-021, LW-036, LW-053, LW-056
+
+### Problem
+
+The retained MuJoCo adapter assumes fixed contiguous `sensordata` blocks for
+joint position, velocity, torque, quaternion, and gyro data, and reuses the
+policy joint mapping as actuator `ctrl` indices. The current scene happens to
+match those assumptions, but a reordered or inserted sensor/actuator can
+silently feed the policy the wrong state or command the wrong actuator. Current
+description tests check only broad counts and selected foot-force names, while
+runtime-parity tests use a synthetic trace instead of the actual MuJoCo adapter
+and safety-action writer.
+
+### Evidence
+
+- `src/rl_sar/src/rl_sim_LW.cpp:509-568`
+- `src/rl_sar/src/rl_sim_LW.cpp:740-855`
+- `src/rl_sar_zoo/LW_description/mjcf/LW.xml:134-190`
+- `src/rl_sar/test/test_lw_description.cpp:9-65`
+- `src/rl_sar/test/test_lw_runtime_parity.cpp:123-144`
+- `src/rl_sar/test/test_lw_runtime_parity.cpp:654-709`
+- `src/rl_sar/test/test_lw_sim_lifecycle_integration.py`
+
+### Intended Scope
+
+- Resolve the required joint, IMU, and actuator objects by name at startup;
+  validate their MuJoCo object types, dimensions, data addresses, and complete
+  one-to-one policy-joint mapping, then cache explicit read/write indices.
+- Fail startup on an incompatible scene instead of relying on aggregate sensor
+  or actuator counts, and preserve the current scene's numerical ordering.
+- Extract a headless-testable MuJoCo adapter boundary that feeds actual state
+  and applies actual runtime safety decisions, without launching ROS or a GUI.
+- Test S2 damping output and S3/S4 zeroing over every model actuator, including
+  S4 exit propagation.
+
+### Acceptance Criteria
+
+- Reordering, omitting, duplicating, or dimension-changing any required sensor
+  or actuator is either handled by the cached named mapping or rejected before
+  the physics/control workers start.
+- State reads and command writes use only the validated cached addresses and do
+  not assume that policy joint indices equal MuJoCo actuator indices.
+- Headless tests exercise the actual adapter and prove S2 writes the expected
+  damping torque, S3/S4 zero all `nu` controls, and S4 requests exit.
+- Description, adapter, lifecycle, strict and sanitizer tests plus
+  `git diff --check` pass without opening a GUI, ROS node, or real hardware.
 
 ---
 

@@ -174,6 +174,35 @@ void testManyFrameTimestamps(const Fixture& fixture)
     }
 }
 
+void testPreparedMotionSurvivesSourceRemoval(const Fixture& fixture)
+{
+    const fs::path file = fixture.write(
+        "prepared.csv", kRowA + kRowB + kRowC);
+    const auto prepared = MotionLoaderLW::Prepare(
+        file.string(), 10.0f, 1, 2);
+    require(prepared != nullptr, "prepared motion is null");
+    require(fs::remove(file), "failed to remove prepared source CSV");
+
+    MotionLoaderLW first(prepared);
+    MotionLoaderLW second(prepared);
+    first.Reset({1.0f, 0.0f, 0.0f, 0.0f});
+    second.Reset({1.0f, 0.0f, 0.0f, 0.0f});
+    first.Update(0.15f);
+    second.Update(0.30f);
+
+    requireNear(first.GetDuration(), 0.3f, "prepared duration");
+    requireVectorNear(
+        first.GetJointPos(), {2.0f, 4.0f}, "first prepared cursor");
+    requireVectorNear(
+        second.GetJointPos(), {5.0f, 10.0f}, "second prepared cursor");
+    requireFailure(
+        []() {
+            MotionLoaderLW loader(
+                MotionLoaderLW::PreparedMotionPtr{});
+        },
+        "prepared motion must not be null");
+}
+
 void testConstructorAndCSVValidation(const Fixture& fixture)
 {
     const fs::path valid = fixture.write("valid.csv", kRowA + kRowB);
@@ -263,6 +292,7 @@ int main()
         testOffsetOneTimeline(fixture);
         testOffsetZeroSupportsFutureCSV(fixture);
         testManyFrameTimestamps(fixture);
+        testPreparedMotionSurvivesSourceRemoval(fixture);
         testConstructorAndCSVValidation(fixture);
     }
     catch (const std::exception& exception)

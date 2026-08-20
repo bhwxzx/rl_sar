@@ -86,9 +86,14 @@ class RealStartupDisableIntegrationTests(unittest.TestCase):
             constructor.index("startup_disable_->requireHealthy();"),
             constructor.index("this->PreloadModel(policy);"),
         )
+        motion_preload = constructor.index("this->PreloadLWPolicyContext(policy);")
+        runtime_handoff = constructor.index("startup_disable_->handOffToRuntime(")
+        worker_start = constructor.index("this->loop_control->start();")
+        self.assertLess(motion_preload, runtime_handoff)
+        self.assertLess(motion_preload, worker_start)
         self.assertLess(
-            constructor.index("startup_disable_->handOffToRuntime("),
-            constructor.index("this->loop_control->start();"),
+            runtime_handoff,
+            worker_start,
         )
 
     def test_normal_destruction_finalizes_after_worker_shutdown(self) -> None:

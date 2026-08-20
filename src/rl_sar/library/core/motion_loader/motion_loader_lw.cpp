@@ -88,20 +88,24 @@ float parseFiniteValue(
 }
 } // namespace
 
-MotionLoaderLW::MotionLoaderLW(
+struct MotionLoaderLW::PreparedMotion
+{
+    std::vector<std::vector<float>> root_positions;
+    std::vector<std::vector<float>> root_quaternions;
+    std::vector<std::vector<float>> joint_positions;
+    std::vector<std::vector<float>> joint_velocities;
+    std::size_t num_frames = 0;
+    std::size_t num_joints = 0;
+    int time_offset_frames = 0;
+    float dt = 0.0f;
+    float duration = 0.0f;
+};
+
+MotionLoaderLW::PreparedMotionPtr MotionLoaderLW::Prepare(
     const std::string& motion_file,
     float fps,
     int time_offset_frames,
     std::size_t expected_num_joints)
-    : num_frames_(0),
-      num_joints_(expected_num_joints),
-      time_offset_frames_(time_offset_frames),
-      dt_(0.0f),
-      duration_(0.0f),
-      index_0_(0),
-      index_1_(0),
-      blend_(0.0f),
-      world_to_init_{1.0f, 0.0f, 0.0f, 0.0f}
 {
     if (!std::isfinite(fps) || fps <= 0.0f)
     {
@@ -119,43 +123,19 @@ MotionLoaderLW::MotionLoaderLW(
             "LW motion expected_num_joints must be positive");
     }
 
-    dt_ = 1.0f / fps;
-    LoadFromCSV(motion_file);
-    ComputeVelocities();
+    auto prepared = std::make_shared<PreparedMotion>();
+    prepared->num_joints = expected_num_joints;
+    prepared->time_offset_frames = time_offset_frames;
+    prepared->dt = 1.0f / fps;
 
-    num_frames_ = root_positions_.size();
-    const double last_source_frame =
-        static_cast<double>(time_offset_frames_)
-        + static_cast<double>(num_frames_ - 1);
-    const double duration = last_source_frame * static_cast<double>(dt_);
-    if (!std::isfinite(duration)
-        || duration > static_cast<double>(std::numeric_limits<float>::max()))
-    {
-        throw std::overflow_error("LW motion duration overflows float");
-    }
-    duration_ = static_cast<float>(duration);
-    if (!std::isfinite(duration_) || duration_ <= 0.0f)
-    {
-        throw std::runtime_error(
-            "LW motion duration must be finite and positive");
-    }
-
-    std::cout << LOGGER::INFO << "MotionLoaderLW: Loaded " << num_frames_
-              << " frames, " << num_joints_
-              << " joints, first-frame-time="
-              << static_cast<float>(time_offset_frames_) * dt_
-              << "s, duration=" << duration_ << "s" << std::endl;
-}
-
-void MotionLoaderLW::LoadFromCSV(const std::string& filename)
-{
-    std::ifstream file(filename);
+    std::ifstream file(motion_file);
     if (!file.is_open())
     {
-        throw std::runtime_error("Failed to open motion file: " + filename);
+        throw std::runtime_error(
+            "Failed to open motion file: " + motion_file);
     }
 
-    const std::size_t expected_columns = 7 + num_joints_;
+    const std::size_t expected_columns = 7 + expected_num_joints;
     std::vector<std::vector<float>> rows;
     std::string line;
     std::size_t row_number = 0;
@@ -164,7 +144,7 @@ void MotionLoaderLW::LoadFromCSV(const std::string& filename)
         ++row_number;
         if (trim(line).empty())
         {
-            csvError(filename, row_number, "row is empty");
+            csvError(motion_file, row_number, "row is empty");
         }
 
         std::stringstream stream(line);
@@ -176,23 +156,23 @@ void MotionLoaderLW::LoadFromCSV(const std::string& filename)
             ++column;
             row.push_back(
                 parseFiniteValue(
-                    token, filename, row_number, column));
+                    token, motion_file, row_number, column));
         }
         if (!line.empty() && line.back() == ',')
         {
             csvError(
-                filename,
+                motion_file,
                 row_number,
                 "column " + std::to_string(column + 1) + " is empty");
         }
         if (row.size() != expected_columns)
         {
             csvError(
-                filename,
+                motion_file,
                 row_number,
                 "expected " + std::to_string(expected_columns)
                     + " columns (7 root + "
-                    + std::to_string(num_joints_) + " joints), got "
+                    + std::to_string(expected_num_joints) + " joints), got "
                     + std::to_string(row.size()));
         }
 
@@ -203,7 +183,7 @@ void MotionLoaderLW::LoadFromCSV(const std::string& filename)
             || quaternion_norm_squared <= 1.0e-12f)
         {
             csvError(
-                filename,
+                motion_file,
                 row_number,
                 "root quaternion norm is too small");
         }
@@ -213,45 +193,103 @@ void MotionLoaderLW::LoadFromCSV(const std::string& filename)
     if (rows.empty())
     {
         throw std::runtime_error(
-            "LW motion CSV contains no frames: " + filename);
+            "LW motion CSV contains no frames: " + motion_file);
     }
     if (rows.size() < 2)
     {
         throw std::runtime_error(
-            "LW motion CSV requires at least two frames: " + filename);
+            "LW motion CSV requires at least two frames: " + motion_file);
     }
 
-    root_positions_.reserve(rows.size());
-    root_quaternions_.reserve(rows.size());
-    joint_positions_.reserve(rows.size());
+    prepared->root_positions.reserve(rows.size());
+    prepared->root_quaternions.reserve(rows.size());
+    prepared->joint_positions.reserve(rows.size());
     for (const auto& row : rows)
     {
-        root_positions_.push_back({row[0], row[1], row[2]});
-        root_quaternions_.push_back(
+        prepared->root_positions.push_back({row[0], row[1], row[2]});
+        prepared->root_quaternions.push_back(
             QuaternionNormalize({row[6], row[3], row[4], row[5]}));
-        joint_positions_.emplace_back(row.begin() + 7, row.end());
+        prepared->joint_positions.emplace_back(row.begin() + 7, row.end());
+    }
+
+    prepared->joint_velocities.assign(
+        prepared->joint_positions.size(),
+        std::vector<float>(expected_num_joints, 0.0f));
+    for (std::size_t frame = 0;
+         frame + 1 < prepared->joint_positions.size();
+         ++frame)
+    {
+        for (std::size_t joint = 0; joint < expected_num_joints; ++joint)
+        {
+            prepared->joint_velocities[frame][joint] =
+                (prepared->joint_positions[frame + 1][joint]
+                 - prepared->joint_positions[frame][joint])
+                / prepared->dt;
+        }
+    }
+    prepared->joint_velocities.back() =
+        prepared->joint_velocities[prepared->joint_velocities.size() - 2];
+
+    prepared->num_frames = prepared->root_positions.size();
+    const double last_source_frame =
+        static_cast<double>(prepared->time_offset_frames)
+        + static_cast<double>(prepared->num_frames - 1);
+    const double duration =
+        last_source_frame * static_cast<double>(prepared->dt);
+    if (!std::isfinite(duration)
+        || duration > static_cast<double>(std::numeric_limits<float>::max()))
+    {
+        throw std::overflow_error("LW motion duration overflows float");
+    }
+    prepared->duration = static_cast<float>(duration);
+    if (!std::isfinite(prepared->duration) || prepared->duration <= 0.0f)
+    {
+        throw std::runtime_error(
+            "LW motion duration must be finite and positive");
+    }
+
+    std::cout << LOGGER::INFO << "MotionLoaderLW: Prepared "
+              << prepared->num_frames
+              << " frames, " << prepared->num_joints
+              << " joints, first-frame-time="
+              << static_cast<float>(prepared->time_offset_frames)
+                    * prepared->dt
+              << "s, duration=" << prepared->duration << "s"
+              << std::endl;
+    return prepared;
+}
+
+MotionLoaderLW::MotionLoaderLW(
+    const std::string& motion_file,
+    float fps,
+    int time_offset_frames,
+    std::size_t expected_num_joints)
+    : MotionLoaderLW(
+          Prepare(
+              motion_file,
+              fps,
+              time_offset_frames,
+              expected_num_joints))
+{
+}
+
+MotionLoaderLW::MotionLoaderLW(PreparedMotionPtr prepared_motion)
+    : prepared_motion_(std::move(prepared_motion)),
+      index_0_(0),
+      index_1_(0),
+      blend_(0.0f),
+      world_to_init_{1.0f, 0.0f, 0.0f, 0.0f}
+{
+    if (!prepared_motion_)
+    {
+        throw std::invalid_argument(
+            "LW prepared motion must not be null");
     }
 }
 
-void MotionLoaderLW::ComputeVelocities()
+float MotionLoaderLW::GetDuration() const
 {
-    joint_velocities_.assign(
-        joint_positions_.size(),
-        std::vector<float>(num_joints_, 0.0f));
-    for (std::size_t frame = 0;
-         frame + 1 < joint_positions_.size();
-         ++frame)
-    {
-        for (std::size_t joint = 0; joint < num_joints_; ++joint)
-        {
-            joint_velocities_[frame][joint] =
-                (joint_positions_[frame + 1][joint]
-                 - joint_positions_[frame][joint])
-                / dt_;
-        }
-    }
-    joint_velocities_.back() =
-        joint_velocities_[joint_velocities_.size() - 2];
+    return prepared_motion_->duration;
 }
 
 void MotionLoaderLW::Update(float time)
@@ -260,16 +298,20 @@ void MotionLoaderLW::Update(float time)
     {
         throw std::invalid_argument("LW motion update time must be finite");
     }
-    const float clamped_time = std::clamp(time, 0.0f, duration_);
-    const float last_frame = static_cast<float>(num_frames_ - 1);
+    const float clamped_time =
+        std::clamp(time, 0.0f, prepared_motion_->duration);
+    const float last_frame =
+        static_cast<float>(prepared_motion_->num_frames - 1);
     const float frame_float = std::clamp(
-        clamped_time / dt_
-            - static_cast<float>(time_offset_frames_),
+        clamped_time / prepared_motion_->dt
+            - static_cast<float>(prepared_motion_->time_offset_frames),
         0.0f,
         last_frame);
 
     index_0_ = static_cast<std::size_t>(std::floor(frame_float));
-    index_1_ = std::min(index_0_ + 1, num_frames_ - 1);
+    index_1_ = std::min(
+        index_0_ + 1,
+        prepared_motion_->num_frames - 1);
     blend_ = frame_float - static_cast<float>(index_0_);
 }
 
@@ -281,19 +323,18 @@ void MotionLoaderLW::Reset(const std::vector<float>& robot_base_quat)
         ComputeTorsoQuat(robot_base_quat);
     const std::vector<float> motion_torso = GetAnchorQuat();
     world_to_init_ = ComputeYawAlignment(robot_torso, motion_torso);
-
-    std::cout << LOGGER::INFO
-              << "Motion reset with yaw alignment" << std::endl;
 }
 
 std::vector<float> MotionLoaderLW::GetJointPos() const
 {
     std::vector<float> result;
-    result.reserve(num_joints_);
-    const auto& pos0 = joint_positions_[index_0_];
-    const auto& pos1 = joint_positions_[index_1_];
+    result.reserve(prepared_motion_->num_joints);
+    const auto& pos0 = prepared_motion_->joint_positions[index_0_];
+    const auto& pos1 = prepared_motion_->joint_positions[index_1_];
 
-    for (std::size_t joint = 0; joint < num_joints_; ++joint)
+    for (std::size_t joint = 0;
+         joint < prepared_motion_->num_joints;
+         ++joint)
     {
         result.push_back(
             pos0[joint] * (1.0f - blend_)
@@ -305,11 +346,13 @@ std::vector<float> MotionLoaderLW::GetJointPos() const
 std::vector<float> MotionLoaderLW::GetJointVel() const
 {
     std::vector<float> result;
-    result.reserve(num_joints_);
-    const auto& vel0 = joint_velocities_[index_0_];
-    const auto& vel1 = joint_velocities_[index_1_];
+    result.reserve(prepared_motion_->num_joints);
+    const auto& vel0 = prepared_motion_->joint_velocities[index_0_];
+    const auto& vel1 = prepared_motion_->joint_velocities[index_1_];
 
-    for (std::size_t joint = 0; joint < num_joints_; ++joint)
+    for (std::size_t joint = 0;
+         joint < prepared_motion_->num_joints;
+         ++joint)
     {
         result.push_back(
             vel0[joint] * (1.0f - blend_)
@@ -321,8 +364,8 @@ std::vector<float> MotionLoaderLW::GetJointVel() const
 std::vector<float> MotionLoaderLW::GetRootQuat() const
 {
     return Slerp(
-        root_quaternions_[index_0_],
-        root_quaternions_[index_1_],
+        prepared_motion_->root_quaternions[index_0_],
+        prepared_motion_->root_quaternions[index_1_],
         blend_);
 }
 

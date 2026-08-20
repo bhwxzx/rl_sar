@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include <unistd.h>
+
 namespace
 {
 void require(bool condition, const std::string& message)
@@ -52,6 +54,188 @@ public:
     void GetState(RobotState<float>*) override {}
     void SetCommand(const RobotCommand<float>*) override {}
 };
+
+class TemporaryPolicyRoot
+{
+public:
+    TemporaryPolicyRoot()
+        : root(
+              std::filesystem::temp_directory_path()
+              / ("lw-fsm-motion-preload-"
+                 + std::to_string(getpid())))
+    {
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+        std::filesystem::create_directories(root / "LW/robot_lab");
+        copyFile("LW/base.yaml");
+    }
+
+    ~TemporaryPolicyRoot()
+    {
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+    }
+
+    void copyTransition(
+        const std::string& name,
+        const std::string& motion_file,
+        bool include_motion = true)
+    {
+        const std::filesystem::path relative =
+            std::filesystem::path("LW/robot_lab") / name;
+        std::filesystem::create_directories(root / relative);
+        copyFile((relative / "config.yaml").generic_string());
+        copyFile((relative / "policy.onnx").generic_string());
+        if (include_motion)
+        {
+            copyFile((relative / motion_file).generic_string());
+        }
+    }
+
+    void removeMotion(
+        const std::string& name,
+        const std::string& motion_file) const
+    {
+        require(
+            std::filesystem::remove(
+                root / "LW/robot_lab" / name / motion_file),
+            "failed to remove preloaded transition motion");
+    }
+
+    std::filesystem::path root;
+
+private:
+    void copyFile(const std::string& relative)
+    {
+        const std::filesystem::path source =
+            std::filesystem::path(POLICY_DIR) / relative;
+        const std::filesystem::path destination = root / relative;
+        std::filesystem::create_directories(destination.parent_path());
+        std::filesystem::copy_file(
+            source,
+            destination,
+            std::filesystem::copy_options::overwrite_existing);
+    }
+};
+
+void configurePolicyRoot(TestRL& rl, const std::filesystem::path& root)
+{
+    rl.SetPolicyRoot(root);
+    rl.robot_name = "LW";
+    rl.ReadYaml("LW", "base.yaml");
+}
+
+void preloadTransition(TestRL& rl, const std::string& policy)
+{
+    rl.PreloadModel(policy);
+    rl.PreloadLWPolicyContext(policy);
+    require(
+        rl.GetPreloadedLWMotionPlayer(policy) != nullptr,
+        "transition motion player was not preloaded: " + policy);
+    const auto definition = rl.GetLWPolicyDefinition(policy);
+    require(
+        definition && definition->prepared_motion,
+        "transition policy did not retain prepared motion: " + policy);
+}
+
+template <typename TransitionState>
+void enterPreloadedTransition(
+    TestRL& rl,
+    const std::string& expected_policy)
+{
+    RobotState<float> robot_state;
+    robot_state.motor_state.resize(10);
+    robot_state.imu.quaternion = {1.0f, 0.0f, 0.0f, 0.0f};
+    RobotCommand<float> robot_command;
+    robot_command.motor_command.resize(10);
+
+    TransitionState state(&rl);
+    state.fsm_state = &robot_state;
+    state.fsm_command = &robot_command;
+    MotionLoaderLW* const prepared_player =
+        rl.GetPreloadedLWMotionPlayer(expected_policy);
+    state.Enter();
+
+    const auto activation = rl.LoadLWPolicyActivation();
+    require(activation != nullptr, "preloaded transition did not activate");
+    require(
+        activation->definition->path == expected_policy,
+        "preloaded transition activated the wrong policy");
+    require(
+        rl.motion_loader_lw == prepared_player,
+        "transition did not reuse the startup-preloaded player");
+    require(rl.motion_length > 0.0f, "transition motion length is invalid");
+    const auto reference = rl.LoadLWMotionReference();
+    require(reference != nullptr, "transition did not publish its first reference");
+    require(reference->joint_pos.size() == 10, "reference position size is invalid");
+    require(reference->joint_vel.size() == 10, "reference velocity size is invalid");
+
+    state.Exit();
+    require(
+        rl.motion_loader_lw == nullptr,
+        "transition exit retained an active motion player");
+    require(
+        rl.LoadLWPolicyActivation() == nullptr,
+        "transition exit retained policy activation");
+}
+
+void testMorphologyEnterUsesStartupPreload()
+{
+    TemporaryPolicyRoot policy_root;
+    policy_root.copyTransition(
+        "leg_to_wheel", "leg_to_wheel_transform_60hz.csv");
+    policy_root.copyTransition(
+        "wheel_to_leg", "wheel_to_leg_transform_60hz.csv");
+
+    TestRL rl;
+    configurePolicyRoot(rl, policy_root.root);
+    const std::string leg_to_wheel = "LW/robot_lab/leg_to_wheel";
+    const std::string wheel_to_leg = "LW/robot_lab/wheel_to_leg";
+    preloadTransition(rl, leg_to_wheel);
+    preloadTransition(rl, wheel_to_leg);
+
+    policy_root.removeMotion(
+        "leg_to_wheel", "leg_to_wheel_transform_60hz.csv");
+    policy_root.removeMotion(
+        "wheel_to_leg", "wheel_to_leg_transform_60hz.csv");
+
+    enterPreloadedTransition<LW_fsm::RLFSMStateRL_LegToWheel>(
+        rl, leg_to_wheel);
+    enterPreloadedTransition<LW_fsm::RLFSMStateRL_WheelToLeg>(
+        rl, wheel_to_leg);
+}
+
+void testMissingMotionFailsDuringPreload()
+{
+    TemporaryPolicyRoot policy_root;
+    policy_root.copyTransition(
+        "leg_to_wheel",
+        "leg_to_wheel_transform_60hz.csv",
+        false);
+
+    TestRL rl;
+    configurePolicyRoot(rl, policy_root.root);
+    const std::string policy = "LW/robot_lab/leg_to_wheel";
+    rl.PreloadModel(policy);
+    bool rejected = false;
+    try
+    {
+        rl.PreloadLWPolicyContext(policy);
+    }
+    catch (const std::runtime_error& exception)
+    {
+        rejected =
+            std::string(exception.what()).find("Failed to open motion file")
+            != std::string::npos;
+    }
+    require(rejected, "missing transition motion did not fail during preload");
+    require(
+        rl.GetLWPolicyDefinition(policy) == nullptr,
+        "failed motion preload published a policy definition");
+    require(
+        rl.GetPreloadedLWMotionPlayer(policy) == nullptr,
+        "failed motion preload published a motion player");
+}
 
 void testPolicyRootResolution(TestRL& rl)
 {
@@ -375,6 +559,8 @@ int main()
     try
     {
         testCoreRejectsUnregisteredTargets();
+        testMorphologyEnterUsesStartupPreload();
+        testMissingMotionFailsDuringPreload();
 
         TestRL rl;
         testPolicyRootResolution(rl);

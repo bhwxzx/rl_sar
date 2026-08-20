@@ -3,6 +3,7 @@
 #define MOTION_LOADER_LW_HPP
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,22 @@
 class MotionLoaderLW
 {
 public:
+    struct PreparedMotion;
+    using PreparedMotionPtr = std::shared_ptr<const PreparedMotion>;
+
+    /**
+     * @brief Parse and validate an immutable motion clip.
+     *
+     * This is the only operation that accesses the CSV file or computes the
+     * complete velocity table. Runtime playback should construct a cursor from
+     * the returned prepared motion.
+     */
+    static PreparedMotionPtr Prepare(
+        const std::string& motion_file,
+        float fps,
+        int time_offset_frames,
+        std::size_t expected_num_joints);
+
     /**
      * @brief Constructor
      * @param motion_file Path to CSV motion file
@@ -33,6 +50,11 @@ public:
         float fps,
         int time_offset_frames,
         std::size_t expected_num_joints);
+
+    /**
+     * @brief Construct a lightweight playback cursor over prepared data.
+     */
+    explicit MotionLoaderLW(PreparedMotionPtr prepared_motion);
 
     /**
      * @brief Update motion to a specific time
@@ -73,7 +95,7 @@ public:
     /**
      * @brief Get motion duration in seconds
      */
-    float GetDuration() const { return duration_; }
+    float GetDuration() const;
 
     /**
      * @brief Get world to init transformation quaternion (yaw alignment)
@@ -97,17 +119,6 @@ public:
 
 private:
     /**
-     * @brief Load motion data from CSV file
-     * @param filename Path to CSV file
-     */
-    void LoadFromCSV(const std::string& filename);
-
-    /**
-     * @brief Compute velocities from positions using finite differences
-     */
-    void ComputeVelocities();
-
-    /**
      * @brief Spherical linear interpolation between two quaternions
      * @param q0 First quaternion [w, x, y, z]
      * @param q1 Second quaternion [w, x, y, z]
@@ -116,18 +127,7 @@ private:
      */
     std::vector<float> Slerp(const std::vector<float>& q0, const std::vector<float>& q1, float t) const;
 
-    // Motion data storage
-    std::vector<std::vector<float>> root_positions_;     // [T, 3]
-    std::vector<std::vector<float>> root_quaternions_;   // [T, 4] - each is [w, x, y, z]
-    std::vector<std::vector<float>> joint_positions_;    // [T, N]
-    std::vector<std::vector<float>> joint_velocities_;   // [T, N]
-
-    // Motion properties
-    std::size_t num_frames_;
-    std::size_t num_joints_;
-    int time_offset_frames_;
-    float dt_;           // Time between frames
-    float duration_;     // Total duration
+    PreparedMotionPtr prepared_motion_;
 
     // Current interpolation state
     std::size_t index_0_; // Current frame index

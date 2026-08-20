@@ -420,20 +420,15 @@ public:
                     + robot_config_path);
             }
 
-            // Initialize motion loader
-            const auto& policy_configuration = definition->runtime;
-            std::string motion_file_path = this->rl.ResolvePolicyPath(
-                robot_config_path + "/"
-                + policy_configuration.motion_file);
-            const float fps = GetLWMotionSourceFPS(policy_configuration);
-            const int time_offset_frames =
-                policy_configuration.motion_time_offset_frames;
-            const std::size_t num_dofs = policy_configuration.num_dofs;
-            rl.motion_loader_lw = std::make_unique<MotionLoaderLW>(
-                motion_file_path,
-                fps,
-                time_offset_frames,
-                num_dofs);
+            rl.motion_loader_lw =
+                rl.GetPreloadedLWMotionPlayer(robot_config_path);
+            if (!rl.motion_loader_lw
+                || !definition->prepared_motion)
+            {
+                throw std::runtime_error(
+                    "motion context was not preloaded: "
+                    + robot_config_path);
+            }
             rl.motion_length = rl.motion_loader_lw->GetDuration();
 
             rl.motion_loader_lw->Reset(fsm_state->imu.quaternion);
@@ -450,6 +445,7 @@ public:
         {
             std::cout << LOGGER::ERROR << "Policy activation failed: " << e.what() << std::endl;
             rl.DeactivateLWPolicy();
+            rl.motion_loader_lw = nullptr;
             rl.fsm.RequestStateChange("RLFSMStatePassive");
         }
     }
@@ -492,6 +488,7 @@ public:
     void Exit() override
     {
         rl.DeactivateLWPolicy();
+        rl.motion_loader_lw = nullptr;
     }
 
     std::string CheckChange() override
@@ -530,20 +527,15 @@ public:
                     + robot_config_path);
             }
 
-            // Initialize motion loader
-            const auto& policy_configuration = definition->runtime;
-            std::string motion_file_path = this->rl.ResolvePolicyPath(
-                robot_config_path + "/"
-                + policy_configuration.motion_file);
-            const float fps = GetLWMotionSourceFPS(policy_configuration);
-            const int time_offset_frames =
-                policy_configuration.motion_time_offset_frames;
-            const std::size_t num_dofs = policy_configuration.num_dofs;
-            rl.motion_loader_lw = std::make_unique<MotionLoaderLW>(
-                motion_file_path,
-                fps,
-                time_offset_frames,
-                num_dofs);
+            rl.motion_loader_lw =
+                rl.GetPreloadedLWMotionPlayer(robot_config_path);
+            if (!rl.motion_loader_lw
+                || !definition->prepared_motion)
+            {
+                throw std::runtime_error(
+                    "motion context was not preloaded: "
+                    + robot_config_path);
+            }
             rl.motion_length = rl.motion_loader_lw->GetDuration();
 
             rl.motion_loader_lw->Reset(fsm_state->imu.quaternion);
@@ -560,6 +552,7 @@ public:
         {
             std::cout << LOGGER::ERROR << "Policy activation failed: " << e.what() << std::endl;
             rl.DeactivateLWPolicy();
+            rl.motion_loader_lw = nullptr;
             rl.fsm.RequestStateChange("RLFSMStatePassive");
         }
     }
@@ -602,6 +595,7 @@ public:
     void Exit() override
     {
         rl.DeactivateLWPolicy();
+        rl.motion_loader_lw = nullptr;
     }
 
     std::string CheckChange() override
