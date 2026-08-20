@@ -1,9 +1,9 @@
 #ifndef LW_RUNTIME_SYNC_HPP
 #define LW_RUNTIME_SYNC_HPP
 
+#include <array>
 #include <atomic>
 #include <cstdint>
-#include <memory>
 #include <mutex>
 #include <utility>
 
@@ -56,31 +56,67 @@ private:
 };
 
 template <typename T>
-class LWAtomicSnapshot
+class LWSpscLatestValue
 {
 public:
-    std::shared_ptr<const T> load() const noexcept
+    // One producer and one consumer own their indices exclusively. The tagged
+    // middle index is the only shared state, so neither side can access the
+    // slot currently being copied by the other side. Call initialize() only
+    // before either concurrent endpoint starts.
+    static_assert(
+        std::atomic<std::uint32_t>::is_always_lock_free,
+        "LW SPSC snapshot requires lock-free 32-bit atomics");
+
+    T& producerBuffer() noexcept
     {
-        return std::atomic_load_explicit(
-            &value_,
-            std::memory_order_acquire);
+        return slots_[producer_index_];
     }
 
-    void store(std::shared_ptr<const T> value) noexcept
+    void publishProducerBuffer() noexcept
     {
-        std::atomic_store_explicit(
-            &value_,
-            std::move(value),
-            std::memory_order_release);
+        const std::uint32_t previous = middle_.exchange(
+            producer_index_ | kPublished,
+            std::memory_order_acq_rel);
+        producer_index_ = previous & kIndexMask;
     }
 
-    void clear() noexcept
+    void publish(const T& value)
     {
-        store(nullptr);
+        producerBuffer() = value;
+        publishProducerBuffer();
+    }
+
+    const T* readLatest() noexcept
+    {
+        const std::uint32_t available =
+            middle_.load(std::memory_order_acquire);
+        if ((available & kPublished) != 0U)
+        {
+            const std::uint32_t previous = middle_.exchange(
+                consumer_index_,
+                std::memory_order_acq_rel);
+            consumer_index_ = previous & kIndexMask;
+            consumer_valid_ = true;
+        }
+        return consumer_valid_ ? &slots_[consumer_index_] : nullptr;
+    }
+
+    void initialize(const T& value)
+    {
+        for (T& slot : slots_)
+        {
+            slot = value;
+        }
     }
 
 private:
-    std::shared_ptr<const T> value_;
+    static constexpr std::uint32_t kIndexMask = 0x3U;
+    static constexpr std::uint32_t kPublished = 0x4U;
+    std::array<T, 3> slots_{};
+    std::uint32_t producer_index_ = 0;
+    std::uint32_t consumer_index_ = 2;
+    std::atomic<std::uint32_t> middle_{1};
+    bool consumer_valid_ = false;
 };
 
 template <typename Event>
@@ -101,38 +137,43 @@ public:
 
     void publishVelocity(float x, float y, float yaw)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        snapshot_.x = x;
-        snapshot_.y = y;
-        snapshot_.yaw = yaw;
+        producer_snapshot_.x = x;
+        producer_snapshot_.y = y;
+        producer_snapshot_.yaw = yaw;
+        snapshots_.publish(producer_snapshot_);
     }
 
     void publishEvent(Event event)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        snapshot_.event = event;
-        ++snapshot_.event_sequence;
+        producer_snapshot_.event = event;
+        ++producer_snapshot_.event_sequence;
+        snapshots_.publish(producer_snapshot_);
     }
 
     void clear(Event none)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        snapshot_.x = 0.0f;
-        snapshot_.y = 0.0f;
-        snapshot_.yaw = 0.0f;
-        snapshot_.event = none;
-        ++snapshot_.event_sequence;
+        producer_snapshot_.x = 0.0f;
+        producer_snapshot_.y = 0.0f;
+        producer_snapshot_.yaw = 0.0f;
+        producer_snapshot_.event = none;
+        ++producer_snapshot_.event_sequence;
+        snapshots_.publish(producer_snapshot_);
     }
 
-    Snapshot read() const
+    bool read(Snapshot& snapshot) noexcept
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return snapshot_;
+        const Snapshot* latest = snapshots_.readLatest();
+        if (!latest)
+        {
+            return false;
+        }
+        snapshot = *latest;
+        return true;
     }
 
 private:
-    mutable std::mutex mutex_;
-    Snapshot snapshot_{};
+    Snapshot producer_snapshot_{};
+    LWSpscLatestValue<Snapshot> snapshots_;
 };
 
 enum class LWOperatorMode : int

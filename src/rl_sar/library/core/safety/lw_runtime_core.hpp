@@ -346,17 +346,23 @@ public:
         {
             return;
         }
-        const auto activation = rl_->LoadLWPolicyActivation();
-        if (!activation || !activation->definition)
+        LWPolicyActivation published_activation;
+        if (!rl_->ReadLWPolicyActivationForInference(
+                published_activation)
+            || !published_activation.definition)
         {
+            inference_activation_ = {};
+            inference_motion_reference_ = nullptr;
             return;
         }
-        if (!inference_activation_
-            || inference_activation_->generation != activation->generation)
+        if (!inference_activation_.definition
+            || inference_activation_.generation
+                != published_activation.generation)
         {
-            inference_activation_ = activation;
-            resetInferenceWorkspace(*activation);
+            inference_activation_ = published_activation;
+            resetInferenceWorkspace(inference_activation_);
         }
+        const LWPolicyActivation* activation = &inference_activation_;
 
         if (!policy_input_snapshot_.read(inference_policy_input_))
         {
@@ -490,7 +496,8 @@ public:
              policy_input.state_capture_time,
              inference_output_dof_pos_,
              inference_output_dof_vel_,
-             inference_output_dof_tau_}))
+             inference_output_dof_tau_},
+            *activation))
         {
             return;
         }
@@ -520,21 +527,20 @@ public:
     std::vector<float> forward()
     {
         requireBound();
-        if (!inference_activation_
-            || !inference_activation_->definition
-            || !inference_activation_->definition->model)
+        if (!inference_activation_.definition
+            || !inference_activation_.definition->model)
         {
             return {};
         }
-        const auto& definition = *inference_activation_->definition;
+        const auto& definition = *inference_activation_.definition;
         const auto& policy_configuration = definition.runtime;
         const auto clamped_obs = rl_->ComputeLWObservation(
             policy_configuration,
             inference_obs_,
             inference_obs_dims_,
-            inference_motion_reference_.get(),
+            inference_motion_reference_,
             inference_frame_,
-            inference_activation_->motion_length);
+            inference_activation_.motion_length);
 
         std::vector<float> actions;
         const auto& history_indices =
@@ -725,7 +731,7 @@ private:
         last_inference_input_sequence_ = 0;
         last_inference_state_capture_time_ = {};
         inference_gait_phase_time_ = 0.0f;
-        inference_motion_reference_.reset();
+        inference_motion_reference_ = nullptr;
         inference_obs_ = {};
         inference_obs_.lin_vel = {0.0f, 0.0f, 0.0f};
         inference_obs_.ang_vel = {0.0f, 0.0f, 0.0f};
@@ -775,10 +781,10 @@ private:
     LWSnapshotBuffer<LWPolicyInputSnapshot> policy_input_snapshot_;
     LWSnapshotBuffer<LWInferenceTraceSnapshot> inference_trace_;
 
-    std::shared_ptr<const LWPolicyActivation> inference_activation_;
+    LWPolicyActivation inference_activation_{};
     LWPolicyInputSnapshot control_policy_input_;
     LWPolicyInputSnapshot inference_policy_input_;
-    std::shared_ptr<const LWMotionReferenceSnapshot> inference_motion_reference_;
+    const LWMotionReferenceSnapshot* inference_motion_reference_ = nullptr;
     Observations<float> inference_obs_;
     std::vector<int> inference_obs_dims_;
     ObservationBuffer inference_history_obs_buf_;

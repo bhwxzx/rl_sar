@@ -74,6 +74,7 @@ void testRejectsPartialAndWrongGenerationFrames()
     constexpr size_t dofs = 10;
     constexpr std::uint64_t generation = 7;
     LWPolicyOutputTransport transport;
+    transport.configure(dofs);
     const auto now = Clock::now();
 
     require(
@@ -140,6 +141,7 @@ void testLatestFrameAndGenerationSwitchSemantics()
 {
     constexpr size_t dofs = 10;
     LWPolicyOutputTransport transport;
+    transport.configure(dofs);
     const auto now = Clock::now();
 
     require(
@@ -194,10 +196,9 @@ void testLatestFrameAndGenerationSwitchSemantics()
             dofs),
         "transport accepted regressing state provenance");
 
-    transport.clear();
     require(
-        !transport.load(),
-        "policy deactivation retained an output frame");
+        transport.load()->generation == 1,
+        "latest generation changed without a new publication");
     require(
         !transport.publish(
             makeFrame(1, 12, dofs, now),
@@ -406,12 +407,13 @@ void testFrameFreshnessClassification()
         "ready policy output incorrectly triggered fallback");
 }
 
-void testConcurrentReadersNeverObservePartialFrames()
+void testConcurrentReaderNeverObservesPartialFrames()
 {
     constexpr size_t dofs = 10;
     constexpr std::uint64_t generation = 9;
     constexpr std::uint64_t iterations = 50000;
     LWPolicyOutputTransport transport;
+    transport.configure(dofs);
     const auto source_epoch = Clock::now();
     std::atomic<bool> start{false};
     std::atomic<bool> failed{false};
@@ -441,62 +443,55 @@ void testConcurrentReadersNeverObservePartialFrames()
         }
     });
 
-    std::vector<std::thread> readers;
-    for (int reader = 0; reader < 4; ++reader)
+    std::thread reader([&]()
     {
-        readers.emplace_back([&]()
+        while (!start.load(std::memory_order_acquire))
         {
-            while (!start.load(std::memory_order_acquire))
+        }
+        for (std::uint64_t iteration = 0;
+             iteration < iterations;
+             ++iteration)
+        {
+            const auto output = transport.load();
+            if (!output)
             {
+                continue;
             }
-            for (std::uint64_t iteration = 0;
-                 iteration < iterations;
-                 ++iteration)
+            const float tag =
+                static_cast<float>(output->frame);
+            if (output->generation != generation
+                || output->sequence == 0
+                || output->source_input_sequence != output->frame
+                || output->source_state_time.time_since_epoch().count() == 0
+                || output->dof_pos.size() != dofs
+                || output->dof_vel.size() != dofs
+                || output->dof_tau.size() != dofs)
             {
-                const auto output = transport.load();
-                if (!output)
-                {
-                    continue;
-                }
-                const float tag =
-                    static_cast<float>(output->frame);
-                if (output->generation != generation
-                    || output->sequence == 0
-                    || output->source_input_sequence != output->frame
-                    || output->source_state_time.time_since_epoch().count() == 0
-                    || output->dof_pos.size() != dofs
-                    || output->dof_vel.size() != dofs
-                    || output->dof_tau.size() != dofs)
+                failed.store(
+                    true,
+                    std::memory_order_release);
+                return;
+            }
+            for (size_t i = 0; i < dofs; ++i)
+            {
+                if (output->dof_pos[i] != tag
+                    || output->dof_vel[i]
+                        != 2.0f * tag
+                    || output->dof_tau[i]
+                        != 3.0f * tag)
                 {
                     failed.store(
                         true,
                         std::memory_order_release);
                     return;
                 }
-                for (size_t i = 0; i < dofs; ++i)
-                {
-                    if (output->dof_pos[i] != tag
-                        || output->dof_vel[i]
-                            != 2.0f * tag
-                        || output->dof_tau[i]
-                            != 3.0f * tag)
-                    {
-                        failed.store(
-                            true,
-                            std::memory_order_release);
-                        return;
-                    }
-                }
             }
-        });
-    }
+        }
+    });
 
     start.store(true, std::memory_order_release);
     writer.join();
-    for (auto& reader : readers)
-    {
-        reader.join();
-    }
+    reader.join();
 
     const auto latest = transport.load();
     require(
@@ -546,7 +541,7 @@ int main()
         testLatestFrameAndGenerationSwitchSemantics();
         testInputFreshnessAndProvenanceClassification();
         testFrameFreshnessClassification();
-        testConcurrentReadersNeverObservePartialFrames();
+        testConcurrentReaderNeverObservesPartialFrames();
         testGenericControlRetainsNonLWQueueCompatibility();
         std::cout << "LW policy output transport tests passed"
                   << std::endl;

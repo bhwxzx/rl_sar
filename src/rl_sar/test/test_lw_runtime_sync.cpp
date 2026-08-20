@@ -1,9 +1,11 @@
 #include "lw_runtime_sync.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -161,78 +163,139 @@ void testTryPublishNeverWaitsForAReader()
     require(received.value == 2, "updated snapshot was incoherent");
 }
 
-struct ImmutableContext
+struct BlockingPublishFrame
 {
-    std::uint64_t generation = 0;
-    std::string config;
-    std::string model;
+    std::uint64_t value = 0;
+    bool block_copy = false;
+    std::shared_ptr<CopyGate> gate;
+
+    BlockingPublishFrame& operator=(const BlockingPublishFrame& other)
+    {
+        if (other.block_copy && other.gate)
+        {
+            std::unique_lock<std::mutex> lock(other.gate->mutex);
+            other.gate->entered = true;
+            other.gate->condition.notify_all();
+            other.gate->condition.wait(
+                lock, [&]() { return other.gate->release; });
+        }
+        value = other.value;
+        block_copy = false;
+        gate.reset();
+        return *this;
+    }
 };
 
-void testAtomicSnapshotKeepsContextCoherent()
+void testSpscReaderNeverWaitsForAnInProgressPublish()
 {
-    LWAtomicSnapshot<ImmutableContext> slot;
+    LWSpscLatestValue<BlockingPublishFrame> slot;
+    slot.publish(BlockingPublishFrame{1, false, nullptr});
+    const BlockingPublishFrame* initial = slot.readLatest();
+    require(initial && initial->value == 1, "initial SPSC value missing");
+
+    const auto gate = std::make_shared<CopyGate>();
+    BlockingPublishFrame update{2, true, gate};
+    std::thread writer([&]()
+    {
+        slot.publish(update);
+    });
+    {
+        std::unique_lock<std::mutex> lock(gate->mutex);
+        gate->condition.wait(lock, [&]() { return gate->entered; });
+    }
+    std::promise<void> read_started;
+    auto read_started_future = read_started.get_future();
+    std::promise<const BlockingPublishFrame*> read_result;
+    auto read_future = read_result.get_future();
+    std::thread reader([&]()
+    {
+        read_started.set_value();
+        read_result.set_value(slot.readLatest());
+    });
+    read_started_future.wait();
+    const bool reader_returned =
+        read_future.wait_for(std::chrono::milliseconds(500))
+            == std::future_status::ready;
+    const BlockingPublishFrame* retained =
+        reader_returned ? read_future.get() : nullptr;
+    if (reader_returned)
+    {
+        reader.join();
+    }
+    require(
+        !reader_returned || (retained && retained->value == 1),
+        "reader exposed an in-progress SPSC publish");
+    {
+        std::lock_guard<std::mutex> lock(gate->mutex);
+        gate->release = true;
+    }
+    gate->condition.notify_all();
+    writer.join();
+    if (!reader_returned)
+    {
+        reader.join();
+    }
+    require(
+        reader_returned,
+        "reader waited for an in-progress SPSC publisher");
+
+    const BlockingPublishFrame* published = slot.readLatest();
+    require(
+        published && published->value == 2,
+        "completed SPSC publish was not visible");
+}
+
+void testSpscLatestValueKeepsFramesCoherent()
+{
+    LWSpscLatestValue<CoherentFrame> slot;
     std::atomic<bool> start{false};
     std::atomic<bool> failed{false};
-
     std::thread writer([&]()
     {
         while (!start.load(std::memory_order_acquire))
         {
         }
-        for (std::uint64_t generation = 1;
-             generation <= 50000;
-             ++generation)
+        for (std::uint64_t sequence = 1; sequence <= 50000; ++sequence)
         {
-            const std::string tag = std::to_string(generation);
-            slot.store(
-                std::make_shared<ImmutableContext>(
-                    ImmutableContext{
-                        generation,
-                        "config-" + tag,
-                        "model-" + tag}));
+            slot.publish(
+                CoherentFrame{
+                    sequence,
+                    std::vector<std::uint64_t>(32, sequence)});
         }
     });
-
-    std::vector<std::thread> readers;
-    for (int reader = 0; reader < 4; ++reader)
+    std::thread reader([&]()
     {
-        readers.emplace_back([&]()
+        while (!start.load(std::memory_order_acquire))
         {
-            while (!start.load(std::memory_order_acquire))
+        }
+        for (int iteration = 0; iteration < 50000; ++iteration)
+        {
+            const CoherentFrame* frame = slot.readLatest();
+            if (!frame)
             {
+                continue;
             }
-            for (int iteration = 0;
-                 iteration < 50000;
-                 ++iteration)
+            if (frame->values.size() != 32)
             {
-                const auto context = slot.load();
-                if (!context)
+                failed.store(true, std::memory_order_release);
+                return;
+            }
+            for (std::uint64_t value : frame->values)
+            {
+                if (value != frame->sequence)
                 {
-                    continue;
-                }
-                const std::string tag =
-                    std::to_string(context->generation);
-                if (context->config != "config-" + tag
-                    || context->model != "model-" + tag)
-                {
-                    failed.store(
-                        true,
-                        std::memory_order_release);
+                    failed.store(true, std::memory_order_release);
                     return;
                 }
             }
-        });
-    }
-
+        }
+    });
     start.store(true, std::memory_order_release);
     writer.join();
-    for (auto& reader : readers)
-    {
-        reader.join();
-    }
+    reader.join();
     require(
         !failed.load(std::memory_order_acquire),
-        "atomic policy slot mixed generations");
+        "SPSC latest-value slot exposed a mixed frame");
 }
 
 enum class TestEvent
@@ -270,11 +333,15 @@ void testInputMailboxKeepsVelocityCoherentAndEventsSequenced()
         {
         }
         std::uint64_t last_event_sequence = 0;
+        LWInputMailbox<TestEvent>::Snapshot snapshot;
         for (int iteration = 0;
              iteration < 50000;
              ++iteration)
         {
-            const auto snapshot = mailbox.read();
+            if (!mailbox.read(snapshot))
+            {
+                continue;
+            }
             if (snapshot.y != 2.0f * snapshot.x
                 || snapshot.yaw != 3.0f * snapshot.x
                 || snapshot.event_sequence
@@ -294,9 +361,11 @@ void testInputMailboxKeepsVelocityCoherentAndEventsSequenced()
         !failed.load(std::memory_order_acquire),
         "input mailbox exposed incoherent velocity or event state");
 
-    const auto before_clear = mailbox.read();
+    LWInputMailbox<TestEvent>::Snapshot before_clear;
+    require(mailbox.read(before_clear), "input snapshot missing before clear");
     mailbox.clear(TestEvent::None);
-    const auto after_clear = mailbox.read();
+    LWInputMailbox<TestEvent>::Snapshot after_clear;
+    require(mailbox.read(after_clear), "input snapshot missing after clear");
     require(
         after_clear.x == 0.0f
             && after_clear.y == 0.0f
@@ -383,7 +452,8 @@ int main()
     {
         testSnapshotBufferPublishesWholeFrames();
         testTryPublishNeverWaitsForAReader();
-        testAtomicSnapshotKeepsContextCoherent();
+        testSpscReaderNeverWaitsForAnInProgressPublish();
+        testSpscLatestValueKeepsFramesCoherent();
         testInputMailboxKeepsVelocityCoherentAndEventsSequenced();
         testOperatorStatusMailboxPublishesCoherentFramesWithoutBlocking();
         std::cout << "LW runtime synchronization tests passed"

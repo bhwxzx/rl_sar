@@ -892,7 +892,8 @@ void RL_Real::LatchJoystickFault(
 
 void RL_Real::ApplyPendingInput()
 {
-    const auto input = joystick_input_mailbox_.read();
+    (void)joystick_input_mailbox_.read(joystick_input_snapshot_);
+    const auto& input = joystick_input_snapshot_;
     this->control.x = input.x;
     this->control.y = input.y;
     this->control.yaw = input.yaw;

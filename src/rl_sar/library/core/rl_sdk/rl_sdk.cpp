@@ -112,43 +112,51 @@ LWPolicyOutputStatus EvaluateLWPolicyOutput(
     return LWPolicyOutputStatus::Ready;
 }
 
+void LWPolicyOutputTransport::configure(size_t num_dofs)
+{
+    LWPolicyOutputFrame frame;
+    frame.dof_pos.resize(num_dofs);
+    frame.dof_vel.resize(num_dofs);
+    frame.dof_tau.resize(num_dofs);
+    latest_.initialize(frame);
+    configured_dofs_ = num_dofs;
+}
+
 bool LWPolicyOutputTransport::publish(
     LWPolicyOutputFrame output,
     std::uint64_t active_generation,
     size_t expected_dofs)
 {
     if (output.generation != active_generation
+        || configured_dofs_ != expected_dofs
         || output.source_input_sequence == 0
         || output.source_state_time.time_since_epoch().count() == 0
         || !LWPolicyOutputPayloadComplete(output, expected_dofs))
     {
         return false;
     }
-    const auto latest = latest_.load();
-    if (latest && latest->generation == output.generation
-        && (output.source_input_sequence <= latest->source_input_sequence
-            || output.source_state_time <= latest->source_state_time))
+    if (writer_generation_ != output.generation)
+    {
+        writer_generation_ = output.generation;
+        last_source_input_sequence_ = 0;
+        last_source_state_time_ = {};
+    }
+    if (output.source_input_sequence <= last_source_input_sequence_
+        || (last_source_state_time_.time_since_epoch().count() != 0
+            && output.source_state_time <= last_source_state_time_))
     {
         return false;
     }
-    output.sequence = next_sequence_.fetch_add(
-        1,
-        std::memory_order_relaxed);
-    latest_.store(
-        std::make_shared<LWPolicyOutputFrame>(
-            std::move(output)));
+    output.sequence = next_sequence_++;
+    last_source_input_sequence_ = output.source_input_sequence;
+    last_source_state_time_ = output.source_state_time;
+    latest_.publish(output);
     return true;
 }
 
-std::shared_ptr<const LWPolicyOutputFrame>
-LWPolicyOutputTransport::load() const noexcept
+const LWPolicyOutputFrame* LWPolicyOutputTransport::load() noexcept
 {
-    return latest_.load();
-}
-
-void LWPolicyOutputTransport::clear() noexcept
-{
-    latest_.clear();
+    return latest_.readLatest();
 }
 
 void RL::StateController(
@@ -525,6 +533,13 @@ void RL::InitJointNum(size_t num_joints)
 void RL::SetLWBaseRuntimeConfiguration(
     LWBaseRuntimeConfiguration configuration)
 {
+    LWMotionReferenceSnapshot motion_reference;
+    motion_reference.joint_pos.resize(configuration.num_dofs);
+    motion_reference.joint_vel.resize(configuration.num_dofs);
+    motion_reference.anchor_quat.resize(4);
+    motion_reference.init_quat.resize(4);
+    lw_motion_reference_.initialize(motion_reference);
+    lw_policy_output_transport_.configure(configuration.num_dofs);
     lw_base_runtime_configuration_ = std::move(configuration);
 }
 
@@ -741,36 +756,43 @@ std::uint64_t RL::ActivateLWPolicy(
             + robot_config_path);
     }
 
-    auto activation = std::make_shared<LWPolicyActivation>();
-    activation->definition = definition;
-    activation->generation =
+    control_policy_activation_.definition = definition.get();
+    control_policy_activation_.generation =
         lw_next_policy_generation_.fetch_add(
             1,
             std::memory_order_relaxed);
-    activation->motion_length = motion_length;
-    activation->activated_at = std::chrono::steady_clock::now();
-    lw_policy_progress_.store(
-        std::make_shared<LWPolicyProgressSnapshot>(
-            LWPolicyProgressSnapshot{
-                activation->generation,
-                0}));
-    lw_motion_reference_.clear();
-    lw_policy_output_transport_.clear();
-    lw_policy_activation_.store(activation);
-    return activation->generation;
+    control_policy_activation_.motion_length = motion_length;
+    control_policy_activation_.activated_at =
+        std::chrono::steady_clock::now();
+    lw_policy_activation_.publish(control_policy_activation_);
+    return control_policy_activation_.generation;
 }
 
 void RL::DeactivateLWPolicy()
 {
-    lw_policy_activation_.clear();
-    lw_motion_reference_.clear();
-    lw_policy_output_transport_.clear();
+    control_policy_activation_ = {};
+    lw_policy_activation_.publish(control_policy_activation_);
 }
 
-std::shared_ptr<const LWPolicyActivation>
+const LWPolicyActivation*
 RL::LoadLWPolicyActivation() const noexcept
 {
-    return lw_policy_activation_.load();
+    return control_policy_activation_.definition
+        ? &control_policy_activation_
+        : nullptr;
+}
+
+bool RL::ReadLWPolicyActivationForInference(
+    LWPolicyActivation& activation) noexcept
+{
+    const LWPolicyActivation* latest =
+        lw_policy_activation_.readLatest();
+    if (!latest)
+    {
+        return false;
+    }
+    activation = *latest;
+    return true;
 }
 
 void RL::PublishLWMotionReference(
@@ -782,9 +804,7 @@ void RL::PublishLWMotionReference(
     {
         return;
     }
-    lw_motion_reference_.store(
-        std::make_shared<LWMotionReferenceSnapshot>(
-            std::move(reference)));
+    lw_motion_reference_.publish(reference);
 }
 
 void RL::PublishCurrentLWMotionReference(
@@ -803,30 +823,24 @@ void RL::PublishCurrentLWMotionReference(
             this->motion_loader_lw->GetInitQuat()});
 }
 
-std::shared_ptr<const LWMotionReferenceSnapshot>
-RL::LoadLWMotionReference() const noexcept
+const LWMotionReferenceSnapshot*
+RL::LoadLWMotionReference() noexcept
 {
-    return lw_motion_reference_.load();
+    return lw_motion_reference_.readLatest();
 }
 
 void RL::PublishLWPolicyProgress(
     std::uint64_t generation,
     std::uint64_t frame)
 {
-    const auto activation = LoadLWPolicyActivation();
-    if (!activation || activation->generation != generation)
-    {
-        return;
-    }
-    lw_policy_progress_.store(
-        std::make_shared<LWPolicyProgressSnapshot>(
-            LWPolicyProgressSnapshot{generation, frame}));
+    lw_policy_progress_.publish(
+        LWPolicyProgressSnapshot{generation, frame});
 }
 
-std::shared_ptr<const LWPolicyProgressSnapshot>
-RL::LoadLWPolicyProgress() const noexcept
+const LWPolicyProgressSnapshot*
+RL::LoadLWPolicyProgress() noexcept
 {
-    return lw_policy_progress_.load();
+    return lw_policy_progress_.readLatest();
 }
 
 void RL::PublishLWOperatorStatus(
@@ -850,25 +864,24 @@ bool RL::ReadLWOperatorStatus(
     return lw_operator_status_.read(status);
 }
 
-bool RL::PublishLWPolicyOutput(LWPolicyOutputFrame output)
+bool RL::PublishLWPolicyOutput(
+    LWPolicyOutputFrame output,
+    const LWPolicyActivation& activation)
 {
-    const auto activation = LoadLWPolicyActivation();
-    if (!activation
-        || !activation->definition
-        || output.generation != activation->generation)
+    if (!activation.definition
+        || output.generation != activation.generation)
     {
         return false;
     }
     const size_t expected_dofs =
-        activation->definition->runtime.num_dofs;
+        activation.definition->runtime.num_dofs;
     return lw_policy_output_transport_.publish(
         std::move(output),
-        activation->generation,
+        activation.generation,
         expected_dofs);
 }
 
-std::shared_ptr<const LWPolicyOutputFrame>
-RL::LoadLWPolicyOutput() const noexcept
+const LWPolicyOutputFrame* RL::LoadLWPolicyOutput() noexcept
 {
     return lw_policy_output_transport_.load();
 }
@@ -1388,7 +1401,7 @@ void RLFSMState::RLControlLW()
         activation->definition->runtime;
     const size_t expected_dofs = policy_configuration.num_dofs;
     LWPolicyOutputStatus status = EvaluateLWPolicyOutput(
-        output.get(),
+        output,
         activation->generation,
         expected_dofs,
         now,

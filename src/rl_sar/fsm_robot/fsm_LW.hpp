@@ -403,6 +403,7 @@ class RLFSMStateRL_LegToWheel : public RLFSMState
 public:
     RLFSMStateRL_LegToWheel(RL *rl) : RLFSMState(*rl, "RLFSMStateRL_LegToWheel") {}
     std::uint64_t policy_generation = 0;
+    std::uint64_t policy_frame = 0;
 
     void Enter() override
     {
@@ -437,6 +438,7 @@ public:
                 rl.ActivateLWPolicy(
                     robot_config_path,
                     rl.motion_length);
+            policy_frame = 0;
             rl.PublishCurrentLWMotionReference(policy_generation);
 
             rl.now_state = *fsm_state;
@@ -459,16 +461,20 @@ public:
         const auto activation = rl.LoadLWPolicyActivation();
         const auto progress = rl.LoadLWPolicyProgress();
         if (!activation
-            || activation->generation != policy_generation
-            || !progress
-            || progress->generation != policy_generation)
+            || activation->generation != policy_generation)
         {
             return;
+        }
+        if (progress
+            && progress->generation == policy_generation
+            && progress->frame >= policy_frame)
+        {
+            policy_frame = progress->frame;
         }
         const auto& policy_configuration =
             activation->definition->runtime;
         float motion_time =
-            progress->frame
+            policy_frame
             * policy_configuration.period_seconds;
         motion_time = std::fmin(motion_time, rl.motion_length);
         float percent = motion_time / rl.motion_length;
@@ -510,6 +516,7 @@ class RLFSMStateRL_WheelToLeg : public RLFSMState
 public:
     RLFSMStateRL_WheelToLeg(RL *rl) : RLFSMState(*rl, "RLFSMStateRL_WheelToLeg") {}
     std::uint64_t policy_generation = 0;
+    std::uint64_t policy_frame = 0;
 
     void Enter() override
     {
@@ -544,6 +551,7 @@ public:
                 rl.ActivateLWPolicy(
                     robot_config_path,
                     rl.motion_length);
+            policy_frame = 0;
             rl.PublishCurrentLWMotionReference(policy_generation);
 
             rl.now_state = *fsm_state;
@@ -566,16 +574,20 @@ public:
         const auto activation = rl.LoadLWPolicyActivation();
         const auto progress = rl.LoadLWPolicyProgress();
         if (!activation
-            || activation->generation != policy_generation
-            || !progress
-            || progress->generation != policy_generation)
+            || activation->generation != policy_generation)
         {
             return;
+        }
+        if (progress
+            && progress->generation == policy_generation
+            && progress->frame >= policy_frame)
+        {
+            policy_frame = progress->frame;
         }
         const auto& policy_configuration =
             activation->definition->runtime;
         float motion_time =
-            progress->frame
+            policy_frame
             * policy_configuration.period_seconds;
         motion_time = std::fmin(motion_time, rl.motion_length);
         float percent = motion_time / rl.motion_length;

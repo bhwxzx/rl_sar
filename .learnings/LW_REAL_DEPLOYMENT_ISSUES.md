@@ -182,7 +182,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 52 | LW-042 | P2 / medium | resolved | Make real debug telemetry nonblocking, source-fresh, and rate-bounded |
 | 53 | LW-043 | P2 / medium | resolved | Retire the Sim2Sim actuator-model runtime while preserving offline training |
 | 54 | LW-054 | P1 / high | resolved | Preload morphology-transition motion assets before control workers |
-| 55 | LW-055 | P1 / high | pending | Remove blocking synchronization from the real control deadline path |
+| 55 | LW-055 | P1 / high | resolved | Remove blocking synchronization from the real control deadline path |
 | 56 | LW-056 | P2 / medium | pending | Make the maintained complete control cycle allocation-stable |
 | 57 | LW-057 | P2 / medium | pending | Validate the MuJoCo control adapter layout and test actual safety actions |
 
@@ -4500,7 +4500,7 @@ target state, so they cannot detect post-start filesystem access or parsing.
 ## [LW-055] Remove blocking synchronization from the real control deadline path
 
 **Priority**: P1 / high
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-007, LW-008, LW-011, LW-032, LW-033, LW-038
 
 ### Problem
@@ -4555,6 +4555,52 @@ control-side read returns within a fixed bound.
   impossible; existing S1-S4 behavior is unchanged.
 - Deadline stress, ThreadSanitizer where supported, the maintained strict build,
   and `git diff --check` pass without starting a real node or hardware.
+
+### Resolution Evidence
+
+- Resolved: 2026-08-20
+- Added a fixed three-slot, single-producer/single-consumer latest-value
+  transport. A lock-free tagged 32-bit middle index transfers exclusive slot
+  ownership, so the reader retains its last coherent slot while the producer
+  fills another slot and never waits for a writer-owned mutex or reference
+  count operation.
+- The real and simulation joystick handoffs now use the SPSC transport and a
+  control-owned cached snapshot. The real IMU callback publishes normalized
+  fixed-size quaternion/gyro samples instead of a ROS message through
+  `realtime_tools::RealtimeBox`; the control callback reads the last coherent
+  sample without blocking.
+- Policy activation and motion-reference publication use control-to-inference
+  SPSC channels, while policy progress and complete policy-output frames use
+  inference-to-control SPSC channels. Policy definitions remain owned by the
+  immutable preloaded definition map, and all variable-size frame slots are
+  sized before worker startup.
+- Deactivation and policy switches no longer require clearing shared-pointer
+  snapshots. Readers reject retained samples by the existing activation
+  generation, source sequence, timestamp, completeness, and maximum-age
+  checks. Transition states keep a control-owned nonregressing frame counter so
+  frame zero remains usable before the first matching inference progress
+  publication.
+- The synchronization regression pauses a producer inside its private back-slot
+  copy and verifies that the SPSC reader returns the previous coherent sample
+  within 500 ms, then observes the completed publication. Additional SPSC,
+  joystick-mailbox, policy-output, policy-generation, input provenance, and
+  stale-data stress tests verify coherent latest-value behavior.
+- The maintained Debug build and a fresh `LW_STRICT_WARNINGS=ON` build both
+  completed, including `rl_real_LW`, `rl_sim_LW`, and `lw_config_profiler`; both
+  complete 48/48 CTest suites passed. The synchronization, policy-output, and
+  runtime-parity tests passed 20 consecutive runs, and `loop_timing` passed 20
+  consecutive runs.
+- Standalone AddressSanitizer/UndefinedBehaviorSanitizer synchronization tests
+  and targeted instrumented policy-output/runtime-parity tests passed without
+  sanitizer findings. ThreadSanitizer instrumentation compiled, but the runtime
+  could not start in this container (`ThreadSanitizer: unexpected memory
+  mapping`), including a non-PIE retry, so no unsupported TSAN result is claimed.
+  Targeted `cppcheck` reported only the pre-existing `CSVInit` pass-by-value
+  performance suggestion; `git diff --check` passed.
+- No ROS node, MuJoCo GUI, serial device, IMU, joystick, real robot, or motor was
+  started. The user-owned untracked compaction-inspection skill directory was
+  preserved unchanged.
+- **Remaining Follow-ups**: LW-056, LW-057
 
 ---
 

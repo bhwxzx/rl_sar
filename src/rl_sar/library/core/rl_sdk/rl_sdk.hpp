@@ -201,7 +201,7 @@ struct LWPolicyDefinition
 
 struct LWPolicyActivation
 {
-    std::shared_ptr<const LWPolicyDefinition> definition;
+    const LWPolicyDefinition* definition = nullptr;
     std::uint64_t generation = 0;
     float motion_length = 0.0f;
     std::chrono::steady_clock::time_point activated_at{};
@@ -305,16 +305,20 @@ LWPolicyOutputStatus EvaluateLWPolicyOutput(
 class LWPolicyOutputTransport
 {
 public:
+    void configure(size_t num_dofs);
     bool publish(
         LWPolicyOutputFrame output,
         std::uint64_t active_generation,
         size_t expected_dofs);
-    std::shared_ptr<const LWPolicyOutputFrame> load() const noexcept;
-    void clear() noexcept;
+    const LWPolicyOutputFrame* load() noexcept;
 
 private:
-    LWAtomicSnapshot<LWPolicyOutputFrame> latest_;
-    std::atomic<std::uint64_t> next_sequence_{1};
+    LWSpscLatestValue<LWPolicyOutputFrame> latest_;
+    std::uint64_t next_sequence_ = 1;
+    std::uint64_t writer_generation_ = 0;
+    std::uint64_t last_source_input_sequence_ = 0;
+    std::chrono::steady_clock::time_point last_source_state_time_{};
+    size_t configured_dofs_ = 0;
 };
 
 template <typename T>
@@ -379,18 +383,22 @@ public:
         const std::string& robot_config_path,
         float motion_length = 0.0f);
     void DeactivateLWPolicy();
-    std::shared_ptr<const LWPolicyActivation> LoadLWPolicyActivation() const noexcept;
+    const LWPolicyActivation* LoadLWPolicyActivation() const noexcept;
+    bool ReadLWPolicyActivationForInference(
+        LWPolicyActivation& activation) noexcept;
     void PublishLWMotionReference(LWMotionReferenceSnapshot reference);
     void PublishCurrentLWMotionReference(std::uint64_t generation);
-    std::shared_ptr<const LWMotionReferenceSnapshot> LoadLWMotionReference() const noexcept;
+    const LWMotionReferenceSnapshot* LoadLWMotionReference() noexcept;
     void PublishLWPolicyProgress(std::uint64_t generation, std::uint64_t frame);
-    std::shared_ptr<const LWPolicyProgressSnapshot> LoadLWPolicyProgress() const noexcept;
+    const LWPolicyProgressSnapshot* LoadLWPolicyProgress() noexcept;
     void PublishLWOperatorStatus(
         LWOperatorMode mode,
         float progress = 0.0f) noexcept;
     bool ReadLWOperatorStatus(LWOperatorStatusSnapshot& status) const noexcept;
-    bool PublishLWPolicyOutput(LWPolicyOutputFrame output);
-    std::shared_ptr<const LWPolicyOutputFrame> LoadLWPolicyOutput() const noexcept;
+    bool PublishLWPolicyOutput(
+        LWPolicyOutputFrame output,
+        const LWPolicyActivation& activation);
+    const LWPolicyOutputFrame* LoadLWPolicyOutput() noexcept;
     std::chrono::steady_clock::duration GetLWPolicyOutputMaxAge(
         const LWPolicyActivation& activation) const;
     virtual void HandleLWPolicyOutputFault(
@@ -490,9 +498,10 @@ private:
         std::shared_ptr<const LWPolicyDefinition>> lw_policy_definitions_;
     std::unordered_map<std::string, std::unique_ptr<MotionLoaderLW>>
         preloaded_lw_motion_players_;
-    LWAtomicSnapshot<LWPolicyActivation> lw_policy_activation_;
-    LWAtomicSnapshot<LWMotionReferenceSnapshot> lw_motion_reference_;
-    LWAtomicSnapshot<LWPolicyProgressSnapshot> lw_policy_progress_;
+    LWPolicyActivation control_policy_activation_{};
+    LWSpscLatestValue<LWPolicyActivation> lw_policy_activation_;
+    LWSpscLatestValue<LWMotionReferenceSnapshot> lw_motion_reference_;
+    LWSpscLatestValue<LWPolicyProgressSnapshot> lw_policy_progress_;
     LWOperatorStatusMailbox lw_operator_status_;
     std::atomic<std::uint64_t> lw_operator_status_sequence_{1};
     LWPolicyOutputTransport lw_policy_output_transport_;

@@ -98,6 +98,7 @@ private:
     std::array<int, LW_JOYSTICK_AXIS_COUNT> sys_js_axis{};
     LWJoystickFaultLatch joystick_fault_latch_;
     LWInputMailbox<Input::Gamepad> joystick_input_mailbox_;
+    LWInputMailbox<Input::Gamepad>::Snapshot joystick_input_snapshot_{};
     std::uint64_t consumed_gamepad_sequence_ = 0;
     bool sys_js_active = false;
     float axis_deadzone = 0.05f;

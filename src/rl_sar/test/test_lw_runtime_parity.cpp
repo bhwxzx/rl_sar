@@ -507,7 +507,7 @@ void testPolicyGenerationSwitchBindsTypedRuntimeConfiguration()
     require(
         leg_activation
             && leg_activation->generation == leg_generation
-            && leg_activation->definition == leg_definition,
+            && leg_activation->definition == leg_definition.get(),
         "leg generation was not bound to its typed definition");
 
     const std::uint64_t wheel_generation =
@@ -517,7 +517,7 @@ void testPolicyGenerationSwitchBindsTypedRuntimeConfiguration()
         wheel_activation
             && wheel_activation->generation == wheel_generation
             && wheel_generation != leg_generation
-            && wheel_activation->definition == wheel_definition,
+            && wheel_activation->definition == wheel_definition.get(),
         "wheel generation did not atomically replace the typed definition");
 }
 

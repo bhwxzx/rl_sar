@@ -21,6 +21,7 @@
 #include "fsm_LW.hpp"
 
 #include "LW_sdk.hpp"
+#include <array>
 #include <atomic>
 #include <csignal>
 #include <chrono>
@@ -31,8 +32,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
-#include <realtime_tools/realtime_box.hpp>
-#include <realtime_tools/realtime_buffer.hpp>
 
 #include "joystick.hh"
 
@@ -102,6 +101,7 @@ private:
     std::array<int, LW_JOYSTICK_AXIS_COUNT> sys_js_axis{};
     LWJoystickFaultLatch joystick_fault_latch_;
     LWInputMailbox<Input::Gamepad> joystick_input_mailbox_;
+    LWInputMailbox<Input::Gamepad>::Snapshot joystick_input_snapshot_{};
     std::uint64_t consumed_gamepad_sequence_ = 0;
     bool sys_js_active = false;
     float axis_deadzone = 0.05f;
@@ -115,14 +115,15 @@ private:
     using SafetyClock = SensorReadinessMonitor::Clock;
     struct TimedImuSample
     {
-        sensor_msgs::msg::Imu::SharedPtr message;
-        SafetyClock::time_point received_at;
+        std::array<double, 4> quaternion{};
+        std::array<double, 3> angular_velocity{};
+        SafetyClock::time_point received_at{};
     };
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_subscriber_ = nullptr;
     rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr ahrs_subscriber_ = nullptr;
     LWImuAhrsGuard imu_ahrs_guard_{std::chrono::milliseconds(100)};
-    realtime_tools::RealtimeBox<std::shared_ptr<TimedImuSample>> received_imu_sample_{nullptr};
+    LWSpscLatestValue<TimedImuSample> received_imu_sample_;
     SensorReadinessMonitor sensor_readiness_monitor_{std::chrono::milliseconds(100)};
     SensorReadinessStatus sensor_readiness_status_;
     SafetyClock::time_point last_readiness_log_time_{};

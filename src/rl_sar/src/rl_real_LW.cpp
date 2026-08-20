@@ -644,15 +644,16 @@ void RL_Real::ImuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
         return;
     }
 
-    auto trusted = std::make_shared<sensor_msgs::msg::Imu>(*msg);
-    trusted->orientation.w /= decision.quaternion_norm;
-    trusted->orientation.x /= decision.quaternion_norm;
-    trusted->orientation.y /= decision.quaternion_norm;
-    trusted->orientation.z /= decision.quaternion_norm;
-    auto sample = std::make_shared<TimedImuSample>();
-    sample->message = std::move(trusted);
-    sample->received_at = received_at;
-    received_imu_sample_.set(std::move(sample));
+    received_imu_sample_.publish(
+        TimedImuSample{
+            {msg->orientation.w / decision.quaternion_norm,
+             msg->orientation.x / decision.quaternion_norm,
+             msg->orientation.y / decision.quaternion_norm,
+             msg->orientation.z / decision.quaternion_norm},
+            {msg->angular_velocity.x,
+             msg->angular_velocity.y,
+             msg->angular_velocity.z},
+            received_at});
 }
 
 void RL_Real::AhrsCallback(const geometry_msgs::msg::Vector3::SharedPtr msg)
@@ -694,9 +695,9 @@ void RL_Real::GetState(RobotState<float> *state)
         sensor_readiness_monitor_.markLeftFeedbackReceived(now);
     }
 
-    std::shared_ptr<TimedImuSample> imu_sample;
-    received_imu_sample_.get(imu_sample);
-    if (imu_sample && imu_sample->message)
+    const TimedImuSample* imu_sample =
+        received_imu_sample_.readLatest();
+    if (imu_sample)
     {
         sensor_readiness_monitor_.markImuReceived(imu_sample->received_at);
     }
@@ -707,15 +708,13 @@ void RL_Real::GetState(RobotState<float> *state)
         return;
     }
 
-    const auto& imu = *imu_sample->message;
-
-    state->imu.quaternion[0] = imu.orientation.w;
-    state->imu.quaternion[1] = imu.orientation.x;
-    state->imu.quaternion[2] = imu.orientation.y;
-    state->imu.quaternion[3] = imu.orientation.z;
-    state->imu.gyroscope[0] = imu.angular_velocity.x;
-    state->imu.gyroscope[1] = imu.angular_velocity.y;
-    state->imu.gyroscope[2] = imu.angular_velocity.z;
+    state->imu.quaternion[0] = imu_sample->quaternion[0];
+    state->imu.quaternion[1] = imu_sample->quaternion[1];
+    state->imu.quaternion[2] = imu_sample->quaternion[2];
+    state->imu.quaternion[3] = imu_sample->quaternion[3];
+    state->imu.gyroscope[0] = imu_sample->angular_velocity[0];
+    state->imu.gyroscope[1] = imu_sample->angular_velocity[1];
+    state->imu.gyroscope[2] = imu_sample->angular_velocity[2];
 
     for (std::size_t i = 0; i < runtime_configuration.num_dofs; ++i)
     {
@@ -821,7 +820,8 @@ void RL_Real::LatchJoystickFault(
 
 void RL_Real::ApplyPendingInput()
 {
-    const auto input = joystick_input_mailbox_.read();
+    (void)joystick_input_mailbox_.read(joystick_input_snapshot_);
+    const auto& input = joystick_input_snapshot_;
     this->control.x = input.x;
     this->control.y = input.y;
     this->control.yaw = input.yaw;
