@@ -207,6 +207,30 @@ void testCurrentLWConfigurationsAndModels()
     }
 }
 
+void testSparseHistoryUsesSelectedFrameCountForModelInput()
+{
+    const fs::path policy_root(POLICY_DIR);
+    const YAML::Node base =
+        loadConfig(policy_root / "LW/base.yaml", "LW");
+    const fs::path config_path =
+        policy_root / "LW/robot_lab/leg_loco/config.yaml";
+    YAML::Node sparse_history =
+        YAML::Clone(loadConfig(config_path, "LW/robot_lab/leg_loco"));
+    sparse_history["observations_history"] = std::vector<int>{9};
+
+    const auto validated = ValidateLWPolicyConfiguration(
+        base,
+        sparse_history,
+        "sparse-history-policy");
+    require(
+        validated.runtime.observations_history == std::vector<int>{9},
+        "sparse history frame was not retained");
+    require(
+        validated.dimensions.model_input
+            == validated.dimensions.observation,
+        "one selected sparse frame did not produce one observation frame");
+}
+
 void testInvalidBaseConfigurationIsRejected()
 {
     const fs::path policy_root(POLICY_DIR);
@@ -401,6 +425,7 @@ int main()
     try
     {
         testCurrentLWConfigurationsAndModels();
+        testSparseHistoryUsesSelectedFrameCountForModelInput();
         testInvalidBaseConfigurationIsRejected();
         testInvalidPolicyConfigurationIsRejected();
         testModelDimensionMismatchIsRejected();

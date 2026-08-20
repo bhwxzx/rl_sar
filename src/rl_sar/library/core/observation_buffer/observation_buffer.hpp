@@ -46,9 +46,11 @@ public:
     void insert(const std::vector<float>& new_obs);
     
     /**
-     * @brief Get observation vector based on specified indices
-     * @param obs_ids Indices specifying which observations to retrieve
+     * @brief Get observation history based on specified frame indices
+     * @param obs_ids History-frame indices, where 0 is the newest frame
      * @return Concatenated observation vector
+     * @throws std::out_of_range if an index is outside the history buffer
+     * @throws std::length_error if the requested output size overflows
      */
     std::vector<float> get_obs_vec(std::vector<int> obs_ids);
 

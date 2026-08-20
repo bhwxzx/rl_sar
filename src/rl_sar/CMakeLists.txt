@@ -929,6 +929,21 @@ install(TARGETS rl_sdk DESTINATION lib/${PROJECT_NAME})
 # library for observation buffer
 add_library(observation_buffer library/core/observation_buffer/observation_buffer.cpp)
 install(TARGETS observation_buffer DESTINATION lib/${PROJECT_NAME})
+if(BUILD_TESTING)
+    add_executable(
+        test_observation_buffer
+        test/test_observation_buffer.cpp
+    )
+    target_link_libraries(
+        test_observation_buffer
+        PRIVATE
+            observation_buffer
+    )
+    add_test(
+        NAME observation_buffer
+        COMMAND test_observation_buffer
+    )
+endif()
 
 # executable for rl sim LW
 if(SYSTEM_TYPE STREQUAL "Linux"
@@ -1254,14 +1269,6 @@ if(LW_PRODUCTION_DEPLOYMENT)
         )
 endif()
 
-# ========================
-# only for test
-# ========================
-# add_executable(test_observation_buffer test/test_observation_buffer.cpp)
-# target_link_libraries(test_observation_buffer
-#     observation_buffer
-# )
-# install(TARGETS test_observation_buffer DESTINATION lib/${PROJECT_NAME})
 # add_executable(test_vector_math test/test_vector_math.cpp)
 # install(TARGETS test_vector_math DESTINATION lib/${PROJECT_NAME})
 

@@ -6,6 +6,7 @@
 #include "observation_buffer.hpp"
 #include <stdexcept>
 #include <algorithm>
+#include <limits>
 
 ObservationBuffer::ObservationBuffer()
 {
@@ -30,6 +31,10 @@ ObservationBuffer::ObservationBuffer(int num_envs,
         if (dim <= 0)
         {
             throw std::invalid_argument("All observation dimensions must be positive");
+        }
+        if (num_obs > std::numeric_limits<int>::max() - dim)
+        {
+            throw std::overflow_error("Total observation dimension overflows int");
         }
         num_obs += dim;
     }
@@ -112,24 +117,38 @@ std::vector<float> ObservationBuffer::get_obs_vec(std::vector<int> obs_ids)
         return std::vector<float>();
     }
 
-    // Calculate output size
-    int output_size = 0;
+    // obs_ids are history-frame indices, not observation-term indices.
     for (int obs_id : obs_ids)
     {
-        if (obs_id >= 0 && obs_id < static_cast<int>(obs_dims.size()))
+        if (obs_id < 0 || obs_id >= history_length)
         {
-            output_size += obs_dims[obs_id];
+            throw std::out_of_range(
+                "Observation history index " + std::to_string(obs_id)
+                + " is outside [0, " + std::to_string(history_length) + ")");
         }
     }
 
-    if (output_size == 0)
+    const std::size_t environment_count =
+        static_cast<std::size_t>(num_envs);
+    const std::size_t selected_frame_count = obs_ids.size();
+    const std::size_t frame_width =
+        static_cast<std::size_t>(num_obs_total);
+    if (selected_frame_count
+        > std::numeric_limits<std::size_t>::max() / frame_width)
     {
-        return std::vector<float>();
+        throw std::length_error("Observation history output size overflows");
     }
+    const std::size_t selected_width = selected_frame_count * frame_width;
+    if (environment_count
+        > std::numeric_limits<std::size_t>::max() / selected_width)
+    {
+        throw std::length_error("Observation history output size overflows");
+    }
+    const std::size_t output_size = environment_count * selected_width;
 
     // Create output vector
     std::vector<float> output;
-    output.reserve(num_envs * history_length * output_size);
+    output.reserve(output_size);
 
     if (this->priority == "time")
     {
@@ -138,14 +157,11 @@ std::vector<float> ObservationBuffer::get_obs_vec(std::vector<int> obs_ids)
         {
             for (int obs_id : obs_ids)
             {
-                if (obs_id >= 0 && obs_id < history_length)
+                // obs_id=0 is newest (at index 0), obs_id=N is older.
+                const auto& frame = obs_buf[env_idx][obs_id];
+                for (int i = 0; i < num_obs_total; ++i)
                 {
-                    // obs_id=0 is newest (at index 0), obs_id=N is oldest (at index N)
-                    int slice_idx = obs_id;
-                    for (int i = 0; i < num_obs_total; ++i)
-                    {
-                        output.push_back(obs_buf[env_idx][slice_idx][i]);
-                    }
+                    output.push_back(frame[i]);
                 }
             }
         }
@@ -161,14 +177,10 @@ std::vector<float> ObservationBuffer::get_obs_vec(std::vector<int> obs_ids)
                 int dim = obs_dims[i];
                 for (int step : obs_ids)
                 {
-                    if (step >= 0 && step < history_length)
+                    // step=0 is newest (at index 0), step=N is older.
+                    for (int j = 0; j < dim; ++j)
                     {
-                        // step=0 is newest (at index 0), step=N is oldest (at index N)
-                        int time_offset = step;
-                        for (int j = 0; j < dim; ++j)
-                        {
-                            output.push_back(obs_buf[env_idx][time_offset][obs_offset + j]);
-                        }
+                        output.push_back(obs_buf[env_idx][step][obs_offset + j]);
                     }
                 }
                 obs_offset += dim;

@@ -211,7 +211,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 57 | LW-057 | P2 / medium | resolved | Validate the MuJoCo control adapter layout and test actual safety actions |
 | 58 | LW-058 | P2 / medium | resolved | Isolate maintained C++ targets from the unused Python runtime |
 | 59 | LW-059 | P1 / high | resolved | Stop Sim2Sim workers on every partial-construction failure path |
-| 60 | LW-060 | P2 / medium | pending | Use the history-frame domain consistently in ObservationBuffer |
+| 60 | LW-060 | P2 / medium | resolved | Use the history-frame domain consistently in ObservationBuffer |
 | 61 | LW-061 | P2 / medium | pending | Make motion-reference validation and runtime gating semantically consistent |
 | 62 | LW-062 | P2 / low | pending | Reuse contiguous buffers throughout the inference hot path |
 | 63 | LW-063 | P2 / low | pending | Share the ONNX Runtime environment without weakening model isolation |
@@ -5023,7 +5023,7 @@ core, MuJoCo adapter, joystick mailbox, plot buffers, or other member state.
 ## [LW-060] Use the history-frame domain consistently in ObservationBuffer
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-013, LW-050
 
 ### Problem
@@ -5065,6 +5065,33 @@ capacity and can reallocate in the inference thread.
   than silently affecting only the reserve calculation.
 - Configuration, observation-buffer, inference, strict, and supported
   sanitizer tests plus `git diff --check` pass.
+
+### Resolution
+
+- **Resolved**: 2026-08-20T19:00:56+08:00
+- **Commit**: 本提交
+- **Approved Scope**: `get_obs_vec()` 统一把 `obs_ids` 作为 history-frame
+  索引，先按 `[0, history_length)` 完整校验，再按环境数、选中帧数和完整单帧
+  observation 宽度进行溢出安全的精确容量计算。非法帧索引现在在生成任何部分
+  输出前抛出 `std::out_of_range`；observation term 维度累加溢出在缓冲区分配前
+  抛出 `std::overflow_error`。保持 time/term 排列、请求帧顺序以及返回新 vector
+  的现有 API，不实施 `LW-062` 的 caller-owned/in-place 缓冲区优化。
+- **Changed Files**: `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`、
+  `src/rl_sar/CMakeLists.txt`、
+  `src/rl_sar/library/core/observation_buffer/observation_buffer.{hpp,cpp}`、
+  `src/rl_sar/test/test_observation_buffer.cpp`、
+  `src/rl_sar/test/test_lw_configuration_validation.cpp`。
+- **Verification**: 原先仅打印结果且未注册的 observation-buffer 示例已改为
+  正式断言测试并加入 CTest，覆盖 time/term 精确顺序、单 term 选择 frame 1、
+  稀疏历史、多 environment、空请求、上下界非法索引和维度溢出。配置测试验证
+  合法 `{9}` 稀疏历史只产生一帧模型输入。定向测试 2/2 通过；当前 Debug
+  完整构建及 51/51 CTest 通过；全新 `LW_STRICT_WARNINGS=ON` 构建及 51/51
+  CTest 通过。隔离 AddressSanitizer/UndefinedBehaviorSanitizer 构建中的
+  `observation_buffer` 和 `lw_configuration_validation` 2/2 通过。定向
+  `cppcheck` 无告警，`git diff --check` 通过。未启动 ROS 节点、MuJoCo GUI、
+  串口、IMU、摇杆、真机或电机；用户未跟踪技能目录保持未修改。
+- **Remaining Follow-ups**: LW-061, LW-062, LW-063, LW-064, LW-065,
+  LW-066
 
 ---
 

@@ -4,71 +4,156 @@
  */
 
 #include "observation_buffer.hpp"
+
 #include <iostream>
+#include <limits>
 #include <stdexcept>
-#include <algorithm>
+#include <string>
+#include <vector>
 
-/*
-Output:
-
-Initializing buffer with: obs_dims=[2 3 4], history_length=3, observations_history=[0 0 1 2], priority=time
-Inserting observation t-2:
-[ 11 12 21 22 23 31 32 33 34 ]
-Inserting observation t-1:
-[ 110 120 210 220 230 310 320 330 340 ]
-Inserting observation t:
-[ 1100 1200 2100 2200 2300 3100 3200 3300 3400 ]
-time priority output:
-[ 11 12 21 22 23 31 32 33 34 11 12 21 22 23 31 32 33 34 110 120 210 220 230 310 320 330 340 1100 1200 2100 2200 2300 3100 3200 3300 3400 ]
-
-Initializing buffer with: obs_dims=[2 3 4], history_length=3, observations_history=[0 0 1 2], priority=term
-Inserting observation t-2:
-[ 11 12 21 22 23 31 32 33 34 ]
-Inserting observation t-1:
-[ 110 120 210 220 230 310 320 330 340 ]
-Inserting observation t:
-[ 1100 1200 2100 2200 2300 3100 3200 3300 3400 ]
-term priority output:
-[ 11 12 11 12 110 120 1100 1200 21 22 23 21 22 23 210 220 230 2100 2200 2300 31 32 33 34 31 32 33 34 310 320 330 340 3100 3200 3300 3400 ]
- 
-*/
-
-void test_buffer(const std::string& priority)
+namespace
 {
-    std::vector<int> obs_dims = {2, 3, 4};
-    int num_envs = 1;
-    std::vector<int> observations_history = {0, 0, 1, 2};
-    int history_length = *std::max_element(observations_history.begin(), observations_history.end()) + 1;
-
-    std::cout << "Initializing buffer with: "
-                << "obs_dims=[" << obs_dims << "], "
-                << "history_length=" << history_length << ", "
-                << "observations_history=[" << observations_history << "], "
-                << "priority=" << priority << "\n";
-
-    ObservationBuffer buffer(num_envs, obs_dims, history_length, priority);
-
-    std::vector<float> obs1 = {11, 12, 21, 22, 23, 31, 32, 33, 34};
-    std::vector<float> obs2 = {110, 120, 210, 220, 230, 310, 320, 330, 340};
-    std::vector<float> obs3 = {1100, 1200, 2100, 2200, 2300, 3100, 3200, 3300, 3400};
-
-    std::cout << "Inserting observation t-2:\n" << obs1 << "\n";
-    buffer.insert(obs1);
-
-    std::cout << "Inserting observation t-1:\n" << obs2 << "\n";
-    buffer.insert(obs2);
-
-    std::cout << "Inserting observation t:\n" << obs3 << "\n";
-    buffer.insert(obs3);
-
-    auto history = buffer.get_obs_vec(observations_history);
-
-    std::cout << priority << " priority output:\n" << history << "\n\n";
+void Require(bool condition, const std::string& message)
+{
+    if (!condition)
+    {
+        throw std::runtime_error(message);
+    }
 }
+
+void RequireEqual(
+    const std::vector<float>& actual,
+    const std::vector<float>& expected,
+    const std::string& message)
+{
+    Require(actual == expected, message);
+}
+
+template<typename Exception, typename Operation>
+void RequireThrows(Operation&& operation, const std::string& message)
+{
+    try
+    {
+        operation();
+    }
+    catch (const Exception&)
+    {
+        return;
+    }
+    catch (const std::exception& exception)
+    {
+        throw std::runtime_error(
+            message + ": unexpected exception: " + exception.what());
+    }
+    throw std::runtime_error(message + ": exception was not thrown");
+}
+
+void TestTimePriorityPreservesRequestedFrameOrder()
+{
+    ObservationBuffer buffer(1, {2, 1}, 3, "time");
+    buffer.insert({1.0F, 2.0F, 3.0F});
+    buffer.insert({4.0F, 5.0F, 6.0F});
+    buffer.insert({7.0F, 8.0F, 9.0F});
+
+    RequireEqual(
+        buffer.get_obs_vec({0, 2}),
+        {7.0F, 8.0F, 9.0F, 1.0F, 2.0F, 3.0F},
+        "time priority changed the requested history-frame order");
+}
+
+void TestTermPriorityPreservesRequestedFrameOrder()
+{
+    ObservationBuffer buffer(1, {2, 1}, 3, "term");
+    buffer.insert({1.0F, 2.0F, 3.0F});
+    buffer.insert({4.0F, 5.0F, 6.0F});
+    buffer.insert({7.0F, 8.0F, 9.0F});
+
+    RequireEqual(
+        buffer.get_obs_vec({0, 2}),
+        {7.0F, 8.0F, 1.0F, 2.0F, 9.0F, 3.0F},
+        "term priority changed the observation-term or frame order");
+}
+
+void TestHistoryFrameIndexIsIndependentOfTermCount()
+{
+    ObservationBuffer buffer(1, {2}, 2, "time");
+    buffer.insert({1.0F, 2.0F});
+    buffer.insert({3.0F, 4.0F});
+
+    RequireEqual(
+        buffer.get_obs_vec({1}),
+        {1.0F, 2.0F},
+        "valid frame one was confused with observation term one");
+}
+
+void TestSparseHistoryAndMultipleEnvironmentsHaveExactSize()
+{
+    ObservationBuffer sparse(1, {1}, 4, "time");
+    sparse.insert({10.0F});
+    sparse.insert({20.0F});
+    sparse.insert({30.0F});
+    sparse.insert({40.0F});
+    RequireEqual(
+        sparse.get_obs_vec({3, 1}),
+        {10.0F, 30.0F},
+        "sparse history indices produced the wrong frames");
+
+    ObservationBuffer multiple_environments(2, {1}, 2, "time");
+    multiple_environments.insert({5.0F});
+    multiple_environments.insert({6.0F});
+    const auto output = multiple_environments.get_obs_vec({0, 1});
+    RequireEqual(
+        output,
+        {6.0F, 5.0F, 6.0F, 5.0F},
+        "multiple environments produced the wrong output order");
+    Require(output.size() == 4, "multiple environments produced wrong size");
+}
+
+void TestEmptyAndInvalidHistoryRequests()
+{
+    ObservationBuffer buffer(1, {2}, 2, "time");
+    Require(buffer.get_obs_vec({}).empty(), "empty history request was not empty");
+    RequireThrows<std::out_of_range>(
+        [&]() { static_cast<void>(buffer.get_obs_vec({-1})); },
+        "negative history index was not rejected");
+    RequireThrows<std::out_of_range>(
+        [&]() { static_cast<void>(buffer.get_obs_vec({2})); },
+        "history index at the buffer length was not rejected");
+}
+
+void TestObservationDimensionOverflowIsRejectedBeforeAllocation()
+{
+    RequireThrows<std::overflow_error>(
+        []()
+        {
+            ObservationBuffer buffer(
+                1,
+                {std::numeric_limits<int>::max(), 1},
+                1,
+                "time");
+            static_cast<void>(buffer);
+        },
+        "overflowing total observation dimension was not rejected");
+}
+} // namespace
 
 int main()
 {
-    test_buffer("time");
-    test_buffer("term");
+    try
+    {
+        TestTimePriorityPreservesRequestedFrameOrder();
+        TestTermPriorityPreservesRequestedFrameOrder();
+        TestHistoryFrameIndexIsIndependentOfTermCount();
+        TestSparseHistoryAndMultipleEnvironmentsHaveExactSize();
+        TestEmptyAndInvalidHistoryRequests();
+        TestObservationDimensionOverflowIsRejectedBeforeAllocation();
+    }
+    catch (const std::exception& exception)
+    {
+        std::cerr << "test_observation_buffer failed: " << exception.what()
+                  << std::endl;
+        return 1;
+    }
+    std::cout << "test_observation_buffer passed" << std::endl;
     return 0;
 }
