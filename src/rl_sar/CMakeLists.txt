@@ -108,6 +108,15 @@ add_definitions(-DBOOST_BIND_GLOBAL_PLACEHOLDERS)
 
 find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(LW_SYSTEM_FMT_CONFIG_DIR
+        "/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/cmake/fmt")
+    set(fmt_DIR "${LW_SYSTEM_FMT_CONFIG_DIR}")
+    find_package(fmt CONFIG REQUIRED
+        PATHS "${LW_SYSTEM_FMT_CONFIG_DIR}"
+        NO_DEFAULT_PATH
+    )
+endif()
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -322,7 +331,7 @@ endif()
 
 find_package(TBB REQUIRED)
 find_package(Threads REQUIRED)
-find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -443,13 +452,6 @@ if(BUILD_TESTING)
     endif()
 endif()
 
-# Add Python library path to RPATH
-if(Python3_LIBRARIES)
-    get_filename_component(PYTHON_LIB_DIR "${Python3_LIBRARIES}" DIRECTORY)
-    set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${PYTHON_LIB_DIR}")
-    message(STATUS "Added Python library path to RPATH: ${PYTHON_LIB_DIR}")
-endif()
-
 if(SYSTEM_TYPE STREQUAL "Linux")
     set(YAML_CPP_LIBRARIES yaml-cpp)
 link_directories(/usr/local/lib)
@@ -528,7 +530,6 @@ endif()
 
 include_directories(
     include
-    library/core/matplotlibcpp
     library/core/observation_buffer
     library/core/rl_sdk
     library/core/loop
@@ -594,19 +595,9 @@ foreach(RL_SDK_TARGET rl_sdk rl_sdk_lw_deployment)
         motion_loader_lw
         inference_runtime
         lw_configuration_validation
-        Python3::Python
-        Python3::Module
         TBB::tbb
     )
 endforeach()
-find_package(Python3 COMPONENTS NumPy)
-if(Python3_NumPy_FOUND)
-    target_link_libraries(rl_sdk PUBLIC Python3::NumPy)
-    target_link_libraries(rl_sdk_lw_deployment PUBLIC Python3::NumPy)
-else()
-    target_compile_definitions(rl_sdk PUBLIC WITHOUT_NUMPY)
-    target_compile_definitions(rl_sdk_lw_deployment PUBLIC WITHOUT_NUMPY)
-endif()
 if(BUILD_TESTING)
     if(SYSTEM_TYPE STREQUAL "Linux")
         add_library(
@@ -1154,6 +1145,29 @@ if(SYSTEM_TYPE STREQUAL "Linux")
                         --policy-root ${PROJECT_ROOT_DIR}/policy
             )
         endif()
+endif()
+
+if(BUILD_TESTING AND SYSTEM_TYPE STREQUAL "Linux")
+    find_program(LW_READELF_EXECUTABLE NAMES readelf llvm-readelf REQUIRED)
+    set(LW_RUNTIME_LINKAGE_TEST_ARGUMENTS
+        --readelf "${LW_READELF_EXECUTABLE}"
+        --binary "$<TARGET_FILE:test_lw_fsm_transitions>"
+    )
+    if(TARGET rl_real_LW)
+        list(APPEND LW_RUNTIME_LINKAGE_TEST_ARGUMENTS
+            --binary "$<TARGET_FILE:rl_real_LW>")
+    endif()
+    if(TARGET rl_sim_LW)
+        list(APPEND LW_RUNTIME_LINKAGE_TEST_ARGUMENTS
+            --binary "$<TARGET_FILE:rl_sim_LW>")
+    endif()
+    add_test(
+        NAME lw_runtime_linkage
+        COMMAND
+            ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test/test_lw_runtime_linkage.py
+            ${LW_RUNTIME_LINKAGE_TEST_ARGUMENTS}
+    )
 endif()
 
 # executable for actuator net

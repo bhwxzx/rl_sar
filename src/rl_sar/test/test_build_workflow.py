@@ -144,6 +144,34 @@ class BuildWorkflowTests(unittest.TestCase):
         self.assertIn("add_executable(rl_sim_LW", cmake)
         self.assertIn("lw_mujoco_simulate_vendor", cmake)
 
+    def test_cpp_runtime_does_not_link_unused_python_components(self) -> None:
+        cmake = CMAKE_FILE.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "find_package(Python3 COMPONENTS Interpreter REQUIRED)", cmake
+        )
+        self.assertIn("find_package(fmt CONFIG REQUIRED", cmake)
+        self.assertIn(
+            '"/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/cmake/fmt"', cmake
+        )
+        self.assertIn('set(fmt_DIR "${LW_SYSTEM_FMT_CONFIG_DIR}")', cmake)
+        self.assertIn("NO_DEFAULT_PATH", cmake)
+        for unused_dependency in (
+            "Python3::Python",
+            "Python3::Module",
+            "Python3::NumPy",
+            "COMPONENTS Interpreter Development",
+            "COMPONENTS NumPy",
+            "PYTHON_LIB_DIR",
+            "library/core/matplotlibcpp",
+        ):
+            self.assertNotIn(unused_dependency, cmake)
+
+        self.assertIn(
+            'list(APPEND PREBUILT_LIB_PATHS "${ONNX_RUNTIME_DIR}/lib")',
+            cmake,
+        )
+
     def test_selected_builds_include_dependency_closure(self) -> None:
         content = BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn("--packages-select", content)

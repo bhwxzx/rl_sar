@@ -185,6 +185,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 55 | LW-055 | P1 / high | resolved | Remove blocking synchronization from the real control deadline path |
 | 56 | LW-056 | P2 / medium | resolved | Make the maintained complete control cycle allocation-stable |
 | 57 | LW-057 | P2 / medium | pending | Validate the MuJoCo control adapter layout and test actual safety actions |
+| 58 | LW-058 | P2 / medium | resolved | Isolate maintained C++ targets from the unused Python runtime |
 
 ---
 
@@ -4757,6 +4758,103 @@ and safety-action writer.
   damping torque, S3/S4 zero all `nu` controls, and S4 requests exit.
 - Description, adapter, lifecycle, strict and sanitizer tests plus
   `git diff --check` pass without opening a GUI, ROS node, or real hardware.
+
+---
+
+## [LW-058] Isolate maintained C++ targets from the unused Python runtime
+
+**Priority**: P2 / medium
+**Status**: resolved
+**Dependencies**: LW-027, LW-050, LW-056
+
+### Problem
+
+The package globally requires Python development and NumPy components even
+though no maintained C++ source includes `matplotlibcpp` or calls the Python C
+API. Both `rl_sdk` variants publicly link Python embedding/module/NumPy targets,
+and the selected Python library directory is appended to the global install
+RPATH. In the active Conda environment this makes every dependent control and
+test executable load Conda Python and libstdc++ alongside the system GCC 11
+ASan/UBSan runtimes and the approved prebuilt ONNX Runtime. Sanitizer processes
+then intermittently recurse through `AddressSanitizer:DEADLYSIGNAL`, including
+a test that does not load ONNX, so the apparent CPU stall cannot provide a
+usable project-code sanitizer verdict.
+
+### Evidence
+
+- `src/rl_sar/CMakeLists.txt:323-325`
+- `src/rl_sar/CMakeLists.txt:446-450`
+- `src/rl_sar/CMakeLists.txt:529-543`
+- `src/rl_sar/CMakeLists.txt:592-609`
+- `src/rl_sar/test/test_build_workflow.py`
+- `src/rl_sar/test/test_lw_sim_lifecycle_integration.py:170-173`
+- LW-056 sanitizer resolution evidence
+
+### Intended Scope
+
+- Keep Python only as the interpreter for maintained Python scripts and tests;
+  remove unused Python development, module, NumPy, and matplotlib include/link
+  propagation from C++ control targets.
+- Stop adding the selected Python library directory to the package RPATH while
+  preserving the approved ONNX Runtime RPATH and runtime-provenance checks.
+- Add source-configuration and built-artifact regressions proving representative
+  maintained C++ targets do not acquire a Python runtime dependency.
+- Re-run ASan and UBSan separately in fresh build trees. Keep the zero-allocation
+  counter test separate only if its global allocator override remains
+  independently incompatible after the runtime-link cleanup.
+
+### Acceptance Criteria
+
+- Maintained C++ control and representative test binaries have no `libpython`
+  dependency and no Python/Conda directory in their project-configured RPATH.
+- Python build/deployment/integration tests still run through the discovered
+  interpreter, and ONNX Runtime loading and deployment integrity remain intact.
+- Fresh ASan and UBSan runs complete with usable results instead of recursive
+  signal-reporting loops; any remaining external-runtime limitation is isolated
+  and reported without disabling sanitizer signal interception.
+- Complete Debug and strict suites, targeted sanitizer repetitions, dependency
+  regressions, and `git diff --check` pass without running ROS nodes, a simulator
+  GUI, or real hardware.
+
+### Resolution Evidence
+
+- Resolved: 2026-08-20
+- The package now requires only the Python interpreter used by maintained
+  scripts and tests. `rl_sdk` and `rl_sdk_lw_deployment` no longer propagate
+  Python embedding, extension-module, or NumPy targets; the unused global
+  `matplotlibcpp` include and Python-library RPATH injection were removed.
+- Linux configuration resolves the system-architecture `fmt` package before
+  ROS dependencies. This prevents an active Conda shell from substituting its
+  own `fmt` package and reintroducing the Conda library directory through
+  CMake's automatic build RPATH, while remaining aligned with the Ubuntu/ROS
+  Humble system libraries used by the maintained deployment.
+- The build-workflow regression rejects restoration of Python development,
+  module, NumPy, matplotlib, or Python-RPATH configuration while retaining the
+  approved ONNX Runtime RPATH. A new ELF regression checks the FSM test and all
+  available real/simulation executables for a `libpython` dependency and, when
+  configured inside Conda, for a runtime search path beneath `CONDA_PREFIX`.
+- The maintained Debug build and a fresh `LW_STRICT_WARNINGS=ON` build both
+  completed, including `rl_real_LW` and `rl_sim_LW`; both complete 49/49 CTest
+  suites passed. The source-configuration and built-artifact linkage tests also
+  passed after final formatting changes.
+- Fresh ASan-only, UBSan-only, and combined ASan/UBSan builds each ran
+  `lw_fsm_transitions`, `lw_runtime_parity`, `lw_allocation_bound`, and
+  `lw_motion_loader` for 20 consecutive repetitions per test. All 240 runs
+  passed with sanitizer signal interception enabled and no sanitizer finding or
+  recursive `DEADLYSIGNAL`; the allocation counter needed no special variant.
+- An isolated clean validation clone configured the formal
+  `LW_PRODUCTION_DEPLOYMENT=ON` Release mode, revalidated the approved ONNX
+  runtime, and built `rl_real_LW` plus `lw_config_profiler`. ELF inspection found
+  no `libpython` or Conda path; the build RPATH retained the approved ONNX path
+  and required system/ROS directories. Python AST parsing and
+  `git diff --check` passed.
+- No ROS node, MuJoCo GUI, serial device, IMU, joystick, real robot, or motor was
+  started. The user-owned untracked compaction-inspection skill directory was
+  preserved unchanged.
+- **Changed Files**: `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`,
+  `src/rl_sar/CMakeLists.txt`, `src/rl_sar/test/test_build_workflow.py`,
+  `src/rl_sar/test/test_lw_runtime_linkage.py`.
+- **Remaining Follow-ups**: LW-057
 
 ---
 
