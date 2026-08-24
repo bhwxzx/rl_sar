@@ -215,7 +215,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 61 | LW-061 | P2 / medium | pending | Make motion-reference validation and runtime gating semantically consistent |
 | 62 | LW-062 | P2 / low | resolved | Reuse contiguous buffers throughout the inference hot path |
 | 63 | LW-063 | P2 / low | resolved | Share the ONNX Runtime environment without weakening model isolation |
-| 64 | LW-064 | P2 / low | pending | Remove or correctly implement the misleading FDILink CRC32 API |
+| 64 | LW-064 | P2 / low | resolved | Remove or correctly implement the misleading FDILink CRC32 API |
 | 65 | LW-065 | P2 / low | pending | Restore a clean FDILink lint and package-metadata baseline |
 | 66 | LW-066 | P2 / low | pending | Make dependency discovery ordered and build settings target-scoped |
 
@@ -5343,7 +5343,7 @@ buffers still require independent ownership.
 ## [LW-064] Remove or correctly implement the misleading FDILink CRC32 API
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-044, LW-045
 
 ### Problem
@@ -5375,6 +5375,35 @@ would silently receive an invalid checksum under a misleading public name.
 - Existing CRC8/CRC16 packet verification is unchanged.
 - Parser/payload tests and any new known-answer tests pass under strict and
   supported sanitizer builds.
+
+### Resolution
+
+- **Resolved**: 2026-08-24T15:06:25+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 仓库调用点、帧解析器和构建安装边界确认当前支持的
+  IMU、AHRS、INSGPS、Geodetic Position 及忽略帧均只使用头部 CRC8 和载荷
+  CRC16，`fdilink_protocol` 与其头文件也不作为已安装公共接口发布。因此按
+  批准方案删除无调用的 `CRC32_Table()` 声明、实际重复 CRC16 算法的错误实现，
+  以及从未被引用的 256 项 CRC32 查找表；未猜测或新增任何 CRC32 变体，未调整
+  CRC8/CRC16 签名、算法、帧结构或解析行为，未处理 LW-065 或后续问题。
+- **Changed Files**: `src/fdilink_ahrs_ROS2/include/crc_table.h`、
+  `src/fdilink_ahrs_ROS2/src/crc_table.cpp`、
+  `src/fdilink_ahrs_ROS2/test/test_fdilink_frame_parser.cpp`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 新增独立标准已知答案，固定 CRC8/MAXIM 的
+  `"123456789" -> 0xA1` 和 CRC16/XMODEM 的 `"123456789" -> 0x31C3`；
+  当前普通构建的解析、解码、语义校验、序号跟踪和进程生命周期 5/5 CTest
+  通过。全新 `-Wall -Wextra -Wpedantic -Werror` 构建协议库、AHRS 驱动和
+  四个 C++ 功能测试成功，5/5 功能 CTest 通过；全包 all target 另行暴露未修改
+  `imu_tf.cpp` 使用 ROS 废弃头文件的既有告警，保持给后续 FDILink 清理而未并入
+  本项。沿用 LW-046/LW-047 的受支持 `-fsanitize=undefined,alignment`
+  口径，五项测试各连续 5 次、共 25 次通过且无报告；补充 ASan+UBSan 下四个
+  纯 C++ 测试各 5 次、共 20 次通过，ROS 进程测试受未修改的 ROS/Conda
+  分配器 ABI `new-delete-type-mismatch` 限制。当前 `cppcheck` 通过，仓库搜索
+  和普通/UBSan 静态库符号表均只保留 CRC8/CRC16，`git diff --check` 通过。
+  未启动 ROS 节点、访问串口、AHRS、IMU、真机或电机；用户未跟踪技能目录保持
+  未修改。
+- **Remaining Follow-ups**: LW-065, LW-066
 
 ---
 

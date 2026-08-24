@@ -13,6 +13,17 @@
 namespace
 {
 
+TEST(FDILinkChecksum, MatchesPublishedKnownAnswers)
+{
+  std::array<std::uint8_t, 9> input{{
+      '1', '2', '3', '4', '5', '6', '7', '8', '9',
+  }};
+
+  const auto input_size = static_cast<std::uint8_t>(input.size());
+  EXPECT_EQ(CRC8_Table(input.data(), input_size), 0xA1U);
+  EXPECT_EQ(CRC16_Table(input.data(), input_size), 0x31C3U);
+}
+
 std::vector<std::uint8_t> makeFrame(
     std::uint8_t type,
     std::uint8_t payload_size,
