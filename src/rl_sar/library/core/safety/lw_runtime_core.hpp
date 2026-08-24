@@ -399,17 +399,46 @@ public:
             effective_control.yaw = 0.0f;
         }
 
-        inference_motion_reference_ = rl_->LoadLWMotionReference();
         const auto& policy_configuration =
             activation->definition->runtime;
         const bool needs_motion_reference =
             policy_configuration.needs_motion_reference;
-        if (needs_motion_reference
-            && (!inference_motion_reference_
-                || inference_motion_reference_->generation
-                    != activation->generation))
+        inference_motion_reference_ = nullptr;
+        if (needs_motion_reference)
         {
-            return;
+            inference_motion_reference_ =
+                rl_->LoadLWMotionReference();
+            if (!inference_motion_reference_
+                || inference_motion_reference_->generation
+                    != activation->generation)
+            {
+                return;
+            }
+            const auto requires_observation =
+                [&policy_configuration](const char* name)
+                {
+                    return std::find(
+                               policy_configuration.observations.begin(),
+                               policy_configuration.observations.end(),
+                               name)
+                        != policy_configuration.observations.end();
+                };
+            if (requires_observation(
+                    "whole_body_tracking/motion_command")
+                && (inference_motion_reference_->joint_pos.size()
+                        != policy_configuration.num_dofs
+                    || inference_motion_reference_->joint_vel.size()
+                        != policy_configuration.num_dofs))
+            {
+                return;
+            }
+            if (requires_observation(
+                    "whole_body_tracking/motion_anchor_ori_b")
+                && (inference_motion_reference_->anchor_quat.size() != 4
+                    || inference_motion_reference_->init_quat.size() != 4))
+            {
+                return;
+            }
         }
         last_inference_input_generation_ = policy_input.generation;
         last_inference_input_sequence_ = policy_input.sequence;
@@ -538,9 +567,7 @@ public:
             policy_configuration,
             inference_obs_,
             inference_obs_dims_,
-            inference_motion_reference_,
-            inference_frame_,
-            inference_activation_.motion_length);
+            inference_motion_reference_);
 
         std::vector<float> actions;
         const auto& history_indices =
@@ -758,9 +785,7 @@ private:
             policy_configuration,
             inference_obs_,
             inference_obs_dims_,
-            nullptr,
-            0,
-            activation.motion_length);
+            nullptr);
         const auto& history_indices =
             policy_configuration.observations_history;
         if (!history_indices.empty())

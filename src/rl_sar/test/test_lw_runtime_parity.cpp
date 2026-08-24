@@ -120,6 +120,37 @@ public:
     std::shared_ptr<ReplayState> passive;
 };
 
+class CountingModel : public InferenceRuntime::Model
+{
+public:
+    bool load(const std::string&) override
+    {
+        return true;
+    }
+
+    bool is_loaded() const override
+    {
+        return true;
+    }
+
+    std::vector<float> forward(
+        const std::vector<std::vector<float>>& inputs) override
+    {
+        require(inputs.size() == 1, "counting model input count differs");
+        ++forward_calls;
+        last_input = inputs.front();
+        return std::vector<float>(kNumDofs, 0.0f);
+    }
+
+    std::string get_model_type() const override
+    {
+        return "test";
+    }
+
+    std::size_t forward_calls = 0;
+    std::vector<float> last_input;
+};
+
 struct AdapterTrace
 {
     std::vector<LWSafetyAction> actions;
@@ -267,6 +298,170 @@ void prepareInferenceHarness(Harness& harness)
     // Publish a nonzero command first so a subsequently latched fault exercises
     // the inference-frame boundary rather than relying on control-loop timing.
     harness.cycle(0.4f);
+}
+
+struct MotionInferenceSetup
+{
+    std::shared_ptr<CountingModel> model;
+    std::uint64_t generation = 0;
+};
+
+MotionInferenceSetup prepareMotionInferenceHarness(
+    Harness& harness,
+    const std::vector<std::string>& observations,
+    int observation_dimension)
+{
+    constexpr const char* policy = "LW/robot_lab/leg_to_wheel";
+    harness.rl.SetPolicyRoot(POLICY_DIR);
+    harness.rl.ReadYaml("LW", "base.yaml");
+    YAML::Node policy_config = YAML::LoadFile(
+        std::string(POLICY_DIR) + "/" + policy + "/config.yaml")[policy];
+    policy_config["observations"] = observations;
+    policy_config["num_observations"] = observation_dimension;
+    harness.rl.preloaded_lw_policy_configs_[policy] =
+        ValidateLWPolicyConfiguration(
+            harness.rl.params.config_node,
+            policy_config,
+            "runtime-motion-contract");
+    auto model = std::make_shared<CountingModel>();
+    harness.rl.preloaded_models_[policy] = model;
+    harness.rl.PreloadLWPolicyContext(policy);
+    const std::uint64_t generation =
+        harness.rl.ActivateLWPolicy(policy);
+    harness.cycle(0.4f);
+    return {std::move(model), generation};
+}
+
+LWMotionReferenceSnapshot makeMotionReference(
+    std::uint64_t generation)
+{
+    LWMotionReferenceSnapshot reference;
+    reference.generation = generation;
+    reference.joint_pos.resize(kNumDofs);
+    reference.joint_vel.resize(kNumDofs);
+    for (std::size_t index = 0; index < kNumDofs; ++index)
+    {
+        reference.joint_pos[index] =
+            0.1f * static_cast<float>(index + 1);
+        reference.joint_vel[index] =
+            -0.05f * static_cast<float>(index + 1);
+    }
+    reference.anchor_quat = {1.0f, 0.0f, 0.0f, 0.0f};
+    reference.init_quat = {1.0f, 0.0f, 0.0f, 0.0f};
+    return reference;
+}
+
+void testMotionReferenceRuntimeGating()
+{
+    {
+        Harness harness;
+        auto setup = prepareMotionInferenceHarness(
+            harness,
+            {"whole_body_tracking/motion_anchor_ori_b"},
+            6);
+
+        harness.core.runInferenceCycle(false);
+        LWInferenceTraceSnapshot trace;
+        require(
+            setup.model->forward_calls == 0
+                && !harness.core.readInferenceTrace(trace),
+            "anchor-only inference ran without a motion reference");
+
+        auto incomplete = makeMotionReference(setup.generation);
+        incomplete.init_quat.clear();
+        harness.rl.PublishLWMotionReference(std::move(incomplete));
+        harness.core.runInferenceCycle(false);
+        require(
+            setup.model->forward_calls == 0,
+            "anchor-only inference accepted an incomplete reference");
+
+        harness.rl.PublishLWMotionReference(
+            makeMotionReference(setup.generation));
+        harness.core.runInferenceCycle(false);
+        require(
+            setup.model->forward_calls == 1
+                && setup.model->last_input.size() == 6
+                && harness.core.readInferenceTrace(trace)
+                && trace.frame == 1,
+            "anchor-only inference did not use the matching reference");
+        requireVectorEqual(
+            setup.model->last_input,
+            {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f},
+            "anchor-only observation");
+
+        const std::uint64_t next_generation =
+            harness.rl.ActivateLWPolicy("LW/robot_lab/leg_to_wheel");
+        harness.cycle(0.4f);
+        harness.core.runInferenceCycle(false);
+        require(
+            next_generation != setup.generation
+                && setup.model->forward_calls == 1,
+            "anchor-only inference accepted a prior-generation reference");
+        harness.rl.PublishLWMotionReference(
+            makeMotionReference(next_generation));
+        harness.core.runInferenceCycle(false);
+        require(
+            setup.model->forward_calls == 2
+                && harness.core.readInferenceTrace(trace)
+                && trace.generation == next_generation
+                && trace.frame == 1,
+            "anchor-only inference did not recover with a matching generation");
+    }
+
+    {
+        Harness harness;
+        auto setup = prepareMotionInferenceHarness(
+            harness,
+            {"whole_body_tracking/motion_command"},
+            20);
+        harness.core.runInferenceCycle(false);
+        require(
+            setup.model->forward_calls == 0,
+            "command-only inference ran without a motion reference");
+
+        auto incomplete = makeMotionReference(setup.generation);
+        incomplete.joint_vel.pop_back();
+        harness.rl.PublishLWMotionReference(std::move(incomplete));
+        harness.core.runInferenceCycle(false);
+        require(
+            setup.model->forward_calls == 0,
+            "command-only inference accepted an incomplete reference");
+
+        harness.rl.PublishLWMotionReference(
+            makeMotionReference(setup.generation));
+        harness.core.runInferenceCycle(false);
+        require(
+            setup.model->forward_calls == 1
+                && setup.model->last_input.size() == 20,
+            "command-only inference did not use the matching reference");
+        std::vector<float> expected_command;
+        const auto reference = makeMotionReference(setup.generation);
+        expected_command.insert(
+            expected_command.end(),
+            reference.joint_pos.begin(),
+            reference.joint_pos.end());
+        expected_command.insert(
+            expected_command.end(),
+            reference.joint_vel.begin(),
+            reference.joint_vel.end());
+        requireVectorEqual(
+            setup.model->last_input,
+            expected_command,
+            "command-only observation");
+    }
+
+    {
+        Harness harness;
+        auto setup = prepareMotionInferenceHarness(
+            harness,
+            {"ang_vel"},
+            3);
+        harness.core.runInferenceCycle(false);
+        require(
+            setup.model->forward_calls == 1
+                && setup.model->last_input.size() == 3,
+            "non-motion inference unnecessarily required a reference");
+    }
 }
 
 LWInferenceTraceSnapshot runInferenceObservationScenario(
@@ -583,6 +778,58 @@ void testExactPolicyInferenceReplayParity()
     requireSafetyEqual(real, sim);
 }
 
+void testExactTransitionPolicyInferenceReplayParity()
+{
+    for (const std::string policy : {
+             "LW/robot_lab/leg_to_wheel",
+             "LW/robot_lab/wheel_to_leg"})
+    {
+        Harness real;
+        Harness sim;
+        for (Harness* harness : {&real, &sim})
+        {
+            harness->rl.SetPolicyRoot(POLICY_DIR);
+            harness->rl.ReadYaml("LW", "base.yaml");
+            harness->rl.PreloadModel(policy);
+            harness->rl.PreloadLWPolicyContext(policy);
+            MotionLoaderLW* player =
+                harness->rl.GetPreloadedLWMotionPlayer(policy);
+            require(player != nullptr, policy + " motion was not preloaded");
+            harness->rl.motion_loader_lw = player;
+            const std::uint64_t generation =
+                harness->rl.ActivateLWPolicy(
+                    policy, player->GetDuration());
+            harness->rl.PublishCurrentLWMotionReference(generation);
+            harness->cycle(0.0f);
+            harness->core.runInferenceCycle(false);
+        }
+
+        LWInferenceTraceSnapshot real_trace;
+        LWInferenceTraceSnapshot sim_trace;
+        require(
+            real.core.readInferenceTrace(real_trace)
+                && sim.core.readInferenceTrace(sim_trace),
+            policy + " did not publish an inference trace");
+        require(
+            real_trace.generation == sim_trace.generation
+                && real_trace.frame == sim_trace.frame,
+            policy + " inference identity differs");
+        requireVectorEqual(
+            real_trace.output_dof_pos,
+            sim_trace.output_dof_pos,
+            policy + " output q");
+        requireVectorEqual(
+            real_trace.output_dof_vel,
+            sim_trace.output_dof_vel,
+            policy + " output dq");
+        requireVectorEqual(
+            real_trace.output_dof_tau,
+            sim_trace.output_dof_tau,
+            policy + " output tau");
+        requireSafetyEqual(real, sim);
+    }
+}
+
 void testS1PreservesRecoveryInputAndZerosVelocity()
 {
     Harness real;
@@ -821,9 +1068,11 @@ int main()
     {
         testNominalReplayParity();
         testExactPolicyInferenceReplayParity();
+        testExactTransitionPolicyInferenceReplayParity();
         testEffectiveCommandKeepsGaitObservationCoherent();
         testTemporaryInhibitionPreservesPhaseClock();
         testInputIsConsumedOnceAndHeldOutputRemainsUsable();
+        testMotionReferenceRuntimeGating();
         testStalledControlInputTriggersS2Parity();
         testPolicyGenerationSwitchWaitsForMatchingInput();
         testPolicyGenerationSwitchBindsTypedRuntimeConfiguration();

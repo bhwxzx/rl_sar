@@ -420,9 +420,7 @@ public:
         const LWPolicyRuntimeConfiguration& policy_configuration,
         Observations<float>& policy_obs,
         std::vector<int>& policy_obs_dims,
-        const LWMotionReferenceSnapshot* motion_reference,
-        std::uint64_t policy_frame,
-        float motion_length) const;
+        const LWMotionReferenceSnapshot* motion_reference) const;
     virtual void GetState(RobotState<float> *state) = 0;
     virtual void SetCommand(const RobotCommand<float> *command) = 0;
     void StateController(

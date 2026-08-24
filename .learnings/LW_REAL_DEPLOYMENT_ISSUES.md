@@ -5098,7 +5098,7 @@ capacity and can reallocate in the inference thread.
 ## [LW-061] Make motion-reference validation and runtime gating semantically consistent
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-009, LW-012, LW-013, LW-054, LW-055
 
 ### Problem
@@ -5145,6 +5145,38 @@ runtime flag.
   inference cycle does not require an otherwise unused live snapshot.
 - Existing transition assets remain numerically equivalent, and configuration,
   runtime-parity, strict, and supported sanitizer tests pass.
+
+### Resolution
+
+- **Resolved**: 2026-08-24T13:25:06+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 按用户调整后的明确审批，删除当前四个正式策略均未使用的
+  `RoboMimic_Deploy/phase` 观测契约，保留含义不同的 `gait_phase`。motion
+  command 或 anchor orientation 任一出现时均设置现有
+  `needs_motion_reference`，以同一标志完成 motion asset 预加载和推理期 live
+  reference 门控；不再新增 phase-only asset 标志。需要 reference 的推理只接受
+  当前策略代际且所需 joint/anchor 载荷尺寸完整的快照，缺失、不完整或跨代时在
+  推进帧、历史和 ONNX 前返回；非 motion 策略不读取 reference channel。保持
+  正式 YAML、ONNX、CSV、FSM 转换时序、motion loader 数值规则和 S1-S4 行为
+  不变，未处理 LW-062 或后续问题。
+- **Changed Files**: `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp`、
+  `src/rl_sar/library/core/rl_sdk/rl_sdk.{hpp,cpp}`、
+  `src/rl_sar/library/core/safety/lw_runtime_core.hpp`、
+  `src/rl_sar/test/test_lw_configuration_validation.cpp`、
+  `src/rl_sar/test/test_lw_runtime_parity.cpp`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 定向构建配置校验、运行时一致性、motion reference rate、FSM
+  transition、`rl_real_LW` 和 `rl_sim_LW` 成功，4/4 定向 CTest 通过。新增配置
+  矩阵覆盖 command-only、anchor-only、combined、non-motion 及已删除 phase 的
+  明确拒绝；运行时回归覆盖缺失、不完整、跨代和正确同代 reference、非 motion
+  无 reference 推理，以及两个正式转换 ONNX 的 real/Sim2Sim 输出一致性。当前
+  Debug 完整 51/51 CTest 通过；全新 `LW_STRICT_WARNINGS=ON` 构建全部维护目标
+  并通过 51/51 CTest。全新 AddressSanitizer/UndefinedBehaviorSanitizer 构建中，
+  `lw_configuration_validation` 与 `lw_runtime_parity` 各连续 5 次通过且无报告。
+  定向 `cppcheck` 仅报告未修改的 `CSVInit(std::string)` 既有
+  `passedByValue` 提示，`git diff --check` 通过。未启动 ROS 节点、MuJoCo GUI、
+  串口、IMU、摇杆、真机或电机；用户未跟踪技能目录保持未修改。
+- **Remaining Follow-ups**: LW-062, LW-063, LW-064, LW-065, LW-066
 
 ---
 

@@ -265,10 +265,6 @@ std::size_t observationDimension(
     {
         return 6;
     }
-    if (observation == "RoboMimic_Deploy/phase")
-    {
-        return 1;
-    }
     fail(source, "unsupported observation '" + observation + "'");
 }
 
@@ -561,8 +557,7 @@ LWValidatedPolicyConfiguration ValidateLWPolicyConfiguration(
         }
         else if (observation == "whole_body_tracking/motion_command"
                  || observation
-                        == "whole_body_tracking/motion_anchor_ori_b"
-                 || observation == "RoboMimic_Deploy/phase")
+                        == "whole_body_tracking/motion_anchor_ori_b")
         {
             needs_motion = true;
         }
@@ -696,12 +691,7 @@ LWValidatedPolicyConfiguration ValidateLWPolicyConfiguration(
     {
         runtime.dof_vel_scale = policy_config["dof_vel_scale"].as<float>();
     }
-    runtime.needs_motion_reference =
-        std::find(
-            observations.begin(),
-            observations.end(),
-            "whole_body_tracking/motion_command")
-        != observations.end();
+    runtime.needs_motion_reference = needs_motion;
     if (needs_motion)
     {
         runtime.motion_file = policy_config["motion_file"].as<std::string>();

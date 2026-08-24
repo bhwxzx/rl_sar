@@ -321,14 +321,6 @@ std::vector<float> RL::ComputeObservation()
             }
             obs_list.push_back(anchor_ori);
         }
-        else if (observation == "RoboMimic_Deploy/phase")
-        {
-            float motion_time = this->episode_length_buf * this->params.Get<float>("dt") * this->params.Get<int>("decimation");
-            float count = motion_time;
-            float phase = count / this->motion_length;
-            std::vector<float> phase_vec = {phase};
-            obs_list.push_back(phase_vec);
-        }
     }
 
     this->obs_dims.clear();
@@ -350,9 +342,7 @@ std::vector<float> RL::ComputeLWObservation(
     const LWPolicyRuntimeConfiguration& policy_configuration,
     Observations<float>& policy_obs,
     std::vector<int>& policy_obs_dims,
-    const LWMotionReferenceSnapshot* motion_reference,
-    std::uint64_t policy_frame,
-    float motion_length) const
+    const LWMotionReferenceSnapshot* motion_reference) const
 {
     std::vector<std::vector<float>> obs_list;
     for (const std::string& observation :
@@ -459,17 +449,6 @@ std::vector<float> RL::ComputeLWObservation(
                     QuaternionToRotationMatrix(relative_quat));
             }
             obs_list.push_back(std::move(anchor_orientation));
-        }
-        else if (observation == "RoboMimic_Deploy/phase")
-        {
-            const float policy_dt =
-                policy_configuration.period_seconds;
-            const float phase =
-                motion_length > 0.0f
-                ? static_cast<float>(policy_frame) * policy_dt
-                    / motion_length
-                : 0.0f;
-            obs_list.push_back({phase});
         }
     }
 

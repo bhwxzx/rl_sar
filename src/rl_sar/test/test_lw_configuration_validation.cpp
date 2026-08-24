@@ -231,6 +231,67 @@ void testSparseHistoryUsesSelectedFrameCountForModelInput()
         "one selected sparse frame did not produce one observation frame");
 }
 
+void testMotionObservationContracts()
+{
+    const fs::path policy_root(POLICY_DIR);
+    const YAML::Node base =
+        loadConfig(policy_root / "LW/base.yaml", "LW");
+    const fs::path config_path =
+        policy_root / "LW/robot_lab/leg_to_wheel/config.yaml";
+    const YAML::Node original = loadConfig(
+        config_path, "LW/robot_lab/leg_to_wheel");
+
+    const auto require_contract =
+        [&](const std::vector<std::string>& observations,
+            int expected_dimension,
+            bool expected_motion_reference,
+            const std::string& source)
+        {
+            YAML::Node candidate = YAML::Clone(original);
+            candidate["observations"] = observations;
+            candidate["num_observations"] = expected_dimension;
+            const auto validated = ValidateLWPolicyConfiguration(
+                base, candidate, source);
+            require(
+                validated.dimensions.observation
+                    == static_cast<std::size_t>(expected_dimension),
+                source + " observation dimension differs");
+            require(
+                validated.runtime.needs_motion_reference
+                    == expected_motion_reference,
+                source + " motion-reference contract differs");
+        };
+
+    require_contract(
+        {"whole_body_tracking/motion_command"},
+        20,
+        true,
+        "motion-command-only");
+    require_contract(
+        {"whole_body_tracking/motion_anchor_ori_b"},
+        6,
+        true,
+        "motion-anchor-only");
+    require_contract(
+        {"whole_body_tracking/motion_command",
+         "whole_body_tracking/motion_anchor_ori_b"},
+        26,
+        true,
+        "motion-command-and-anchor");
+    require_contract({"ang_vel"}, 3, false, "non-motion");
+
+    YAML::Node removed_phase = YAML::Clone(original);
+    removed_phase["observations"] =
+        std::vector<std::string>{"RoboMimic_Deploy/phase"};
+    removed_phase["num_observations"] = 1;
+    requireFailure(
+        [&]() {
+            ValidateLWPolicyConfiguration(
+                base, removed_phase, "removed-motion-phase");
+        },
+        "unsupported observation 'RoboMimic_Deploy/phase'");
+}
+
 void testInvalidBaseConfigurationIsRejected()
 {
     const fs::path policy_root(POLICY_DIR);
@@ -426,6 +487,7 @@ int main()
     {
         testCurrentLWConfigurationsAndModels();
         testSparseHistoryUsesSelectedFrameCountForModelInput();
+        testMotionObservationContracts();
         testInvalidBaseConfigurationIsRejected();
         testInvalidPolicyConfigurationIsRejected();
         testModelDimensionMismatchIsRejected();
