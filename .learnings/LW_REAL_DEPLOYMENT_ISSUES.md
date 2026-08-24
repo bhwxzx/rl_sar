@@ -214,7 +214,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 60 | LW-060 | P2 / medium | resolved | Use the history-frame domain consistently in ObservationBuffer |
 | 61 | LW-061 | P2 / medium | pending | Make motion-reference validation and runtime gating semantically consistent |
 | 62 | LW-062 | P2 / low | resolved | Reuse contiguous buffers throughout the inference hot path |
-| 63 | LW-063 | P2 / low | pending | Share the ONNX Runtime environment without weakening model isolation |
+| 63 | LW-063 | P2 / low | resolved | Share the ONNX Runtime environment without weakening model isolation |
 | 64 | LW-064 | P2 / low | pending | Remove or correctly implement the misleading FDILink CRC32 API |
 | 65 | LW-065 | P2 / low | pending | Restore a clean FDILink lint and package-metadata baseline |
 | 66 | LW-066 | P2 / low | pending | Make dependency discovery ordered and build settings target-scoped |
@@ -5274,7 +5274,7 @@ regression covers the maintained control cycle, not this inference pipeline.
 ## [LW-063] Share the ONNX Runtime environment without weakening model isolation
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-027, LW-050, LW-058
 
 ### Problem
@@ -5308,6 +5308,35 @@ buffers still require independent ownership.
   outputs remain unchanged.
 - A focused regression verifies environment lifetime and multi-model teardown;
   inference, strict, and supported sanitizer tests pass.
+
+### Resolution
+
+- **Resolved**: 2026-08-24T14:30:44+08:00
+- **Commit**: 本提交
+- **Approved Scope**: `ONNXModel` 现在通过 C++17 线程安全的函数局部静态
+  `shared_ptr` 获取进程级、只读 `Ort::Env`；每个模型保留一份共享所有权引用，
+  且环境成员声明在 session 之前，确保每个独立 session 先析构、环境引用后
+  释放，即使跨静态析构顺序也不会让存活 session 悬空。`Ort::Session`、局部
+  `SessionOptions`、节点名称、张量元数据、尺寸缓存和推理缓冲仍由各模型独立
+  持有。未改变模型工厂、单输入输出/静态 batch 契约、线程数、运行时 provenance
+  或数值路径，未处理 LW-064 或后续问题。
+- **Changed Files**: `src/rl_sar/library/core/inference_runtime/inference_runtime.{hpp,cpp}`、
+  `src/rl_sar/test/test_inference_runtime.cpp`、`src/rl_sar/CMakeLists.txt`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 新增回归在共享环境首次初始化前同时创建四个不同维度的
+  synthetic ONNX session，并连续 8 轮并发加载、推理、交错销毁部分 session，
+  再验证剩余 session 的元数据和数值未交叉污染。四个正式策略的既有配置、
+  模型契约、预热和固定输出回归保持通过。相对 `e620d0b` 的 detached 基线，
+  同机交替 31 组四策略验证进程样本中，耗时中位数从 `63.526 ms` 降至
+  `60.623 ms`（约 `-4.6%`），峰值 RSS 中位数从 `28,876 KiB` 降至
+  `28,520 KiB`（`-356 KiB`）。当前 Debug 完整 51/51 CTest 通过；全新
+  `LW_STRICT_WARNINGS=ON` 构建全部维护目标并通过 51/51 CTest。全新
+  ASan+UBSan 构建中，configuration 与 inference lifecycle 两项各连续 5 次、
+  共 10 次通过且无报告。定向 `cppcheck` 在仅抑制供应商
+  `onnxruntime_float16.h` 的端序预处理误报后无项目告警，`git diff --check`
+  通过。未启动 ROS 节点、MuJoCo GUI、串口、IMU、摇杆、真机或电机；用户未
+  跟踪技能目录保持未修改。
+- **Remaining Follow-ups**: LW-064, LW-065, LW-066
 
 ---
 

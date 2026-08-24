@@ -866,7 +866,7 @@ if(BUILD_TESTING)
         )
         target_link_libraries(
             test_inference_runtime
-            PRIVATE inference_runtime
+            PRIVATE inference_runtime Threads::Threads
         )
         add_test(
             NAME inference_runtime_contract

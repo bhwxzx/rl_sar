@@ -46,6 +46,15 @@ std::size_t checkedElementCount(
 }
 
 #ifdef USE_ONNX
+std::shared_ptr<const Ort::Env> sharedOnnxEnvironment()
+{
+    static const std::shared_ptr<const Ort::Env> environment =
+        std::make_shared<Ort::Env>(
+            ORT_LOGGING_LEVEL_WARNING,
+            "rl_sar");
+    return environment;
+}
+
 void requireStaticSingleSampleTensor(
     const TensorMetadata& tensor,
     const std::string& role)
@@ -121,22 +130,13 @@ std::vector<float> Model::forward(
 
 ONNXModel::ONNXModel()
 #ifdef USE_ONNX
-    : memory_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault))
+    : environment_(sharedOnnxEnvironment()),
+      memory_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault))
 #endif
 {
-#ifdef USE_ONNX
-    // Initialize ONNX Runtime environment
-    env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "ONNXModel");
-#endif
 }
 
-ONNXModel::~ONNXModel()
-{
-#ifdef USE_ONNX
-    session_.reset();
-    env_.reset();
-#endif
-}
+ONNXModel::~ONNXModel() = default;
 
 bool ONNXModel::load(const std::string& model_path)
 {
@@ -150,7 +150,10 @@ bool ONNXModel::load(const std::string& model_path)
         session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
 
         // Create inference session
-        session_ = std::make_unique<Ort::Session>(*env_, model_path.c_str(), session_options);
+        session_ = std::make_unique<Ort::Session>(
+            *environment_,
+            model_path.c_str(),
+            session_options);
 
         // Setup input/output information
         setup_input_output_info();

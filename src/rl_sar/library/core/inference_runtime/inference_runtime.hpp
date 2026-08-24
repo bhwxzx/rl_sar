@@ -115,8 +115,10 @@ private:
     std::string model_path_;            ///< Model file path
 
 #ifdef USE_ONNX
-    std::unique_ptr<Ort::Session> session_;                 ///< ONNX inference session
-    std::unique_ptr<Ort::Env> env_;                         ///< ONNX runtime environment
+    // Keep the shared environment reference ahead of the session so member
+    // destruction releases every session before its environment reference.
+    const std::shared_ptr<const Ort::Env> environment_;     ///< Process-wide ONNX environment
+    std::unique_ptr<Ort::Session> session_;                 ///< Model-isolated ONNX session
     Ort::MemoryInfo memory_info_;                           ///< Memory information
     std::vector<std::string> input_node_names_;             ///< Input node names
     std::vector<std::string> output_node_names_;            ///< Output node names

@@ -1,13 +1,17 @@
 #include "inference_runtime.hpp"
 
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -287,6 +291,132 @@ fs::path writeModel(
     return path;
 }
 
+void requireIdentityInference(
+    InferenceRuntime::Model& model,
+    std::size_t element_count,
+    float seed)
+{
+    std::vector<float> input(element_count);
+    for (std::size_t index = 0; index < input.size(); ++index)
+    {
+        input[index] = seed + static_cast<float>(index) * 0.25F;
+    }
+    std::vector<float> output(element_count, 0.0F);
+    const InferenceRuntime::TensorView input_view = {
+        input.data(), input.size()};
+    model.forwardInto(
+        &input_view,
+        1,
+        {output.data(), output.size()});
+    require(output == input, "concurrent identity output differs");
+}
+
+void testConcurrentModelLifecycle(const fs::path& directory)
+{
+    constexpr std::size_t model_count = 4U;
+    std::array<fs::path, model_count> model_paths;
+    for (std::size_t index = 0; index < model_count; ++index)
+    {
+        model_paths[index] = writeModel(
+            directory,
+            "concurrent_" + std::to_string(index) + ".onnx",
+            makeIdentityModel(
+                {fixed(1), fixed(static_cast<std::int64_t>(index + 2U))}));
+    }
+
+    for (std::size_t round = 0; round < 8U; ++round)
+    {
+        std::array<std::unique_ptr<InferenceRuntime::Model>, model_count>
+            models;
+        std::array<std::exception_ptr, model_count> failures;
+        std::array<std::thread, model_count> workers;
+        std::atomic<bool> start{false};
+
+        for (std::size_t index = 0; index < model_count; ++index)
+        {
+            workers[index] = std::thread([&, index]() {
+                while (!start.load(std::memory_order_acquire))
+                {
+                    std::this_thread::yield();
+                }
+                try
+                {
+                    auto model = InferenceRuntime::ModelFactory::load_model(
+                        model_paths[index].string());
+                    require(model != nullptr, "concurrent model load failed");
+                    require(
+                        model->input_metadata().front().shape
+                            == std::vector<std::int64_t>(
+                                {1, static_cast<std::int64_t>(index + 2U)}),
+                        "concurrent model metadata crossed sessions");
+                    requireIdentityInference(
+                        *model,
+                        index + 2U,
+                        static_cast<float>(round * model_count + index));
+                    models[index] = std::move(model);
+                }
+                catch (...)
+                {
+                    failures[index] = std::current_exception();
+                }
+            });
+        }
+
+        start.store(true, std::memory_order_release);
+        for (std::thread& worker : workers)
+        {
+            worker.join();
+        }
+        for (const std::exception_ptr& failure : failures)
+        {
+            if (failure)
+            {
+                std::rethrow_exception(failure);
+            }
+        }
+
+        std::exception_ptr first_inference_failure;
+        std::exception_ptr second_inference_failure;
+        std::thread destroy_first([&]() { models[1].reset(); });
+        std::thread infer_first([&]() {
+            try
+            {
+                requireIdentityInference(*models[0], 2U, 10.0F);
+            }
+            catch (...)
+            {
+                first_inference_failure = std::current_exception();
+            }
+        });
+        std::thread destroy_second([&]() { models[3].reset(); });
+        std::thread infer_second([&]() {
+            try
+            {
+                requireIdentityInference(*models[2], 4U, 20.0F);
+            }
+            catch (...)
+            {
+                second_inference_failure = std::current_exception();
+            }
+        });
+        destroy_first.join();
+        infer_first.join();
+        destroy_second.join();
+        infer_second.join();
+        if (first_inference_failure)
+        {
+            std::rethrow_exception(first_inference_failure);
+        }
+        if (second_inference_failure)
+        {
+            std::rethrow_exception(second_inference_failure);
+        }
+
+        requireIdentityInference(*models[0], 2U, 30.0F);
+        requireIdentityInference(*models[2], 4U, 40.0F);
+    }
+}
+
 void testStaticModelAndInputValidation(const fs::path& directory)
 {
     const fs::path model_path = writeModel(
@@ -419,6 +549,7 @@ int main()
     try
     {
         TemporaryDirectory directory;
+        testConcurrentModelLifecycle(directory.path());
         testStaticModelAndInputValidation(directory.path());
         testUnsupportedModelsFailDuringLoad(directory.path());
         testFailedReloadClearsState(directory.path());
