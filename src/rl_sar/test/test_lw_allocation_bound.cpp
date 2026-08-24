@@ -1,6 +1,7 @@
 #include "fsm_LW.hpp"
 #include "lw_runtime_core.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
@@ -86,6 +87,45 @@ public:
 
     RobotState<float> source_state;
     std::uint64_t commands_delivered = 0;
+};
+
+class AllocationFreeModel : public InferenceRuntime::Model
+{
+public:
+    bool load(const std::string&) override
+    {
+        return true;
+    }
+
+    bool is_loaded() const override
+    {
+        return true;
+    }
+
+    void forwardInto(
+        const InferenceRuntime::TensorView* inputs,
+        std::size_t input_count,
+        InferenceRuntime::MutableTensorView output) override
+    {
+        if (inputs == nullptr || input_count != 1
+            || inputs[0].size != expected_input_size
+            || output.size != kNumDofs)
+        {
+            throw std::logic_error("allocation model contract mismatch");
+        }
+        last_input_size = inputs[0].size;
+        ++calls;
+        std::fill_n(output.data, output.size, 0.0F);
+    }
+
+    std::string get_model_type() const override
+    {
+        return "test";
+    }
+
+    std::size_t expected_input_size = 0;
+    std::size_t last_input_size = 0;
+    std::size_t calls = 0;
 };
 
 class AllocationTestState : public RLFSMState
@@ -329,6 +369,112 @@ void testWarmedTransitionRunsDoNotAllocate()
         rl,
         "LW/robot_lab/wheel_to_leg");
 }
+
+void publishMotionReference(
+    AllocationTestRL& rl,
+    std::uint64_t generation)
+{
+    LWMotionReferenceSnapshot reference;
+    reference.generation = generation;
+    reference.joint_pos.assign(kNumDofs, 0.0F);
+    reference.joint_vel.assign(kNumDofs, 0.0F);
+    reference.anchor_quat = {1.0F, 0.0F, 0.0F, 0.0F};
+    reference.init_quat = {1.0F, 0.0F, 0.0F, 0.0F};
+    rl.PublishLWMotionReference(std::move(reference));
+}
+
+void testWarmedInferencePipelineDoesNotAllocate()
+{
+    AllocationTestRL rl;
+    const std::filesystem::path policy_root =
+        std::filesystem::canonical(POLICY_DIR);
+    rl.SetPolicyRoot(policy_root);
+    rl.robot_name = "LW";
+    rl.ReadYaml("LW", "base.yaml");
+    rl.SetLWBaseRuntimeConfiguration(
+        ValidateLWBaseConfiguration(
+            rl.params.config_node,
+            (policy_root / "LW/base.yaml").string()));
+    initializeValidState(rl);
+    const auto state = std::make_shared<AllocationTestState>(rl);
+    rl.fsm.AddState(state);
+    rl.fsm.SetInitialState("AllocationTestState");
+
+    struct PolicyCase
+    {
+        const char* path;
+        std::shared_ptr<AllocationFreeModel> model;
+        bool needs_motion = false;
+    };
+    std::vector<PolicyCase> policies;
+    for (const char* path : {
+             "LW/robot_lab/leg_loco",
+             "LW/robot_lab/wheel_loco",
+             "LW/robot_lab/leg_to_wheel",
+             "LW/robot_lab/wheel_to_leg"})
+    {
+        const auto config_path = policy_root / path / "config.yaml";
+        const YAML::Node policy_config =
+            YAML::LoadFile(config_path.string())[path];
+        auto validated = ValidateLWPolicyConfiguration(
+            rl.params.config_node,
+            policy_config,
+            config_path.string());
+        auto model = std::make_shared<AllocationFreeModel>();
+        model->expected_input_size = validated.dimensions.model_input;
+        const bool needs_motion = validated.runtime.needs_motion_reference;
+        rl.preloaded_lw_policy_configs_[path] = std::move(validated);
+        rl.preloaded_models_[path] = model;
+        rl.PreloadLWPolicyContext(path);
+        policies.push_back({path, std::move(model), needs_motion});
+    }
+
+    LWRuntimeCore core;
+    core.bind(rl, {});
+    core.publishInitialPolicyInput();
+    for (const PolicyCase& policy : policies)
+    {
+        const std::uint64_t generation = rl.ActivateLWPolicy(policy.path);
+        const LWPolicyActivation* activation = rl.LoadLWPolicyActivation();
+        require(
+            activation && activation->definition,
+            "allocation policy activation is missing");
+        rl.source_state.motor_state.q =
+            activation->definition->runtime.default_dof_pos;
+        rl.robot_state = rl.source_state;
+        if (policy.needs_motion)
+        {
+            publishMotionReference(rl, generation);
+        }
+        core.runControlCycle({});
+        core.runInferenceCycle(false);
+        const std::size_t warmed_calls = policy.model->calls;
+        require(warmed_calls == 1, "inference warmup did not run");
+
+        allocation_count.store(0, std::memory_order_relaxed);
+        count_allocations.store(true, std::memory_order_release);
+        for (std::size_t iteration = 0; iteration < 100; ++iteration)
+        {
+            core.runControlCycle({});
+            core.runInferenceCycle(false);
+        }
+        count_allocations.store(false, std::memory_order_release);
+
+        require(
+            allocation_count.load(std::memory_order_relaxed) == 0,
+            std::string(policy.path)
+                + " warmed inference pipeline allocated "
+                + std::to_string(
+                    allocation_count.load(std::memory_order_relaxed))
+                + " times");
+        require(
+            policy.model->calls == warmed_calls + 100
+                && policy.model->last_input_size
+                    == policy.model->expected_input_size,
+            std::string(policy.path)
+                + " inference input contract differs after switching");
+    }
+}
 } // namespace
 
 int main()
@@ -338,6 +484,7 @@ int main()
         testSteadyStateConfigurationAndStateTransportDoNotAllocate();
         testWarmedCompleteControlCycleDoesNotAllocate();
         testWarmedTransitionRunsDoNotAllocate();
+        testWarmedInferencePipelineDoesNotAllocate();
     }
     catch (const std::exception& exception)
     {

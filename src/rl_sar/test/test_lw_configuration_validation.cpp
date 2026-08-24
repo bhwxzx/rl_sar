@@ -1,6 +1,7 @@
 #include "lw_configuration_validation.hpp"
 #include "rl_sdk.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <functional>
@@ -79,11 +80,15 @@ public:
         return true;
     }
 
-    std::vector<float> forward(
-        const std::vector<std::vector<float>>&) override
+    void forwardInto(
+        const InferenceRuntime::TensorView*,
+        std::size_t,
+        InferenceRuntime::MutableTensorView output) override
     {
-        return std::vector<float>(
-            static_cast<std::size_t>(output_features_), 0.0f);
+        require(
+            output.size == static_cast<std::size_t>(output_features_),
+            "fake model output size differs");
+        std::fill_n(output.data, output.size, 0.0f);
     }
 
     std::string get_model_type() const override
@@ -126,6 +131,146 @@ public:
     }
 };
 
+std::vector<float> referenceObservation(
+    const LWPolicyRuntimeConfiguration& configuration,
+    const Observations<float>& observations,
+    const LWMotionReferenceSnapshot* motion_reference)
+{
+    std::vector<std::vector<float>> terms;
+    for (const std::string& observation : configuration.observations)
+    {
+        if (observation == "ang_vel")
+        {
+            terms.push_back(observations.ang_vel * configuration.ang_vel_scale);
+        }
+        else if (observation == "gravity_vec")
+        {
+            terms.push_back(QuatRotateInverse(
+                observations.base_quat, observations.gravity_vec));
+        }
+        else if (observation == "commands")
+        {
+            terms.push_back(observations.commands * configuration.commands_scale);
+        }
+        else if (observation == "dof_pos")
+        {
+            auto relative = observations.dof_pos - configuration.default_dof_pos;
+            for (const int wheel : configuration.wheel_indices)
+            {
+                relative[wheel] = 0.0F;
+            }
+            terms.push_back(relative * configuration.dof_pos_scale);
+        }
+        else if (observation == "dof_vel")
+        {
+            terms.push_back(observations.dof_vel * configuration.dof_vel_scale);
+        }
+        else if (observation == "actions")
+        {
+            terms.push_back(observations.actions);
+        }
+        else if (observation == "gait_phase")
+        {
+            terms.push_back(observations.gait_phase);
+        }
+        else if (observation == "whole_body_tracking/motion_command")
+        {
+            std::vector<float> command;
+            for (const int source : configuration.motion_joint_mapping)
+            {
+                command.push_back(motion_reference->joint_pos[source]);
+            }
+            for (const int source : configuration.motion_joint_mapping)
+            {
+                command.push_back(motion_reference->joint_vel[source]);
+            }
+            terms.push_back(std::move(command));
+        }
+        else if (observation
+                 == "whole_body_tracking/motion_anchor_ori_b")
+        {
+            const auto robot = MotionLoaderLW::ComputeTorsoQuat(
+                observations.base_quat);
+            const auto anchor = QuaternionMultiply(
+                motion_reference->init_quat,
+                motion_reference->anchor_quat);
+            const auto relative = QuaternionMultiply(
+                QuaternionConjugate(robot), anchor);
+            terms.push_back(MatrixFirstTwoColumns(
+                QuaternionToRotationMatrix(relative)));
+        }
+    }
+    std::vector<float> flattened;
+    for (const auto& term : terms)
+    {
+        flattened.insert(flattened.end(), term.begin(), term.end());
+    }
+    return clamp(flattened, -configuration.clip_obs, configuration.clip_obs);
+}
+
+void testContiguousObservationAssemblyMatchesPreviousOrdering()
+{
+    const fs::path policy_root(POLICY_DIR);
+    const YAML::Node base = loadConfig(policy_root / "LW/base.yaml", "LW");
+    TestRL runtime;
+    Observations<float> observations;
+    observations.ang_vel = {0.2F, -0.3F, 0.4F};
+    observations.gravity_vec = {0.0F, 0.0F, -1.0F};
+    observations.commands = {0.5F, -0.25F, 0.75F};
+    observations.base_quat = {0.91F, 0.12F, -0.18F, 0.34F};
+    observations.dof_pos.resize(10);
+    observations.dof_vel.resize(10);
+    observations.actions.resize(10);
+    for (std::size_t index = 0; index < 10; ++index)
+    {
+        observations.dof_pos[index] = 0.07F * static_cast<float>(index);
+        observations.dof_vel[index] = -0.03F * static_cast<float>(index);
+        observations.actions[index] = 0.02F * static_cast<float>(index + 1);
+    }
+    observations.gait_phase = {0.6F, -0.8F};
+    LWMotionReferenceSnapshot motion;
+    motion.joint_pos.resize(10);
+    motion.joint_vel.resize(10);
+    for (std::size_t index = 0; index < 10; ++index)
+    {
+        motion.joint_pos[index] = 0.11F * static_cast<float>(index + 1);
+        motion.joint_vel[index] = -0.04F * static_cast<float>(index + 1);
+    }
+    motion.anchor_quat = {0.96F, 0.08F, -0.14F, 0.21F};
+    motion.init_quat = {0.98F, -0.05F, 0.09F, 0.16F};
+
+    for (const char* path : {
+             "LW/robot_lab/leg_loco",
+             "LW/robot_lab/wheel_loco",
+             "LW/robot_lab/leg_to_wheel",
+             "LW/robot_lab/wheel_to_leg"})
+    {
+        const fs::path config_path = policy_root / path / "config.yaml";
+        const auto validated = ValidateLWPolicyConfiguration(
+            base,
+            loadConfig(config_path, path),
+            config_path.string());
+        const auto* reference = validated.runtime.needs_motion_reference
+            ? &motion
+            : nullptr;
+        const auto expected = referenceObservation(
+            validated.runtime, observations, reference);
+        std::vector<float> actual(validated.dimensions.observation, 0.0F);
+        const float* const data = actual.data();
+        runtime.ComputeLWObservationInto(
+            validated.runtime, observations, reference, actual);
+        require(actual.data() == data, std::string(path) + " replaced output");
+        require(actual.size() == expected.size(), std::string(path) + " size differs");
+        for (std::size_t index = 0; index < actual.size(); ++index)
+        {
+            require(
+                std::fabs(actual[index] - expected[index]) <= 1.0e-6F,
+                std::string(path) + " observation differs at index "
+                    + std::to_string(index));
+        }
+    }
+}
+
 void testCurrentLWConfigurationsAndModels()
 {
     const fs::path policy_root(POLICY_DIR);
@@ -153,12 +298,29 @@ void testCurrentLWConfigurationsAndModels()
         std::string relative_path;
         std::size_t observation;
         std::size_t input;
+        std::vector<float> output;
     };
     const std::vector<ExpectedPolicy> policies = {
-        {"LW/robot_lab/leg_loco", 41, 410},
-        {"LW/robot_lab/wheel_loco", 39, 195},
-        {"LW/robot_lab/leg_to_wheel", 59, 59},
-        {"LW/robot_lab/wheel_to_leg", 59, 59},
+        {"LW/robot_lab/leg_loco", 41, 410,
+         {0x1.8b4598p-1F, 0x1.f2ce2cp-1F, 0x1.f70562p+0F,
+          0x1.e1fd02p+1F, 0x1.719a36p+0F, 0x1.a9b186p+0F,
+          0x1.56c2cap+1F, -0x1.f2ad64p+0F, 0x1.d5ac8p-1F,
+          0x1.28096cp-1F}},
+        {"LW/robot_lab/wheel_loco", 39, 195,
+         {0x1.18241ap-1F, -0x1.aa31ep-1F, -0x1.a82328p-2F,
+          0x1.6c19f6p+1F, 0x1.ee7c34p-4F, -0x1.249d04p-1F,
+          -0x1.5bb052p-2F, -0x1.0cf112p-3F, -0x1.0b6872p+2F,
+          0x1.42712ap+2F}},
+        {"LW/robot_lab/leg_to_wheel", 59, 59,
+         {-0x1.585e7p-2F, -0x1.3f41a4p+0F, -0x1.49eb6cp+0F,
+          -0x1.a6f982p-1F, 0x1.8bfbeap+0F, -0x1.60f2bp+1F,
+          -0x1.8798c4p-2F, 0x1.80d9bp-2F, -0x1.2d3aacp+1F,
+          0x1.1eea08p+0F}},
+        {"LW/robot_lab/wheel_to_leg", 59, 59,
+         {-0x1.292a8cp+1F, 0x1.882dbp+0F, 0x1.7a6574p-2F,
+          0x1.f2e5bep-2F, 0x1.b518acp-1F, -0x1.e03cacp+0F,
+          -0x1.f3abfap-1F, 0x1.2a31f2p-2F, 0x1.dde794p+2F,
+          -0x1.4bd34ap+2F}},
     };
 
     for (const auto& policy : policies)
@@ -189,6 +351,13 @@ void testCurrentLWConfigurationsAndModels()
                 == policy_config["observations"].size(),
             policy.relative_path + " observation list was not retained");
         require(
+            validated.runtime.observation_layout.size()
+                == validated.runtime.observations.size()
+                && validated.runtime.observation_layout.back().offset
+                        + validated.runtime.observation_layout.back().size
+                    == policy.observation,
+            policy.relative_path + " observation layout differs");
+        require(
             validated.runtime.wheel_mask.size() == 10,
             policy.relative_path + " wheel mask was not decoded");
         const bool expected_motion =
@@ -204,6 +373,30 @@ void testCurrentLWConfigurationsAndModels()
         require(model != nullptr, "failed to load " + model_path.string());
         ValidateLWModelContract(
             *model, validated.dimensions, model_path.string(), 1);
+        std::vector<float> input(policy.input);
+        for (std::size_t index = 0; index < input.size(); ++index)
+        {
+            input[index] = static_cast<float>(
+                static_cast<int>(index % 23) - 11) * 0.03125F;
+        }
+        std::vector<float> output(policy.output.size(), 0.0F);
+        const float* const output_data = output.data();
+        const InferenceRuntime::TensorView input_view = {
+            input.data(), input.size()};
+        model->forwardInto(
+            &input_view,
+            1,
+            {output.data(), output.size()});
+        require(
+            output.data() == output_data,
+            policy.relative_path + " replaced caller-owned output storage");
+        for (std::size_t index = 0; index < output.size(); ++index)
+        {
+            require(
+                std::fabs(output[index] - policy.output[index]) <= 1.0e-6F,
+                policy.relative_path + " output differs at index "
+                    + std::to_string(index));
+        }
     }
 }
 
@@ -486,6 +679,7 @@ int main()
     try
     {
         testCurrentLWConfigurationsAndModels();
+        testContiguousObservationAssemblyMatchesPreviousOrdering();
         testSparseHistoryUsesSelectedFrameCountForModelInput();
         testMotionObservationContracts();
         testInvalidBaseConfigurationIsRejected();

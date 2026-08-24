@@ -213,7 +213,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 59 | LW-059 | P1 / high | resolved | Stop Sim2Sim workers on every partial-construction failure path |
 | 60 | LW-060 | P2 / medium | resolved | Use the history-frame domain consistently in ObservationBuffer |
 | 61 | LW-061 | P2 / medium | pending | Make motion-reference validation and runtime gating semantically consistent |
-| 62 | LW-062 | P2 / low | pending | Reuse contiguous buffers throughout the inference hot path |
+| 62 | LW-062 | P2 / low | resolved | Reuse contiguous buffers throughout the inference hot path |
 | 63 | LW-063 | P2 / low | pending | Share the ONNX Runtime environment without weakening model isolation |
 | 64 | LW-064 | P2 / low | pending | Remove or correctly implement the misleading FDILink CRC32 API |
 | 65 | LW-065 | P2 / low | pending | Restore a clean FDILink lint and package-metadata baseline |
@@ -5183,7 +5183,7 @@ runtime flag.
 ## [LW-062] Reuse contiguous buffers throughout the inference hot path
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-050, LW-056, LW-060
 
 ### Problem
@@ -5225,6 +5225,49 @@ regression covers the maintained control cycle, not this inference pipeline.
 - Policy switching safely resizes retained buffers before their first use.
 - Allocation, inference-contract, runtime-parity, strict, and supported
   sanitizer tests plus `git diff --check` pass.
+
+### Resolution
+
+- **Resolved**: 2026-08-24T14:03:14+08:00
+- **Commit**: 本提交
+- **Approved Scope**: 配置验证阶段缓存类型化观测项、偏移和已验证模型维度；
+  策略切换边界据此一次性调整平坦观测、历史输入、动作、策略输出与 trace
+  发布缓冲区。观测装配改为直接写入连续缓冲区，栈上固定尺寸四元数中间量保持
+  原公式与顺序；历史缓冲改为连续环形存储并原地展开，保留 `time`、`term`、
+  稀疏索引和多环境语义。模型主接口以非拥有 tensor view 写入调用方输出，当前
+  ONNX 单输入契约仍显式校验 `input_count=1`，输入/输出 tensor 直接绑定预分配
+  存储；旧 value-returning `forward()` 仅作为非热路径兼容包装。动作裁剪、轮腿
+  输出、策略输出传输和 inference trace 发布均复用保留容量。未共享或调整
+  `Ort::Env`，未处理 LW-063 或后续问题；ONNX Runtime 内部不透明分配不计作
+  项目侧零分配结论。
+- **Changed Files**: `src/rl_sar/library/core/inference_runtime/inference_runtime.{hpp,cpp}`、
+  `src/rl_sar/library/core/observation_buffer/observation_buffer.{hpp,cpp}`、
+  `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.{hpp,cpp}`、
+  `src/rl_sar/library/core/rl_sdk/rl_sdk.{hpp,cpp}`、
+  `src/rl_sar/library/core/safety/lw_runtime_core.hpp`、
+  `src/rl_sar/test/test_inference_runtime.cpp`、
+  `src/rl_sar/test/test_lw_allocation_bound.cpp`、
+  `src/rl_sar/test/test_lw_configuration_validation.cpp`、
+  `src/rl_sar/test/test_lw_runtime_parity.cpp`、
+  `src/rl_sar/test/test_observation_buffer.cpp`、
+  `.learnings/LW_REAL_DEPLOYMENT_ISSUES.md`。
+- **Verification**: 四个正式 ONNX 模型以修改前 `161feb0` 的确定输入输出保存
+  十六进制基线，修改后 40 个输出均在 `1e-6` 容差内一致；四套配置的 39/41/59
+  维观测顺序和数值与旧装配算法一致，历史输入维度分别保持 195/410/59，策略
+  连续切换正常。无分配假模型覆盖预热后的控制输入、观测、历史、模型调用、动作
+  后处理、策略输出和 trace 发布，四策略各 100 个完整周期均为 0 次项目侧动态
+  分配。旧/新 host-only profiler 各采集每策略 101 个样本，p50 从
+  `232.558/274.076/200.850/204.401 us` 降至
+  `150.212/206.094/160.534/200.000 us`；该短时同机数据仅作观测证据，不设硬
+  阈值。当前 Debug 完整 51/51 CTest 通过；全新 `LW_STRICT_WARNINGS=ON` 构建
+  全部维护目标并通过 51/51 CTest。全新 ASan+UBSan 构建中，allocation、
+  inference-contract、runtime-parity、configuration、observation-buffer 和
+  policy-output-transport 六项连续 5 轮、共 30 次通过且无报告。定向 `cppcheck`
+  仅报告明确留给 LW-063 的既有 `Ort::Env` 初始化提示和未修改的
+  `CSVInit(std::string)` `passedByValue` 提示；`git diff --check` 通过。未启动
+  ROS 节点、MuJoCo GUI、串口、IMU、摇杆、真机或电机；用户未跟踪技能目录保持
+  未修改。
+- **Remaining Follow-ups**: LW-063, LW-064, LW-065, LW-066
 
 ---
 

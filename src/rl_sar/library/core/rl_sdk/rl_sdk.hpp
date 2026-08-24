@@ -195,6 +195,7 @@ struct LWPolicyDefinition
     std::string path;
     YamlParams params;
     LWPolicyRuntimeConfiguration runtime;
+    LWPolicyDimensions dimensions;
     std::shared_ptr<InferenceRuntime::Model> model;
     MotionLoaderLW::PreparedMotionPtr prepared_motion;
 };
@@ -307,7 +308,7 @@ class LWPolicyOutputTransport
 public:
     void configure(size_t num_dofs);
     bool publish(
-        LWPolicyOutputFrame output,
+        const LWPolicyOutputFrame& output,
         std::uint64_t active_generation,
         size_t expected_dofs);
     const LWPolicyOutputFrame* load() noexcept;
@@ -319,6 +320,7 @@ private:
     std::uint64_t last_source_input_sequence_ = 0;
     std::chrono::steady_clock::time_point last_source_state_time_{};
     size_t configured_dofs_ = 0;
+    LWPolicyOutputFrame publish_workspace_;
 };
 
 template <typename T>
@@ -396,7 +398,7 @@ public:
         float progress = 0.0f) noexcept;
     bool ReadLWOperatorStatus(LWOperatorStatusSnapshot& status) const noexcept;
     bool PublishLWPolicyOutput(
-        LWPolicyOutputFrame output,
+        const LWPolicyOutputFrame& output,
         const LWPolicyActivation& activation);
     const LWPolicyOutputFrame* LoadLWPolicyOutput() noexcept;
     std::chrono::steady_clock::duration GetLWPolicyOutputMaxAge(
@@ -421,6 +423,11 @@ public:
         Observations<float>& policy_obs,
         std::vector<int>& policy_obs_dims,
         const LWMotionReferenceSnapshot* motion_reference) const;
+    void ComputeLWObservationInto(
+        const LWPolicyRuntimeConfiguration& policy_configuration,
+        const Observations<float>& policy_obs,
+        const LWMotionReferenceSnapshot* motion_reference,
+        std::vector<float>& output) const;
     virtual void GetState(RobotState<float> *state) = 0;
     virtual void SetCommand(const RobotCommand<float> *command) = 0;
     void StateController(

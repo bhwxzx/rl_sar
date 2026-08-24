@@ -34,6 +34,18 @@ struct TensorMetadata
     TensorElementType element_type = TensorElementType::Unknown;
 };
 
+struct TensorView
+{
+    const float* data = nullptr;
+    std::size_t size = 0;
+};
+
+struct MutableTensorView
+{
+    float* data = nullptr;
+    std::size_t size = 0;
+};
+
 /**
  * @brief Model interface base class
  *
@@ -58,11 +70,21 @@ public:
     virtual bool is_loaded() const = 0;
 
     /**
-     * @brief Forward inference (single input, supports initializer list)
-     * @param inputs Vector of input data vectors (usually single element)
-     * @return Inference result vector
+     * @brief Forward inference into caller-owned output storage.
+     * @param inputs Non-owning input tensor views
+     * @param input_count Number of input tensor views
+     * @param output Non-owning output tensor view
      */
-    virtual std::vector<float> forward(const std::vector<std::vector<float>>& inputs) = 0;
+    virtual void forwardInto(
+        const TensorView* inputs,
+        std::size_t input_count,
+        MutableTensorView output) = 0;
+
+    /**
+     * @brief Allocating compatibility wrapper for non-hot-path callers.
+     */
+    std::vector<float> forward(
+        const std::vector<std::vector<float>>& inputs);
 
     /**
      * @brief Get model type string
@@ -101,6 +123,8 @@ private:
 #endif
     std::vector<TensorMetadata> input_metadata_;
     std::vector<TensorMetadata> output_metadata_;
+    std::size_t input_element_count_ = 0;
+    std::size_t output_element_count_ = 0;
 
 public:
     ONNXModel();
@@ -108,7 +132,10 @@ public:
 
     bool load(const std::string& model_path) override;
     bool is_loaded() const override { return loaded_; }
-    std::vector<float> forward(const std::vector<std::vector<float>>& inputs) override;
+    void forwardInto(
+        const TensorView* inputs,
+        std::size_t input_count,
+        MutableTensorView output) override;
     std::string get_model_type() const override { return "onnx"; }
     const std::vector<TensorMetadata>& input_metadata() const override
     {
@@ -131,12 +158,7 @@ private:
      */
     void setup_input_output_info();
 
-    /**
-     * @brief Extract data from ONNX outputs
-     * @param outputs ONNX inference outputs
-     * @return Extracted data vector
-     */
-    std::vector<float> extract_output_data(const std::vector<Ort::Value>& outputs);
+    void validateOutput(const Ort::Value& output) const;
 #endif
 };
 

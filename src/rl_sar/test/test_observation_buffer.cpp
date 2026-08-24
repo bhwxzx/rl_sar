@@ -74,6 +74,29 @@ void TestTermPriorityPreservesRequestedFrameOrder()
         "term priority changed the observation-term or frame order");
 }
 
+void TestCallerOwnedOutputIsFilledInPlace()
+{
+    ObservationBuffer buffer(1, {2, 1}, 3, "term");
+    buffer.insert({1.0F, 2.0F, 3.0F});
+    buffer.insert({4.0F, 5.0F, 6.0F});
+    std::vector<float> output(6, -1.0F);
+    const float* const output_data = output.data();
+    buffer.getObsInto({0, 1}, output);
+    RequireEqual(
+        output,
+        {4.0F, 5.0F, 1.0F, 2.0F, 6.0F, 3.0F},
+        "caller-owned history output order differs");
+    Require(
+        output.data() == output_data,
+        "caller-owned history output storage was replaced");
+    RequireThrows<std::invalid_argument>(
+        [&]() {
+            std::vector<float> wrong_size(5);
+            buffer.getObsInto({0, 1}, wrong_size);
+        },
+        "wrong-sized caller-owned history output was accepted");
+}
+
 void TestHistoryFrameIndexIsIndependentOfTermCount()
 {
     ObservationBuffer buffer(1, {2}, 2, "time");
@@ -143,6 +166,7 @@ int main()
     {
         TestTimePriorityPreservesRequestedFrameOrder();
         TestTermPriorityPreservesRequestedFrameOrder();
+        TestCallerOwnedOutputIsFilledInPlace();
         TestHistoryFrameIndexIsIndependentOfTermCount();
         TestSparseHistoryAndMultipleEnvironmentsHaveExactSize();
         TestEmptyAndInvalidHistoryRequests();

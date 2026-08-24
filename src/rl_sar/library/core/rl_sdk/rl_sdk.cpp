@@ -5,6 +5,8 @@
 
 #include "rl_sdk.hpp"
 
+#include <array>
+
 const char* LWPolicyInputStatusName(LWPolicyInputStatus status) noexcept
 {
     switch (status)
@@ -119,11 +121,12 @@ void LWPolicyOutputTransport::configure(size_t num_dofs)
     frame.dof_vel.resize(num_dofs);
     frame.dof_tau.resize(num_dofs);
     latest_.initialize(frame);
+    publish_workspace_ = frame;
     configured_dofs_ = num_dofs;
 }
 
 bool LWPolicyOutputTransport::publish(
-    LWPolicyOutputFrame output,
+    const LWPolicyOutputFrame& output,
     std::uint64_t active_generation,
     size_t expected_dofs)
 {
@@ -147,10 +150,11 @@ bool LWPolicyOutputTransport::publish(
     {
         return false;
     }
-    output.sequence = next_sequence_++;
+    publish_workspace_ = output;
+    publish_workspace_.sequence = next_sequence_++;
     last_source_input_sequence_ = output.source_input_sequence;
     last_source_state_time_ = output.source_state_time;
-    latest_.publish(output);
+    latest_.publish(publish_workspace_);
     return true;
 }
 
@@ -338,133 +342,235 @@ std::vector<float> RL::ComputeObservation()
     return clamped_obs;
 }
 
+namespace
+{
+using Quaternion = std::array<float, 4>;
+
+Quaternion normalizeQuaternion(const std::vector<float>& input)
+{
+    const float norm = std::sqrt(
+        input[0] * input[0] + input[1] * input[1]
+        + input[2] * input[2] + input[3] * input[3]);
+    if (norm < 1e-8f)
+    {
+        return {1.0f, 0.0f, 0.0f, 0.0f};
+    }
+    return {
+        input[0] / norm,
+        input[1] / norm,
+        input[2] / norm,
+        input[3] / norm};
+}
+
+Quaternion multiplyQuaternion(
+    const Quaternion& left,
+    const Quaternion& right)
+{
+    return {
+        left[0] * right[0] - left[1] * right[1]
+            - left[2] * right[2] - left[3] * right[3],
+        left[0] * right[1] + left[1] * right[0]
+            + left[2] * right[3] - left[3] * right[2],
+        left[0] * right[2] - left[1] * right[3]
+            + left[2] * right[0] + left[3] * right[1],
+        left[0] * right[3] + left[1] * right[2]
+            - left[2] * right[1] + left[3] * right[0]};
+}
+
+Quaternion asQuaternion(const std::vector<float>& input)
+{
+    return {input[0], input[1], input[2], input[3]};
+}
+
+void writeInverseRotatedVector(
+    const std::vector<float>& quaternion,
+    const std::vector<float>& vector,
+    float* output)
+{
+    const float q_w = quaternion[0];
+    const float q_x = quaternion[1];
+    const float q_y = quaternion[2];
+    const float q_z = quaternion[3];
+    const float v_x = vector[0];
+    const float v_y = vector[1];
+    const float v_z = vector[2];
+    const float scale = 2.0f * q_w * q_w - 1.0f;
+    const float a_x = v_x * scale;
+    const float a_y = v_y * scale;
+    const float a_z = v_z * scale;
+    const float cross_x = q_y * v_z - q_z * v_y;
+    const float cross_y = q_z * v_x - q_x * v_z;
+    const float cross_z = q_x * v_y - q_y * v_x;
+    const float b_x = cross_x * q_w * 2.0f;
+    const float b_y = cross_y * q_w * 2.0f;
+    const float b_z = cross_z * q_w * 2.0f;
+    const float dot = q_x * v_x + q_y * v_y + q_z * v_z;
+    const float c_x = q_x * dot * 2.0f;
+    const float c_y = q_y * dot * 2.0f;
+    const float c_z = q_z * dot * 2.0f;
+    output[0] = a_x - b_x + c_x;
+    output[1] = a_y - b_y + c_y;
+    output[2] = a_z - b_z + c_z;
+}
+
+void writeFirstTwoRotationColumns(
+    const Quaternion& quaternion,
+    float* output)
+{
+    const float w = quaternion[0];
+    const float x = quaternion[1];
+    const float y = quaternion[2];
+    const float z = quaternion[3];
+    const float xx = x * x;
+    const float yy = y * y;
+    const float zz = z * z;
+    const float xy = x * y;
+    const float xz = x * z;
+    const float yz = y * z;
+    const float wx = w * x;
+    const float wy = w * y;
+    const float wz = w * z;
+    output[0] = 1.0f - 2.0f * (yy + zz);
+    output[1] = 2.0f * (xy - wz);
+    output[2] = 2.0f * (xy + wz);
+    output[3] = 1.0f - 2.0f * (xx + zz);
+    output[4] = 2.0f * (xz - wy);
+    output[5] = 2.0f * (yz + wx);
+}
+} // namespace
+
+void RL::ComputeLWObservationInto(
+    const LWPolicyRuntimeConfiguration& policy_configuration,
+    const Observations<float>& policy_obs,
+    const LWMotionReferenceSnapshot* motion_reference,
+    std::vector<float>& output) const
+{
+    const auto& layout = policy_configuration.observation_layout;
+    const std::size_t expected_size = layout.empty()
+        ? 0
+        : layout.back().offset + layout.back().size;
+    if (output.size() != expected_size)
+    {
+        throw std::invalid_argument(
+            "LW observation output has the wrong size");
+    }
+
+    for (const LWObservationLayoutEntry& entry : layout)
+    {
+        float* destination = output.data() + entry.offset;
+        switch (entry.kind)
+        {
+            case LWObservationKind::AngularVelocity:
+                for (std::size_t i = 0; i < entry.size; ++i)
+                    destination[i] = policy_obs.ang_vel[i]
+                        * policy_configuration.ang_vel_scale;
+                break;
+            case LWObservationKind::GravityVector:
+                writeInverseRotatedVector(
+                    policy_obs.base_quat,
+                    policy_obs.gravity_vec,
+                    destination);
+                break;
+            case LWObservationKind::Commands:
+                for (std::size_t i = 0; i < entry.size; ++i)
+                    destination[i] = policy_obs.commands[i]
+                        * policy_configuration.commands_scale[i];
+                break;
+            case LWObservationKind::DofPosition:
+                for (std::size_t i = 0; i < entry.size; ++i)
+                {
+                    const float relative =
+                        policy_configuration.wheel_mask[i] != 0
+                        ? 0.0f
+                        : policy_obs.dof_pos[i]
+                            - policy_configuration.default_dof_pos[i];
+                    destination[i] = relative
+                        * policy_configuration.dof_pos_scale;
+                }
+                break;
+            case LWObservationKind::DofVelocity:
+                for (std::size_t i = 0; i < entry.size; ++i)
+                    destination[i] = policy_obs.dof_vel[i]
+                        * policy_configuration.dof_vel_scale;
+                break;
+            case LWObservationKind::Actions:
+                std::copy(
+                    policy_obs.actions.begin(),
+                    policy_obs.actions.end(),
+                    destination);
+                break;
+            case LWObservationKind::GaitPhase:
+                std::copy(
+                    policy_obs.gait_phase.begin(),
+                    policy_obs.gait_phase.end(),
+                    destination);
+                break;
+            case LWObservationKind::MotionCommand:
+                if (motion_reference == nullptr)
+                {
+                    std::fill(destination, destination + entry.size, 0.0f);
+                    break;
+                }
+                for (std::size_t i = 0;
+                     i < policy_configuration.motion_joint_mapping.size();
+                     ++i)
+                {
+                    const int source =
+                        policy_configuration.motion_joint_mapping[i];
+                    destination[i] = motion_reference->joint_pos[source];
+                    destination[i + policy_configuration.num_dofs] =
+                        motion_reference->joint_vel[source];
+                }
+                break;
+            case LWObservationKind::MotionAnchorOrientation:
+                if (motion_reference == nullptr)
+                {
+                    std::fill(destination, destination + entry.size, 0.0f);
+                    break;
+                }
+                {
+                    const Quaternion robot =
+                        normalizeQuaternion(policy_obs.base_quat);
+                    const Quaternion anchor = multiplyQuaternion(
+                        asQuaternion(motion_reference->init_quat),
+                        asQuaternion(motion_reference->anchor_quat));
+                    const Quaternion robot_conjugate =
+                        {robot[0], -robot[1], -robot[2], -robot[3]};
+                    writeFirstTwoRotationColumns(
+                        multiplyQuaternion(robot_conjugate, anchor),
+                        destination);
+                }
+                break;
+        }
+    }
+    const float clip = policy_configuration.clip_obs;
+    for (float& value : output)
+    {
+        value = clamp(value, -clip, clip);
+    }
+}
+
 std::vector<float> RL::ComputeLWObservation(
     const LWPolicyRuntimeConfiguration& policy_configuration,
     Observations<float>& policy_obs,
     std::vector<int>& policy_obs_dims,
     const LWMotionReferenceSnapshot* motion_reference) const
 {
-    std::vector<std::vector<float>> obs_list;
-    for (const std::string& observation :
-         policy_configuration.observations)
-    {
-        if (observation == "ang_vel")
-        {
-            obs_list.push_back(
-                policy_obs.ang_vel
-                * policy_configuration.ang_vel_scale);
-        }
-        else if (observation == "gravity_vec")
-        {
-            obs_list.push_back(
-                QuatRotateInverse(
-                    policy_obs.base_quat,
-                    policy_obs.gravity_vec));
-        }
-        else if (observation == "commands")
-        {
-            obs_list.push_back(
-                policy_obs.commands
-                * policy_configuration.commands_scale);
-        }
-        else if (observation == "dof_pos")
-        {
-            std::vector<float> dof_pos_rel =
-                policy_obs.dof_pos
-                - policy_configuration.default_dof_pos;
-            for (int index :
-                 policy_configuration.wheel_indices)
-            {
-                dof_pos_rel[index] = 0.0f;
-            }
-            obs_list.push_back(
-                dof_pos_rel
-                * policy_configuration.dof_pos_scale);
-        }
-        else if (observation == "dof_vel")
-        {
-            obs_list.push_back(
-                policy_obs.dof_vel
-                * policy_configuration.dof_vel_scale);
-        }
-        else if (observation == "actions")
-        {
-            obs_list.push_back(policy_obs.actions);
-        }
-        else if (observation == "gait_phase")
-        {
-            obs_list.push_back(policy_obs.gait_phase);
-        }
-        else if (observation == "whole_body_tracking/motion_command")
-        {
-            std::vector<float> motion_command;
-            if (motion_reference != nullptr)
-            {
-                const auto& mapping =
-                    policy_configuration.motion_joint_mapping;
-                std::vector<float> joint_pos(mapping.size());
-                std::vector<float> joint_vel(mapping.size());
-                for (size_t i = 0; i < mapping.size(); ++i)
-                {
-                    joint_pos[i] =
-                        motion_reference->joint_pos[mapping[i]];
-                    joint_vel[i] =
-                        motion_reference->joint_vel[mapping[i]];
-                }
-                motion_command.insert(
-                    motion_command.end(),
-                    joint_pos.begin(),
-                    joint_pos.end());
-                motion_command.insert(
-                    motion_command.end(),
-                    joint_vel.begin(),
-                    joint_vel.end());
-            }
-            else
-            {
-                motion_command.resize(
-                    policy_configuration.num_dofs * 2,
-                    0.0f);
-            }
-            obs_list.push_back(std::move(motion_command));
-        }
-        else if (observation
-                 == "whole_body_tracking/motion_anchor_ori_b")
-        {
-            std::vector<float> anchor_orientation(6, 0.0f);
-            if (motion_reference != nullptr)
-            {
-                const std::vector<float> robot_torso_quat =
-                    MotionLoaderLW::ComputeTorsoQuat(
-                        policy_obs.base_quat);
-                const std::vector<float> motion_anchor_quat =
-                    QuaternionMultiply(
-                        motion_reference->init_quat,
-                        motion_reference->anchor_quat);
-                const std::vector<float> relative_quat =
-                    QuaternionMultiply(
-                        QuaternionConjugate(robot_torso_quat),
-                        motion_anchor_quat);
-                anchor_orientation = MatrixFirstTwoColumns(
-                    QuaternionToRotationMatrix(relative_quat));
-            }
-            obs_list.push_back(std::move(anchor_orientation));
-        }
-    }
-
     policy_obs_dims.clear();
-    std::vector<float> flattened;
-    for (const auto& observation : obs_list)
+    policy_obs_dims.reserve(policy_configuration.observation_layout.size());
+    std::size_t output_size = 0;
+    for (const auto& entry : policy_configuration.observation_layout)
     {
-        policy_obs_dims.push_back(
-            static_cast<int>(observation.size()));
-        flattened.insert(
-            flattened.end(),
-            observation.begin(),
-            observation.end());
+        policy_obs_dims.push_back(static_cast<int>(entry.size));
+        output_size += entry.size;
     }
-    const float clip = policy_configuration.clip_obs;
-    return clamp(flattened, -clip, clip);
+    std::vector<float> output(output_size);
+    ComputeLWObservationInto(
+        policy_configuration,
+        policy_obs,
+        motion_reference,
+        output);
+    return output;
 }
 
 void RL::InitObservations()
@@ -657,6 +763,7 @@ void RL::PreloadLWPolicyContext(
     definition->path = robot_config_path;
     definition->params.config_node = YAML::Clone(config_it->second.merged);
     definition->runtime = config_it->second.runtime;
+    definition->dimensions = config_it->second.dimensions;
 
     const auto model_it =
         this->preloaded_models_.find(robot_config_path);
@@ -858,7 +965,7 @@ bool RL::ReadLWOperatorStatus(
 }
 
 bool RL::PublishLWPolicyOutput(
-    LWPolicyOutputFrame output,
+    const LWPolicyOutputFrame& output,
     const LWPolicyActivation& activation)
 {
     if (!activation.definition
@@ -869,7 +976,7 @@ bool RL::PublishLWPolicyOutput(
     const size_t expected_dofs =
         activation.definition->runtime.num_dofs;
     return lw_policy_output_transport_.publish(
-        std::move(output),
+        output,
         activation.generation,
         expected_dofs);
 }
@@ -960,28 +1067,32 @@ void RL::ComputeLWOutput(
     std::vector<float>& output_dof_vel,
     std::vector<float>& output_dof_tau) const
 {
-    const std::vector<float> actions_scaled =
-        actions
-        * policy_configuration.action_scale;
-    std::vector<float> pos_actions_scaled = actions_scaled;
-    std::vector<float> vel_actions_scaled(actions.size(), 0.0f);
-    for (int index :
-         policy_configuration.wheel_indices)
+    const std::size_t num_dofs = policy_configuration.num_dofs;
+    if (actions.size() != num_dofs
+        || output_dof_pos.size() != num_dofs
+        || output_dof_vel.size() != num_dofs
+        || output_dof_tau.size() != num_dofs)
     {
-        pos_actions_scaled[index] = 0.0f;
-        vel_actions_scaled[index] = actions_scaled[index];
+        throw std::invalid_argument(
+            "LW output workspace has the wrong size");
     }
-
-    const auto& default_dof_pos =
-        policy_configuration.default_dof_pos;
-    output_dof_pos = pos_actions_scaled + default_dof_pos;
-    output_dof_vel = vel_actions_scaled;
-    output_dof_tau =
-        policy_configuration.rl_kp
-            * (pos_actions_scaled + default_dof_pos
-               - policy_obs.dof_pos)
-        + policy_configuration.rl_kd
-            * (vel_actions_scaled - policy_obs.dof_vel);
+    for (std::size_t index = 0; index < num_dofs; ++index)
+    {
+        const float scaled = actions[index]
+            * policy_configuration.action_scale[index];
+        const bool wheel = policy_configuration.wheel_mask[index] != 0;
+        const float position_action = wheel ? 0.0f : scaled;
+        const float velocity_action = wheel ? scaled : 0.0f;
+        const float position_target = position_action
+            + policy_configuration.default_dof_pos[index];
+        output_dof_pos[index] = position_target;
+        output_dof_vel[index] = velocity_action;
+        output_dof_tau[index] =
+            policy_configuration.rl_kp[index]
+                * (position_target - policy_obs.dof_pos[index])
+            + policy_configuration.rl_kd[index]
+                * (velocity_action - policy_obs.dof_vel[index]);
+    }
 }
 
 int RL::InverseJointMapping(int idx) const

@@ -37,7 +37,11 @@ public:
      * @param reset_idxs Indices of environments to reset
      * @param new_obs New observation data to fill the buffer
      */
-    void reset(std::vector<int> reset_idxs, const std::vector<float>& new_obs);
+    void reset(
+        const std::vector<int>& reset_idxs,
+        const std::vector<float>& new_obs);
+
+    void resetAll(const std::vector<float>& new_obs);
     
     /**
      * @brief Insert new observation into buffer
@@ -52,7 +56,11 @@ public:
      * @throws std::out_of_range if an index is outside the history buffer
      * @throws std::length_error if the requested output size overflows
      */
-    std::vector<float> get_obs_vec(std::vector<int> obs_ids);
+    std::vector<float> get_obs_vec(const std::vector<int>& obs_ids) const;
+
+    void getObsInto(
+        const std::vector<int>& obs_ids,
+        std::vector<float>& output) const;
 
 private:
     int num_envs;                                           ///< Number of environments
@@ -61,7 +69,12 @@ private:
     int num_obs = 0;                                        ///< Total observation dimension
     int history_length = 0;                                 ///< History buffer length
     int num_obs_total = 0;                                  ///< Total observation size
-    std::vector<std::vector<std::vector<float>>> obs_buf;   ///< Observation buffer [env][time][obs]
+    int newest_slot = 0;
+    std::vector<float> obs_buf;                             ///< Contiguous buffer [env][physical time][obs]
+
+    std::size_t frameOffset(int env_idx, int logical_step) const;
+    std::size_t requestedOutputSize(
+        const std::vector<int>& obs_ids) const;
 };
 
 #endif // OBSERVATION_BUFFER_HPP

@@ -236,36 +236,46 @@ YAML::Node mergeConfiguration(
     return merged;
 }
 
-std::size_t observationDimension(
+LWObservationKind observationKind(
     const std::string& observation,
-    std::size_t num_dofs,
     const std::string& source)
 {
-    if (observation == "ang_vel"
-        || observation == "gravity_vec"
-        || observation == "commands")
-    {
-        return 3;
-    }
-    if (observation == "dof_pos"
-        || observation == "dof_vel"
-        || observation == "actions")
-    {
-        return num_dofs;
-    }
-    if (observation == "gait_phase")
-    {
-        return 2;
-    }
+    if (observation == "ang_vel") return LWObservationKind::AngularVelocity;
+    if (observation == "gravity_vec") return LWObservationKind::GravityVector;
+    if (observation == "commands") return LWObservationKind::Commands;
+    if (observation == "dof_pos") return LWObservationKind::DofPosition;
+    if (observation == "dof_vel") return LWObservationKind::DofVelocity;
+    if (observation == "actions") return LWObservationKind::Actions;
+    if (observation == "gait_phase") return LWObservationKind::GaitPhase;
     if (observation == "whole_body_tracking/motion_command")
-    {
-        return 2 * num_dofs;
-    }
+        return LWObservationKind::MotionCommand;
     if (observation == "whole_body_tracking/motion_anchor_ori_b")
-    {
-        return 6;
-    }
+        return LWObservationKind::MotionAnchorOrientation;
     fail(source, "unsupported observation '" + observation + "'");
+}
+
+std::size_t observationDimension(
+    LWObservationKind kind,
+    std::size_t num_dofs)
+{
+    switch (kind)
+    {
+        case LWObservationKind::AngularVelocity:
+        case LWObservationKind::GravityVector:
+        case LWObservationKind::Commands:
+            return 3;
+        case LWObservationKind::DofPosition:
+        case LWObservationKind::DofVelocity:
+        case LWObservationKind::Actions:
+            return num_dofs;
+        case LWObservationKind::GaitPhase:
+            return 2;
+        case LWObservationKind::MotionCommand:
+            return 2 * num_dofs;
+        case LWObservationKind::MotionAnchorOrientation:
+            return 6;
+    }
+    throw std::logic_error("unsupported LW observation kind");
 }
 
 void validateTensor(
@@ -520,7 +530,11 @@ LWValidatedPolicyConfiguration ValidateLWPolicyConfiguration(
     }
     std::set<std::string> unique_observations;
     std::size_t observation_dimension = 0;
+    std::vector<LWObservationLayoutEntry> observation_layout;
+    observation_layout.reserve(observations.size());
     bool needs_motion = false;
+    bool needs_motion_command = false;
+    bool needs_motion_anchor_orientation = false;
     for (const std::string& observation : observations)
     {
         if (!unique_observations.insert(observation).second)
@@ -530,13 +544,15 @@ LWValidatedPolicyConfiguration ValidateLWPolicyConfiguration(
                 "key 'observations' contains duplicate term '"
                     + observation + "'");
         }
-        const std::size_t term_dimension =
-            observationDimension(observation, dofs, source);
+        const LWObservationKind kind = observationKind(observation, source);
+        const std::size_t term_dimension = observationDimension(kind, dofs);
         if (observation_dimension
             > std::numeric_limits<std::size_t>::max() - term_dimension)
         {
             fail(source, "computed observation dimension overflows");
         }
+        observation_layout.push_back(
+            {kind, observation_dimension, term_dimension});
         observation_dimension += term_dimension;
 
         if (observation == "ang_vel")
@@ -560,6 +576,11 @@ LWValidatedPolicyConfiguration ValidateLWPolicyConfiguration(
                         == "whole_body_tracking/motion_anchor_ori_b")
         {
             needs_motion = true;
+            needs_motion_command = needs_motion_command
+                || kind == LWObservationKind::MotionCommand;
+            needs_motion_anchor_orientation =
+                needs_motion_anchor_orientation
+                || kind == LWObservationKind::MotionAnchorOrientation;
         }
     }
 
@@ -651,6 +672,7 @@ LWValidatedPolicyConfiguration ValidateLWPolicyConfiguration(
     runtime.clip_obs = policy_config["clip_obs"].as<float>();
     runtime.model_name = model_name;
     runtime.observations = observations;
+    runtime.observation_layout = std::move(observation_layout);
     runtime.observations_history = history;
     runtime.observations_history_priority = history_priority;
     runtime.action_scale =
@@ -692,6 +714,9 @@ LWValidatedPolicyConfiguration ValidateLWPolicyConfiguration(
         runtime.dof_vel_scale = policy_config["dof_vel_scale"].as<float>();
     }
     runtime.needs_motion_reference = needs_motion;
+    runtime.needs_motion_command = needs_motion_command;
+    runtime.needs_motion_anchor_orientation =
+        needs_motion_anchor_orientation;
     if (needs_motion)
     {
         runtime.motion_file = policy_config["motion_file"].as<std::string>();
@@ -753,12 +778,17 @@ void ValidateLWModelContract(
         fail(source, "warmup iteration count must be nonnegative");
     }
     const std::vector<float> dummy_input(dimensions.model_input, 0.0f);
+    std::vector<float> output(dimensions.model_output, 0.0f);
+    const InferenceRuntime::TensorView input_view = {
+        dummy_input.data(), dummy_input.size()};
     for (int iteration = 0; iteration < warmup_iterations; ++iteration)
     {
-        std::vector<float> output;
         try
         {
-            output = model.forward({dummy_input});
+            model.forwardInto(
+                &input_view,
+                1,
+                {output.data(), output.size()});
         }
         catch (const std::exception& exception)
         {
@@ -767,14 +797,6 @@ void ValidateLWModelContract(
                 "ONNX warmup failed for expected input dimension "
                     + std::to_string(dimensions.model_input) + ": "
                     + exception.what());
-        }
-        if (output.size() != dimensions.model_output)
-        {
-            fail(
-                source,
-                "ONNX warmup output expected "
-                    + std::to_string(dimensions.model_output)
-                    + " values, got " + std::to_string(output.size()));
         }
         for (std::size_t index = 0; index < output.size(); ++index)
         {

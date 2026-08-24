@@ -414,17 +414,7 @@ public:
             {
                 return;
             }
-            const auto requires_observation =
-                [&policy_configuration](const char* name)
-                {
-                    return std::find(
-                               policy_configuration.observations.begin(),
-                               policy_configuration.observations.end(),
-                               name)
-                        != policy_configuration.observations.end();
-                };
-            if (requires_observation(
-                    "whole_body_tracking/motion_command")
+            if (policy_configuration.needs_motion_command
                 && (inference_motion_reference_->joint_pos.size()
                         != policy_configuration.num_dofs
                     || inference_motion_reference_->joint_vel.size()
@@ -432,8 +422,7 @@ public:
             {
                 return;
             }
-            if (requires_observation(
-                    "whole_body_tracking/motion_anchor_ori_b")
+            if (policy_configuration.needs_motion_anchor_orientation
                 && (inference_motion_reference_->anchor_quat.size() != 4
                     || inference_motion_reference_->init_quat.size() != 4))
             {
@@ -475,9 +464,11 @@ public:
             is_moving * std::sin(2.0f * pi * inference_gait_phase_time_),
             is_moving * std::cos(2.0f * pi * inference_gait_phase_time_)};
 
-        inference_obs_.actions = forward();
+        const bool forward_succeeded = runForwardIntoActions();
         call(hooks.after_forward);
-        if (terminalLatched() || controlledFallbackLatched())
+        if (!forward_succeeded
+            || terminalLatched()
+            || controlledFallbackLatched())
         {
             return;
         }
@@ -517,31 +508,33 @@ public:
                     : LWPolicyInputStatus::Stale);
             return;
         }
+        inference_output_frame_.generation = policy_input.generation;
+        inference_output_frame_.sequence = 0;
+        inference_output_frame_.frame = inference_frame_;
+        inference_output_frame_.source_input_sequence = policy_input.sequence;
+        inference_output_frame_.source_state_time =
+            policy_input.state_capture_time;
+        inference_output_frame_.dof_pos = inference_output_dof_pos_;
+        inference_output_frame_.dof_vel = inference_output_dof_vel_;
+        inference_output_frame_.dof_tau = inference_output_dof_tau_;
         if (!rl_->PublishLWPolicyOutput(
-            {policy_input.generation,
-             0,
-             inference_frame_,
-             policy_input.sequence,
-             policy_input.state_capture_time,
-             inference_output_dof_pos_,
-             inference_output_dof_vel_,
-             inference_output_dof_tau_},
-            *activation))
+            inference_output_frame_, *activation))
         {
             return;
         }
         rl_->PublishLWPolicyProgress(
             activation->generation,
             inference_frame_);
-        inference_trace_.publish(
-            {activation->generation,
-             inference_frame_,
-             policy_input.sequence,
-             policy_input.state_capture_time,
-             inference_obs_,
-             inference_output_dof_pos_,
-             inference_output_dof_vel_,
-             inference_output_dof_tau_});
+        inference_trace_frame_.generation = activation->generation;
+        inference_trace_frame_.frame = inference_frame_;
+        inference_trace_frame_.source_input_sequence = policy_input.sequence;
+        inference_trace_frame_.source_state_time =
+            policy_input.state_capture_time;
+        inference_trace_frame_.observations = inference_obs_;
+        inference_trace_frame_.output_dof_pos = inference_output_dof_pos_;
+        inference_trace_frame_.output_dof_vel = inference_output_dof_vel_;
+        inference_trace_frame_.output_dof_tau = inference_output_dof_tau_;
+        inference_trace_.publish(inference_trace_frame_);
         if (hooks.after_publish)
         {
             hooks.after_publish(
@@ -555,43 +548,57 @@ public:
 
     std::vector<float> forward()
     {
+        if (!runForwardIntoActions())
+        {
+            return {};
+        }
+        return inference_obs_.actions;
+    }
+
+private:
+    bool runForwardIntoActions()
+    {
         requireBound();
         if (!inference_activation_.definition
             || !inference_activation_.definition->model)
         {
-            return {};
+            return false;
         }
         const auto& definition = *inference_activation_.definition;
         const auto& policy_configuration = definition.runtime;
-        const auto clamped_obs = rl_->ComputeLWObservation(
+        rl_->ComputeLWObservationInto(
             policy_configuration,
             inference_obs_,
-            inference_obs_dims_,
-            inference_motion_reference_);
+            inference_motion_reference_,
+            inference_flat_obs_);
 
-        std::vector<float> actions;
+        const std::vector<float>* model_input = &inference_flat_obs_;
         const auto& history_indices =
             policy_configuration.observations_history;
         if (!history_indices.empty())
         {
             if (inference_frame_ == 1)
             {
-                inference_history_obs_buf_.reset({0}, clamped_obs);
+                inference_history_obs_buf_.resetAll(inference_flat_obs_);
             }
-            inference_history_obs_buf_.insert(clamped_obs);
-            inference_history_obs_ =
-                inference_history_obs_buf_.get_obs_vec(history_indices);
-            actions = definition.model->forward({inference_history_obs_});
+            inference_history_obs_buf_.insert(inference_flat_obs_);
+            inference_history_obs_buf_.getObsInto(
+                history_indices,
+                inference_history_obs_);
+            model_input = &inference_history_obs_;
         }
-        else
-        {
-            actions = definition.model->forward({clamped_obs});
-        }
+        const InferenceRuntime::TensorView input_view = {
+            model_input->data(), model_input->size()};
+        definition.model->forwardInto(
+            &input_view,
+            1,
+            {inference_obs_.actions.data(),
+             inference_obs_.actions.size()});
 
         const size_t num_dofs = policy_configuration.num_dofs;
-        if (!acceptPolicyActions(actions, num_dofs))
+        if (!acceptPolicyActions(inference_obs_.actions, num_dofs))
         {
-            return {};
+            return false;
         }
 
         const auto& upper =
@@ -618,14 +625,18 @@ public:
                     LWSafetyEvent::PolicyConfigurationInvalid,
                     "[Safety] Invalid LW action clipping configuration: "
                         + clip_result.failureDescription());
-                return {};
+                return false;
             }
-            return clamp(actions, lower, upper);
+            for (std::size_t index = 0; index < num_dofs; ++index)
+            {
+                inference_obs_.actions[index] = clamp(
+                    inference_obs_.actions[index],
+                    lower[index],
+                    upper[index]);
+            }
         }
-        return actions;
+        return true;
     }
-
-private:
     static void call(const std::function<void()>& hook)
     {
         if (hook)
@@ -779,17 +790,31 @@ private:
         inference_output_dof_pos_ = inference_obs_.dof_pos;
         inference_output_dof_vel_.assign(num_dofs, 0.0f);
         inference_output_dof_tau_.assign(num_dofs, 0.0f);
-        inference_history_obs_.clear();
-
-        rl_->ComputeLWObservation(
-            policy_configuration,
-            inference_obs_,
-            inference_obs_dims_,
-            nullptr);
+        inference_output_frame_.dof_pos.assign(num_dofs, 0.0f);
+        inference_output_frame_.dof_vel.assign(num_dofs, 0.0f);
+        inference_output_frame_.dof_tau.assign(num_dofs, 0.0f);
+        inference_trace_frame_.observations = inference_obs_;
+        inference_trace_frame_.output_dof_pos.assign(num_dofs, 0.0f);
+        inference_trace_frame_.output_dof_vel.assign(num_dofs, 0.0f);
+        inference_trace_frame_.output_dof_tau.assign(num_dofs, 0.0f);
+        inference_flat_obs_.assign(
+            activation.definition->dimensions.observation,
+            0.0f);
+        inference_obs_dims_.clear();
+        inference_obs_dims_.reserve(
+            policy_configuration.observation_layout.size());
+        for (const auto& entry : policy_configuration.observation_layout)
+        {
+            inference_obs_dims_.push_back(
+                static_cast<int>(entry.size));
+        }
         const auto& history_indices =
             policy_configuration.observations_history;
         if (!history_indices.empty())
         {
+            inference_history_obs_.assign(
+                activation.definition->dimensions.model_input,
+                0.0f);
             const int history_length =
                 *std::max_element(
                     history_indices.begin(),
@@ -800,6 +825,11 @@ private:
                 inference_obs_dims_,
                 history_length,
                 policy_configuration.observations_history_priority);
+        }
+        else
+        {
+            inference_history_obs_.clear();
+            inference_history_obs_buf_ = ObservationBuffer();
         }
     }
 
@@ -818,11 +848,14 @@ private:
     const LWMotionReferenceSnapshot* inference_motion_reference_ = nullptr;
     Observations<float> inference_obs_;
     std::vector<int> inference_obs_dims_;
+    std::vector<float> inference_flat_obs_;
     ObservationBuffer inference_history_obs_buf_;
     std::vector<float> inference_history_obs_;
     std::vector<float> inference_output_dof_pos_;
     std::vector<float> inference_output_dof_vel_;
     std::vector<float> inference_output_dof_tau_;
+    LWPolicyOutputFrame inference_output_frame_;
+    LWInferenceTraceSnapshot inference_trace_frame_;
     std::uint64_t inference_frame_ = 0;
     std::uint64_t next_policy_input_sequence_ = 1;
     std::uint64_t last_inference_input_generation_ = 0;

@@ -38,6 +38,26 @@ struct LWBaseRuntimeConfiguration
     std::vector<float> vel_command;
 };
 
+enum class LWObservationKind
+{
+    AngularVelocity,
+    GravityVector,
+    Commands,
+    DofPosition,
+    DofVelocity,
+    Actions,
+    GaitPhase,
+    MotionCommand,
+    MotionAnchorOrientation,
+};
+
+struct LWObservationLayoutEntry
+{
+    LWObservationKind kind = LWObservationKind::AngularVelocity;
+    std::size_t offset = 0;
+    std::size_t size = 0;
+};
+
 struct LWPolicyRuntimeConfiguration
 {
     std::size_t num_dofs = 0;
@@ -51,6 +71,7 @@ struct LWPolicyRuntimeConfiguration
     float dof_vel_scale = 0.0f;
     std::string model_name;
     std::vector<std::string> observations;
+    std::vector<LWObservationLayoutEntry> observation_layout;
     std::vector<int> observations_history;
     std::string observations_history_priority;
     std::vector<float> commands_scale;
@@ -67,6 +88,8 @@ struct LWPolicyRuntimeConfiguration
     std::vector<int> wheel_indices;
     std::vector<std::uint8_t> wheel_mask;
     bool needs_motion_reference = false;
+    bool needs_motion_command = false;
+    bool needs_motion_anchor_orientation = false;
     std::string motion_file;
     float motion_fps = 0.0f;
     int motion_time_offset_frames = 0;

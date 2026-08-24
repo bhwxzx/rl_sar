@@ -309,6 +309,18 @@ void testStaticModelAndInputValidation(const fs::path& directory)
 
     const std::vector<float> input{1.0F, -2.0F, 3.5F};
     require(model->forward({input}) == input, "identity output differs");
+    std::vector<float> caller_output(3, 0.0F);
+    const float* const caller_output_data = caller_output.data();
+    const InferenceRuntime::TensorView input_view = {
+        input.data(), input.size()};
+    model->forwardInto(
+        &input_view,
+        1,
+        {caller_output.data(), caller_output.size()});
+    require(caller_output == input, "caller-owned identity output differs");
+    require(
+        caller_output.data() == caller_output_data,
+        "caller-owned identity output storage was replaced");
 
     requireFailure(
         [&]() { static_cast<void>(model->forward({})); },
@@ -328,6 +340,23 @@ void testStaticModelAndInputValidation(const fs::path& directory)
             static_cast<void>(model->forward({{1.0F, 2.0F, 3.0F, 4.0F}}));
         },
         "element count must be 3, got 4");
+    requireFailure(
+        [&]() {
+            std::vector<float> short_output(2);
+            model->forwardInto(
+                &input_view,
+                1,
+                {short_output.data(), short_output.size()});
+        },
+        "output element count must be 3, got 2");
+    requireFailure(
+        [&]() {
+            model->forwardInto(
+                &input_view,
+                1,
+                {nullptr, 3});
+        },
+        "output tensor view is null");
 }
 
 void testUnsupportedModelsFailDuringLoad(const fs::path& directory)

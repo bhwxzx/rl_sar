@@ -19,7 +19,6 @@ const std::vector<TensorMetadata>& emptyTensorMetadata()
     return empty;
 }
 
-#ifdef USE_ONNX
 std::size_t checkedElementCount(
     const std::vector<int64_t>& shape,
     const std::string& description)
@@ -46,6 +45,7 @@ std::size_t checkedElementCount(
     return count;
 }
 
+#ifdef USE_ONNX
 void requireStaticSingleSampleTensor(
     const TensorMetadata& tensor,
     const std::string& role)
@@ -85,6 +85,34 @@ const std::vector<TensorMetadata>& Model::input_metadata() const
 const std::vector<TensorMetadata>& Model::output_metadata() const
 {
     return emptyTensorMetadata();
+}
+
+std::vector<float> Model::forward(
+    const std::vector<std::vector<float>>& inputs)
+{
+    if (!is_loaded())
+    {
+        throw std::runtime_error("Model not loaded");
+    }
+    if (output_metadata().size() != 1)
+    {
+        throw std::logic_error(
+            "Model compatibility forward requires one output tensor");
+    }
+    std::vector<TensorView> input_views;
+    input_views.reserve(inputs.size());
+    for (const auto& input : inputs)
+    {
+        input_views.push_back({input.data(), input.size()});
+    }
+    std::vector<float> output(checkedElementCount(
+        output_metadata().front().shape,
+        "model output shape"));
+    forwardInto(
+        input_views.data(),
+        input_views.size(),
+        {output.data(), output.size()});
+    return output;
 }
 
 // ============================================================================
@@ -146,7 +174,10 @@ bool ONNXModel::load(const std::string& model_path)
     }
 }
 
-std::vector<float> ONNXModel::forward(const std::vector<std::vector<float>>& inputs)
+void ONNXModel::forwardInto(
+    const TensorView* inputs,
+    std::size_t input_count,
+    MutableTensorView output)
 {
     if (!loaded_)
     {
@@ -156,7 +187,7 @@ std::vector<float> ONNXModel::forward(const std::vector<std::vector<float>>& inp
 #ifdef USE_ONNX
     try
     {
-        if (inputs.size() != 1)
+        if (input_count != 1)
         {
             throw std::invalid_argument(
                 "ONNX inference requires exactly one input tensor");
@@ -170,43 +201,64 @@ std::vector<float> ONNXModel::forward(const std::vector<std::vector<float>>& inp
                 "ONNX model cache is inconsistent with the single-tensor contract");
         }
 
-        const auto& input = inputs.front();
+        if (inputs == nullptr || inputs[0].data == nullptr)
+        {
+            throw std::invalid_argument("ONNX input tensor view is null");
+        }
+        if (output.data == nullptr)
+        {
+            throw std::invalid_argument("ONNX output tensor view is null");
+        }
+        const TensorView& input = inputs[0];
         const auto& input_shape = input_metadata_.front().shape;
-        const std::size_t expected_input_count = checkedElementCount(
-            input_shape, "cached ONNX input shape");
-        if (input.size() != expected_input_count)
+        const std::size_t expected_input_count = input_element_count_;
+        if (input.size != expected_input_count)
         {
             throw std::invalid_argument(
                 "ONNX input element count must be "
                 + std::to_string(expected_input_count) + ", got "
-                + std::to_string(input.size()));
+                + std::to_string(input.size));
         }
 
-        // Create input tensor
+        const auto& output_shape = output_metadata_.front().shape;
+        const std::size_t expected_output_count = output_element_count_;
+        if (output.size != expected_output_count)
+        {
+            throw std::invalid_argument(
+                "ONNX output element count must be "
+                + std::to_string(expected_output_count) + ", got "
+                + std::to_string(output.size));
+        }
+
         auto input_tensor = Ort::Value::CreateTensor<float>(
             memory_info_,
-            const_cast<float*>(input.data()),
-            input.size(),
+            const_cast<float*>(input.data),
+            input.size,
             input_shape.data(),
             input_shape.size()
         );
+        auto output_tensor = Ort::Value::CreateTensor<float>(
+            memory_info_,
+            output.data,
+            output.size,
+            output_shape.data(),
+            output_shape.size());
 
         // Prepare input/output names
         const char* input_names[] = {input_node_names_[0].c_str()};
         const char* output_names[] = {output_node_names_[0].c_str()};
 
         // Execute inference
-        auto outputs = session_->Run(
+        session_->Run(
             Ort::RunOptions{nullptr},
             input_names,
             &input_tensor,
             1,
             output_names,
-            1
-        );
+            &output_tensor,
+            1);
 
-        // Extract output data
-        return extract_output_data(outputs);
+        validateOutput(output_tensor);
     }
     catch (const std::exception& e)
     {
@@ -215,6 +267,8 @@ std::vector<float> ONNXModel::forward(const std::vector<std::vector<float>>& inp
     }
 #else
     static_cast<void>(inputs);
+    static_cast<void>(input_count);
+    static_cast<void>(output);
     throw std::runtime_error("ONNX support not compiled");
 #endif
 }
@@ -230,6 +284,8 @@ void ONNXModel::reset_loaded_state() noexcept
 #endif
     input_metadata_.clear();
     output_metadata_.clear();
+    input_element_count_ = 0;
+    output_element_count_ = 0;
 }
 
 #ifdef USE_ONNX
@@ -281,6 +337,9 @@ void ONNXModel::setup_input_output_info()
                  ? TensorElementType::Float32
                  : TensorElementType::Unknown});
         requireStaticSingleSampleTensor(input_metadata_.back(), "input");
+        input_element_count_ = checkedElementCount(
+            input_metadata_.back().shape,
+            "cached ONNX input shape");
     }
 
     output_node_names_.reserve(num_output_nodes);
@@ -309,22 +368,19 @@ void ONNXModel::setup_input_output_info()
                  ? TensorElementType::Float32
                  : TensorElementType::Unknown});
         requireStaticSingleSampleTensor(output_metadata_.back(), "output");
+        output_element_count_ = checkedElementCount(
+            output_metadata_.back().shape,
+            "cached ONNX output shape");
     }
 }
 
-std::vector<float> ONNXModel::extract_output_data(const std::vector<Ort::Value>& outputs)
+void ONNXModel::validateOutput(const Ort::Value& output) const
 {
-    if (outputs.size() != 1)
-    {
-        throw std::runtime_error(
-            "ONNX Runtime must return exactly one output tensor");
-    }
     if (output_metadata_.size() != 1)
     {
         throw std::logic_error("ONNX output metadata cache is inconsistent");
     }
 
-    const auto& output = outputs.front();
     if (!output.IsTensor())
     {
         throw std::runtime_error("ONNX Runtime output is not a tensor");
@@ -337,27 +393,12 @@ std::vector<float> ONNXModel::extract_output_data(const std::vector<Ort::Value>&
         throw std::runtime_error(
             "ONNX Runtime output tensor must use float32");
     }
-    const auto output_shape = output_info.GetShape();
-    if (output_shape != output_metadata_.front().shape)
-    {
-        throw std::runtime_error(
-            "ONNX Runtime output shape differs from the loaded static contract");
-    }
-
-    const std::size_t num_elements = checkedElementCount(
-        output_shape, "ONNX Runtime output shape");
-    const std::size_t expected_elements = checkedElementCount(
-        output_metadata_.front().shape, "cached ONNX output shape");
-    if (num_elements != expected_elements)
+    if (output_info.GetElementCount() != output_element_count_)
     {
         throw std::runtime_error(
             "ONNX Runtime output element count differs from the loaded contract");
     }
 
-    const float* output_data = output.GetTensorData<float>();
-    std::vector<float> result(output_data, output_data + num_elements);
-
-    return result;
 }
 #endif
 

@@ -133,13 +133,16 @@ public:
         return true;
     }
 
-    std::vector<float> forward(
-        const std::vector<std::vector<float>>& inputs) override
+    void forwardInto(
+        const InferenceRuntime::TensorView* inputs,
+        std::size_t input_count,
+        InferenceRuntime::MutableTensorView output) override
     {
-        require(inputs.size() == 1, "counting model input count differs");
+        require(input_count == 1, "counting model input count differs");
+        require(output.size == kNumDofs, "counting model output differs");
         ++forward_calls;
-        last_input = inputs.front();
-        return std::vector<float>(kNumDofs, 0.0f);
+        last_input.assign(inputs[0].data, inputs[0].data + inputs[0].size);
+        std::fill_n(output.data, output.size, 0.0f);
     }
 
     std::string get_model_type() const override
