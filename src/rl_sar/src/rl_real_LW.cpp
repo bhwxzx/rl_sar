@@ -104,49 +104,22 @@ RL_Real::RL_Real(
     this->robot_name = "LW";
     this->ReadYaml(this->robot_name, "base.yaml");
     SetLWBaseRuntimeConfiguration(
-        ValidateLWBaseConfiguration(
+        LWValidatedBaseConfiguration(
             this->params.config_node,
             this->ResolvePolicyPath(this->robot_name + "/base.yaml")));
-    const float sensor_timeout_seconds = this->params.Get<float>("sensor_timeout");
-    if (!std::isfinite(sensor_timeout_seconds) || sensor_timeout_seconds <= 0.0f)
-    {
-        throw std::runtime_error("LW sensor_timeout must be a finite positive value");
-    }
+    const auto& base_configuration = GetLWBaseRuntimeConfiguration();
     this->sensor_readiness_monitor_.setMotorFeedbackTimeout(
         std::chrono::duration_cast<SafetyClock::duration>(
-            std::chrono::duration<float>(sensor_timeout_seconds)));
-    const float trusted_imu_timeout_seconds =
-        this->params.Get<float>("trusted_imu_timeout");
-    if (!std::isfinite(trusted_imu_timeout_seconds)
-        || trusted_imu_timeout_seconds <= 0.0f)
-    {
-        throw std::runtime_error(
-            "LW trusted_imu_timeout must be a finite positive value");
-    }
+            std::chrono::duration<float>(base_configuration.sensor_timeout)));
     this->sensor_readiness_monitor_.setImuTimeout(
         std::chrono::duration_cast<SafetyClock::duration>(
-            std::chrono::duration<float>(trusted_imu_timeout_seconds)));
-    const float imu_ahrs_pair_max_age_seconds =
-        this->params.Get<float>("imu_ahrs_pair_max_age");
-    if (!std::isfinite(imu_ahrs_pair_max_age_seconds)
-        || imu_ahrs_pair_max_age_seconds <= 0.0f)
-    {
-        throw std::runtime_error(
-            "LW imu_ahrs_pair_max_age must be a finite positive value");
-    }
+            std::chrono::duration<float>(base_configuration.trusted_imu_timeout)));
     this->imu_ahrs_guard_.setPairMaxAge(
         std::chrono::duration_cast<LWImuAhrsGuard::Duration>(
-            std::chrono::duration<float>(imu_ahrs_pair_max_age_seconds)));
-    const float serial_write_timeout_seconds =
-        this->params.Get<float>("serial_write_timeout");
-    if (!std::isfinite(serial_write_timeout_seconds)
-        || serial_write_timeout_seconds <= 0.0f)
-    {
-        throw std::runtime_error("LW serial_write_timeout must be a finite positive value");
-    }
+            std::chrono::duration<float>(base_configuration.imu_ahrs_pair_max_age)));
     const LWSDK::Duration runtime_serial_write_timeout =
         std::chrono::duration_cast<LWSDK::Duration>(
-            std::chrono::duration<float>(serial_write_timeout_seconds));
+            std::chrono::duration<float>(base_configuration.serial_write_timeout));
 
     // 提前加载所有的模型到内存
     const auto preload_model = [this](const std::string& policy)

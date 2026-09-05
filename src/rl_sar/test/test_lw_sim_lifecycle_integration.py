@@ -41,7 +41,7 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
         self.assertNotIn(".detach()", constructor)
         self.assertNotIn("while (1)", constructor)
         self.assertLess(
-            constructor.index("ValidateLWBaseConfiguration("),
+            constructor.index("LWValidatedBaseConfiguration("),
             constructor.index("physics_lifecycle_->Start("),
         )
         self.assertLess(

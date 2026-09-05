@@ -151,6 +151,17 @@ void testInvalidTimeoutIsRejected()
         rejected = true;
     }
     require(rejected, "non-positive timeout was accepted");
+    SensorReadinessMonitor monitor(100ms);
+    const auto rounded_zero = std::chrono::duration_cast<SensorReadinessMonitor::Duration>(
+        std::chrono::duration<float>(1.0e-12f));
+    for (const auto setter : {&SensorReadinessMonitor::setImuTimeout,
+                              &SensorReadinessMonitor::setMotorFeedbackTimeout})
+    {
+        rejected = false;
+        try { (monitor.*setter)(rounded_zero); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        require(rejected, "timeout rounded to zero was accepted");
+    }
 }
 
 void testIndependentImuAndMotorTimeouts()

@@ -23,6 +23,10 @@ struct LWBaseRuntimeConfiguration
     std::size_t num_dofs = 0;
     float dt = 0.0f;
     int decimation = 0;
+    float sensor_timeout = 0.0f;
+    float trusted_imu_timeout = 0.0f;
+    float imu_ahrs_pair_max_age = 0.0f;
+    float serial_write_timeout = 0.0f;
     std::vector<std::string> joint_names;
     std::vector<int> joint_mapping;
     std::vector<int> wheel_indices;
@@ -106,6 +110,21 @@ struct LWValidatedPolicyConfiguration
 LWBaseRuntimeConfiguration ValidateLWBaseConfiguration(
     const YAML::Node& config,
     const std::string& source);
+
+// Owns the validated YAML snapshot: callers cannot pair a stale result with
+// different YAML or mutate the base used by subsequent policy validations.
+class LWValidatedBaseConfiguration
+{
+public:
+    LWValidatedBaseConfiguration(const YAML::Node& config, const std::string& source);
+    const LWBaseRuntimeConfiguration& runtime() const { return runtime_; }
+    LWValidatedPolicyConfiguration validatePolicy(
+        const YAML::Node& policy_config, const std::string& source) const;
+
+private:
+    const YAML::Node config_;
+    const LWBaseRuntimeConfiguration runtime_;
+};
 
 LWValidatedPolicyConfiguration ValidateLWPolicyConfiguration(
     const YAML::Node& base_config,

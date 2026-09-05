@@ -14,14 +14,14 @@
 
 ## 当前待办
 
-LW-067、LW-068 已完成；当前待办为 LW-069～LW-071，尚未获实施审批。
+LW-067～LW-069 已完成；当前待办为 LW-070、LW-071，尚未获实施审批。
 下表保留本轮处理进度，由用户选择下一项。
 
 | 顺序 | ID | 优先级 | 状态 | 问题 |
 |---:|---|---|---|---|
 | 1 | [LW-067](#lw-067) | P2 / medium | resolved | 修复构建目标检查对合法编译配置的误报 |
 | 2 | [LW-068](#lw-068) | P2 / low | resolved | 将只读动作裁剪配置校验集中到所属边界 |
-| 3 | [LW-069](#lw-069) | P2 / low | pending | 合并基础配置及启动超时参数的重复校验 |
+| 3 | [LW-069](#lw-069) | P2 / low | resolved | 合并基础配置及启动超时参数的重复校验 |
 | 4 | [LW-070](#lw-070) | P2 / low | pending | 将 ONNX 私有缓存不变量检查集中到加载阶段 |
 | 5 | [LW-071](#lw-071) | P2 / low | pending | 减少源码写法绑定和重复生命周期测试断言 |
 
@@ -157,7 +157,7 @@ LW-067、LW-068 已完成；当前待办为 LW-069～LW-071，尚未获实施审
 ## [LW-069] Consolidate repeated base-configuration and startup timeout validation
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-013, LW-038
 
 ### Problem and Evidence
@@ -184,6 +184,30 @@ LW-067、LW-068 已完成；当前待办为 LW-069～LW-071，尚未获实施审
 - Valid real/profiler/simulation configurations retain their existing values.
 - Startup, configuration, and profiler regressions pass; no worker sequencing
   or serial command changes are bundled.
+
+### Resolution (2026-09-05)
+
+- 用户明确批准仅实施 LW-069；变更与本验收记录一并提交。
+- 四个超时参数由 ValidateLWBaseConfiguration 统一解析、校验并保留到
+  LWBaseRuntimeConfiguration；真机启动删除重复的有限值/正数检查，
+  真机和 profiler 直接使用类型化结果。原有时长转换、接收端非正时长检查、
+  启动禁用及工作线程顺序保持不变。
+- 新增 LWValidatedBaseConfiguration，构造时克隆并验证基础 YAML，私有只读
+  快照与运行时结果绑定。真机、仿真及 profiler 安装此对象；PreloadModel
+  复用它校验各策略，不再逐策略全量校验基础配置。原始 YAML 策略入口仍先
+  完整验证基础配置，策略自身及合并配置的必要校验未删除。
+- 原运行时数值 setter 会清除已验证快照；未安装快照的预加载路径仍必须
+  验证 YAML，避免将未经验证的数值或过期快照当成校验凭据。基础配置来源
+  或返回的合并 YAML 被修改时，不会影响已安装快照。
+- 配置测试覆盖四个参数缺失、错误类型、零/负值、NaN/正负 Inf、原始 YAML
+  入口拒绝错误基础配置、快照隔离与预加载复用；四个现有策略的合并配置
+  在两种入口间保持一致，类型化超时值与 YAML 一致。时间边界测试覆盖
+  IMU、motor、IMU/AHRS 及串口超时由极小正秒数转换为零后的拒绝行为。
+- 复用 `/tmp/lw067-debug`、`/tmp/lw067-strict` 重建全部目标（包括真机、
+  仿真和 profiler）；最终完整 CTest 各 **53/53** 通过，包含配置、启动、
+  profiler、运行时一致性和分配约束回归。git diff --check 通过。
+- 生命周期源码测试仅同步本项校验入口名称，保留原顺序断言，未实施 LW-071。
+  未修改策略资产、串口命令或其他问题，未访问真实硬件，未测量性能收益。
 
 ---
 

@@ -367,6 +367,8 @@ public:
     void InitJointNum(size_t num_joints);
     void SetLWBaseRuntimeConfiguration(
         LWBaseRuntimeConfiguration configuration);
+    void SetLWBaseRuntimeConfiguration(
+        LWValidatedBaseConfiguration configuration);
     const LWBaseRuntimeConfiguration& GetLWBaseRuntimeConfiguration() const;
     void SetPolicyRoot(const std::filesystem::path& policy_root);
     std::string ResolvePolicyPath(const std::string& relative_path) const;
@@ -497,6 +499,7 @@ public:
     std::mutex model_mutex;
 
 private:
+    std::unique_ptr<const LWValidatedBaseConfiguration> lw_validated_base_configuration_;
     LWBaseRuntimeConfiguration lw_base_runtime_configuration_;
     std::unordered_map<
         std::string,

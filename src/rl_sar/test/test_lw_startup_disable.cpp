@@ -310,6 +310,18 @@ void testFinalDisableFollowsRuntimeCommand()
     require(right_runtime_seen && left_runtime_seen,
             "test did not observe the injected runtime command");
 }
+void testRuntimeTimeoutRoundedToZeroIsRejected()
+{
+    LWSDK sdk;
+    bool rejected = false;
+    try
+    {
+        sdk.SetWriteTimeout(std::chrono::duration_cast<LWSDK::Duration>(
+            std::chrono::duration<float>(1.0e-12f)));
+    }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "runtime serial timeout rounded to zero was accepted");
+}
 } // namespace
 
 int main()
@@ -317,6 +329,7 @@ int main()
     try
     {
         testInitialDisablePrecedesFallibleWork();
+        testRuntimeTimeoutRoundedToZeroIsRejected();
         testPartialInitializationCannotReachFallibleWork();
         testConstructorFailureRunsBoundedFinalDisable();
         testFinalDisableFollowsRuntimeCommand();

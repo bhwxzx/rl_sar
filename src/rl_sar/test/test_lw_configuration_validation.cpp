@@ -278,6 +278,12 @@ void testCurrentLWConfigurationsAndModels()
         loadConfig(policy_root / "LW/base.yaml", "LW");
     const auto base_runtime =
         ValidateLWBaseConfiguration(base, "LW/base.yaml");
+    const LWValidatedBaseConfiguration validated_base(base, "LW/base.yaml");
+    require(base_runtime.sensor_timeout == base["sensor_timeout"].as<float>()
+                && base_runtime.trusted_imu_timeout == base["trusted_imu_timeout"].as<float>()
+                && base_runtime.imu_ahrs_pair_max_age == base["imu_ahrs_pair_max_age"].as<float>()
+                && base_runtime.serial_write_timeout == base["serial_write_timeout"].as<float>(),
+            "typed base timeouts differ from YAML");
     require(base_runtime.num_dofs == 10, "base runtime DOF count differs");
     require(
         base_runtime.joint_names.size() == base_runtime.num_dofs
@@ -331,6 +337,9 @@ void testCurrentLWConfigurationsAndModels()
             loadConfig(config_path, policy.relative_path);
         const auto validated = ValidateLWPolicyConfiguration(
             base, policy_config, config_path.string());
+        const auto reused = validated_base.validatePolicy(policy_config, config_path.string());
+        require(YAML::Dump(reused.merged) == YAML::Dump(validated.merged),
+                policy.relative_path + " reused base changed merged configuration");
         require(
             validated.dimensions.observation == policy.observation,
             policy.relative_path + " computed the wrong observation size");
@@ -618,6 +627,71 @@ void testInvalidPolicyConfigurationIsRejected()
         "motion_time_offset_frames' must be nonnegative");
 }
 
+void testValidatedBaseSnapshotAndRawEntry()
+{
+    const fs::path policy_root(POLICY_DIR);
+    YAML::Node base = loadConfig(policy_root / "LW/base.yaml", "LW");
+    const YAML::Node policy = loadConfig(
+        policy_root / "LW/robot_lab/leg_loco/config.yaml", "LW/robot_lab/leg_loco");
+    const LWValidatedBaseConfiguration validated(base, "base-snapshot");
+    const auto original = validated.validatePolicy(policy, "policy");
+    base["dt"] = -1.0f;
+    base["joint_names"][0] = "mutated";
+    auto first = validated.validatePolicy(policy, "policy");
+    require(YAML::Dump(first.merged) == YAML::Dump(original.merged),
+            "source YAML mutation changed validated snapshot");
+    first.merged["dt"] = -2.0f;
+    first.merged["joint_names"][0] = "also-mutated";
+    require(YAML::Dump(validated.validatePolicy(policy, "policy").merged)
+                == YAML::Dump(original.merged),
+            "returned YAML mutation changed validated snapshot");
+    requireFailure([&]() { ValidateLWPolicyConfiguration(base, policy, "raw-policy"); }, "dt");
+
+    TestRL runtime;
+    runtime.SetPolicyRoot(policy_root);
+    runtime.params.config_node = base;
+    runtime.SetLWBaseRuntimeConfiguration(validated);
+    runtime.PreloadModel("LW/robot_lab/leg_loco");
+    require(YAML::Dump(runtime.preloaded_lw_policy_configs_.at("LW/robot_lab/leg_loco").merged)
+                == YAML::Dump(original.merged),
+            "preload did not use the installed base snapshot");
+    // Installing an unvalidated runtime value must not retain the old snapshot.
+    runtime.SetLWBaseRuntimeConfiguration(validated.runtime());
+    requireFailure([&]() { runtime.PreloadModel("LW/robot_lab/wheel_loco"); }, "dt");
+}
+
+void testBaseTimeoutValidation()
+{
+    const fs::path policy_root(POLICY_DIR);
+    const YAML::Node base = loadConfig(policy_root / "LW/base.yaml", "LW");
+    const YAML::Node policy = loadConfig(
+        policy_root / "LW/robot_lab/leg_loco/config.yaml", "LW/robot_lab/leg_loco");
+    for (const std::string key : {"sensor_timeout", "trusted_imu_timeout",
+                                  "imu_ahrs_pair_max_age", "serial_write_timeout"})
+    {
+        const auto reject = [&](const YAML::Node& candidate)
+        {
+            requireFailure([&]() { LWValidatedBaseConfiguration checked(candidate, "timeouts"); }, key);
+            requireFailure([&]() { ValidateLWPolicyConfiguration(candidate, policy, "raw-policy"); }, key);
+        };
+        YAML::Node missing = YAML::Clone(base);
+        missing.remove(key);
+        reject(missing);
+        YAML::Node wrong_type = YAML::Clone(base);
+        wrong_type[key] = "not-a-number";
+        reject(wrong_type);
+        for (const float invalid : {0.0f, -1.0f,
+                                    std::numeric_limits<float>::quiet_NaN(),
+                                    std::numeric_limits<float>::infinity(),
+                                    -std::numeric_limits<float>::infinity()})
+        {
+            YAML::Node candidate = YAML::Clone(base);
+            candidate[key] = invalid;
+            reject(candidate);
+        }
+    }
+}
+
 void testActionClippingConfigurationIsValidatedAtLoad()
 {
     const fs::path policy_root(POLICY_DIR);
@@ -736,6 +810,8 @@ int main()
         testMotionObservationContracts();
         testInvalidBaseConfigurationIsRejected();
         testInvalidPolicyConfigurationIsRejected();
+        testValidatedBaseSnapshotAndRawEntry();
+        testBaseTimeoutValidation();
         testActionClippingConfigurationIsValidatedAtLoad();
         testModelDimensionMismatchIsRejected();
         testObservationQuaternionUsesWxyzIdentity();

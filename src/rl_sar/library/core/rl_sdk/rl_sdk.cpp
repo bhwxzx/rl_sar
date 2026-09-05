@@ -618,6 +618,7 @@ void RL::InitJointNum(size_t num_joints)
 void RL::SetLWBaseRuntimeConfiguration(
     LWBaseRuntimeConfiguration configuration)
 {
+    lw_validated_base_configuration_.reset();
     LWMotionReferenceSnapshot motion_reference;
     motion_reference.joint_pos.resize(configuration.num_dofs);
     motion_reference.joint_vel.resize(configuration.num_dofs);
@@ -626,6 +627,15 @@ void RL::SetLWBaseRuntimeConfiguration(
     lw_motion_reference_.initialize(motion_reference);
     lw_policy_output_transport_.configure(configuration.num_dofs);
     lw_base_runtime_configuration_ = std::move(configuration);
+}
+
+void RL::SetLWBaseRuntimeConfiguration(
+    LWValidatedBaseConfiguration configuration)
+{
+    auto validated = std::make_unique<const LWValidatedBaseConfiguration>(
+        std::move(configuration));
+    SetLWBaseRuntimeConfiguration(validated->runtime());
+    lw_validated_base_configuration_ = std::move(validated);
 }
 
 const LWBaseRuntimeConfiguration&
@@ -689,10 +699,10 @@ std::string RL::ResolvePolicyPath(
 
 void RL::PreloadModel(const std::string& robot_config_path)
 {
-    if (lw_base_runtime_configuration_.num_dofs == 0)
+    if (!lw_validated_base_configuration_)
     {
         SetLWBaseRuntimeConfiguration(
-            ValidateLWBaseConfiguration(
+            LWValidatedBaseConfiguration(
                 this->params.config_node,
                 "LW/base.yaml"));
     }
@@ -710,8 +720,7 @@ void RL::PreloadModel(const std::string& robot_config_path)
             + "': " + exception.what());
     }
     const LWValidatedPolicyConfiguration validated =
-        ValidateLWPolicyConfiguration(
-            this->params.config_node,
+        lw_validated_base_configuration_->validatePolicy(
             policy_config,
             config_path);
 

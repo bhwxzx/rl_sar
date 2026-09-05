@@ -77,7 +77,7 @@ RL_Real::RL_Real(int argc, char **argv)
     this->ang_vel_axis = "body";
     this->ReadYaml(this->robot_name, "base.yaml");
     SetLWBaseRuntimeConfiguration(
-        ValidateLWBaseConfiguration(
+        LWValidatedBaseConfiguration(
             this->params.config_node,
             this->ResolvePolicyPath(this->robot_name + "/base.yaml")));
     const auto& runtime_configuration = GetLWBaseRuntimeConfiguration();

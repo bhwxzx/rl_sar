@@ -109,7 +109,8 @@ void testRejectsInvalidConfiguration()
     bool rejected = false;
     try
     {
-        LWImuAhrsGuard guard(LWImuAhrsGuard::Duration::zero());
+        LWImuAhrsGuard guard(std::chrono::duration_cast<LWImuAhrsGuard::Duration>(
+            std::chrono::duration<float>(1.0e-12f)));
     }
     catch (const std::invalid_argument&)
     {

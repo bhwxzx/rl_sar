@@ -419,20 +419,17 @@ public:
         ang_vel_axis = "body";
         ReadYaml(robot_name, "base.yaml");
         SetLWBaseRuntimeConfiguration(
-            ValidateLWBaseConfiguration(
+            LWValidatedBaseConfiguration(
                 params.config_node,
                 ResolvePolicyPath("LW/base.yaml")));
-        const float imu_ahrs_pair_max_age_seconds =
-            params.Get<float>("imu_ahrs_pair_max_age");
+        const auto& base_configuration = GetLWBaseRuntimeConfiguration();
         imu_ahrs_guard_.setPairMaxAge(
             std::chrono::duration_cast<LWImuAhrsGuard::Duration>(
                 std::chrono::duration<float>(
-                    imu_ahrs_pair_max_age_seconds)));
-        const float serial_write_timeout_seconds =
-            params.Get<float>("serial_write_timeout");
+                    base_configuration.imu_ahrs_pair_max_age)));
         lw_sdk_.SetWriteTimeout(
             std::chrono::duration_cast<LWSDK::Duration>(
-                std::chrono::duration<float>(serial_write_timeout_seconds)));
+                std::chrono::duration<float>(base_configuration.serial_write_timeout)));
         try
         {
             if (options_.mode == ProfileMode::HardwareObserve)

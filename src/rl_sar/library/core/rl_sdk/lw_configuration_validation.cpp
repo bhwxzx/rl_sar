@@ -342,10 +342,11 @@ LWBaseRuntimeConfiguration ValidateLWBaseConfiguration(
     {
         fail(source, "key 'decimation' must be positive");
     }
-    requirePositiveFinite(config, "sensor_timeout", source);
-    requirePositiveFinite(config, "trusted_imu_timeout", source);
-    requirePositiveFinite(config, "imu_ahrs_pair_max_age", source);
-    requirePositiveFinite(config, "serial_write_timeout", source);
+    LWBaseRuntimeConfiguration runtime;
+    runtime.sensor_timeout = requirePositiveFinite(config, "sensor_timeout", source);
+    runtime.trusted_imu_timeout = requirePositiveFinite(config, "trusted_imu_timeout", source);
+    runtime.imu_ahrs_pair_max_age = requirePositiveFinite(config, "imu_ahrs_pair_max_age", source);
+    runtime.serial_write_timeout = requirePositiveFinite(config, "serial_write_timeout", source);
 
     const int cpu = requireValue<int>(config, "control_loop_cpu", source);
     if (cpu < -1)
@@ -403,7 +404,6 @@ LWBaseRuntimeConfiguration ValidateLWBaseConfiguration(
     requireUniqueIndices(config, "joint_mapping", dofs, dofs, source);
     requireUniqueIndices(config, "wheel_indices", 2, dofs, source);
 
-    LWBaseRuntimeConfiguration runtime;
     runtime.num_dofs = dofs;
     runtime.dt = config["dt"].as<float>();
     runtime.decimation = config["decimation"].as<int>();
@@ -430,12 +430,25 @@ LWBaseRuntimeConfiguration ValidateLWBaseConfiguration(
     return runtime;
 }
 
+LWValidatedBaseConfiguration::LWValidatedBaseConfiguration(
+    const YAML::Node& config, const std::string& source)
+    : config_(YAML::Clone(config)),
+      runtime_(ValidateLWBaseConfiguration(config_, source))
+{
+}
+
 LWValidatedPolicyConfiguration ValidateLWPolicyConfiguration(
     const YAML::Node& base_config,
     const YAML::Node& policy_config,
     const std::string& source)
 {
-    ValidateLWBaseConfiguration(base_config, "LW/base.yaml");
+    return LWValidatedBaseConfiguration(base_config, "LW/base.yaml")
+        .validatePolicy(policy_config, source);
+}
+
+LWValidatedPolicyConfiguration LWValidatedBaseConfiguration::validatePolicy(
+    const YAML::Node& policy_config, const std::string& source) const
+{
     if (!policy_config || !policy_config.IsMap())
     {
         fail(source, "policy configuration must be a map");
@@ -468,9 +481,8 @@ LWValidatedPolicyConfiguration ValidateLWPolicyConfiguration(
         requireNode(policy_config, key, source);
     }
 
-    YAML::Node merged = mergeConfiguration(base_config, policy_config);
-    const int base_num_dofs =
-        requireValue<int>(base_config, "num_of_dofs", source);
+    YAML::Node merged = mergeConfiguration(config_, policy_config);
+    const int base_num_dofs = static_cast<int>(runtime_.num_dofs);
     const int policy_num_dofs =
         requireValue<int>(policy_config, "num_of_dofs", source);
     if (policy_num_dofs != base_num_dofs)
