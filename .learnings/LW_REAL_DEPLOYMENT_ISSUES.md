@@ -14,7 +14,7 @@
 
 ## 当前待办
 
-LW-067～LW-069 已完成；当前待办为 LW-070、LW-071，尚未获实施审批。
+LW-067～LW-070 已完成；当前待办为 LW-071，尚未获实施审批。
 下表保留本轮处理进度，由用户选择下一项。
 
 | 顺序 | ID | 优先级 | 状态 | 问题 |
@@ -22,7 +22,7 @@ LW-067～LW-069 已完成；当前待办为 LW-070、LW-071，尚未获实施审
 | 1 | [LW-067](#lw-067) | P2 / medium | resolved | 修复构建目标检查对合法编译配置的误报 |
 | 2 | [LW-068](#lw-068) | P2 / low | resolved | 将只读动作裁剪配置校验集中到所属边界 |
 | 3 | [LW-069](#lw-069) | P2 / low | resolved | 合并基础配置及启动超时参数的重复校验 |
-| 4 | [LW-070](#lw-070) | P2 / low | pending | 将 ONNX 私有缓存不变量检查集中到加载阶段 |
+| 4 | [LW-070](#lw-070) | P2 / low | resolved | 将 ONNX 私有缓存不变量检查集中到加载阶段 |
 | 5 | [LW-071](#lw-071) | P2 / low | pending | 减少源码写法绑定和重复生命周期测试断言 |
 
 ## 本轮审查依据与边界
@@ -216,7 +216,7 @@ LW-067～LW-069 已完成；当前待办为 LW-070、LW-071，尚未获实施审
 ## [LW-070] Consolidate ONNX private-cache invariant checks at model load
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-050, LW-063
 
 ### Problem and Evidence
@@ -243,6 +243,28 @@ LW-067～LW-069 已完成；当前待办为 LW-070、LW-071，尚未获实施审
   than exposing partial caches. Valid inference remains numerically identical.
 - Invalid caller buffers and execution failures remain detectable.
 - Inference contracts, model isolation/lifetime, and runtime regressions pass.
+
+### Resolution (2026-09-05)
+
+- 用户明确批准仅实施 LW-070；变更与本验收记录一并提交。
+- 将 forwardInto 中四个私有元数据/名称容器的数量检查移到
+  setup_input_output_info 末尾，在 load 设置 loaded_ 之前建立缓存契约；
+  删除 validateOutput 中重复的输出元数据数量检查。
+- 保留模型已加载、调用方输入数量、空指针和缓冲区大小检查；保留实际
+  ONNX 输出的张量类型、float32 类型及元素数量校验和执行异常传播。
+  通用 Model::forward 接口检查、共享环境、模型隔离及并发约定均未修改。
+- 加载前及失败后的 reset_loaded_state 保持原样。扩展已有重载测试，覆盖
+  会话创建失败、输入元数据拒绝、输出元数据拒绝；每次失败均确认 loaded
+  为 false、元数据清空、forward/forwardInto 拒绝执行，随后加载不同维度
+  的合法模型并验证数值输出，排除残留缓存影响。
+- 在已有缓冲区测试中补充输入视图数组为空、输入数据为空和输出缓冲区
+  过长的拒绝用例；复用已有非法模型、输入数量/尺寸、输出为空/过短、
+  调用方存储保持、并发模型生命周期与合法模型数值回归。
+- 复用 `/tmp/lw067-debug`、`/tmp/lw067-strict` 重建全部目标，完整 CTest
+  各 **53/53** 通过（包括推理契约、配置、运行时一致性、分配约束和
+  profiler 回归）；git diff --check 通过。
+- 修改仅涉及推理实现、已有推理测试与本项记录；未处理 LW-071，未访问
+  真实硬件，未测量性能收益。
 
 ---
 

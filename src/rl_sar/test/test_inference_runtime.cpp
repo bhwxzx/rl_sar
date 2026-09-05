@@ -487,6 +487,19 @@ void testStaticModelAndInputValidation(const fs::path& directory)
                 {nullptr, 3});
         },
         "output tensor view is null");
+    requireFailure(
+        [&]() { model->forwardInto(nullptr, 1, {caller_output.data(), 3}); },
+        "input tensor view is null");
+    const InferenceRuntime::TensorView null_input{nullptr, 3};
+    requireFailure(
+        [&]() { model->forwardInto(&null_input, 1, {caller_output.data(), 3}); },
+        "input tensor view is null");
+    requireFailure(
+        [&]() {
+            std::vector<float> long_output(4);
+            model->forwardInto(&input_view, 1, {long_output.data(), long_output.size()});
+        },
+        "output element count must be 3, got 4");
 }
 
 void testUnsupportedModelsFailDuringLoad(const fs::path& directory)
@@ -526,21 +539,36 @@ void testFailedReloadClearsState(const fs::path& directory)
         directory,
         "reload_static.onnx",
         makeIdentityModel({fixed(1), fixed(2)}));
-    const fs::path invalid = writeModel(
+    const fs::path invalid_input = writeModel(
         directory,
         "reload_dynamic.onnx",
         makeIdentityModel({dynamic("batch"), fixed(2)}));
+    const fs::path invalid_output = writeModel(
+        directory, "reload_dynamic_output.onnx", makeDynamicOutputModel());
+    const fs::path replacement = writeModel(
+        directory, "reload_replacement.onnx", makeIdentityModel({fixed(1), fixed(3)}));
 
     InferenceRuntime::ONNXModel model;
-    require(model.load(valid.string()), "initial static load failed");
-    require(model.is_loaded(), "model did not report loaded state");
-    require(!model.load(invalid.string()), "dynamic reload unexpectedly passed");
-    require(!model.is_loaded(), "failed reload retained loaded state");
-    require(model.input_metadata().empty(), "failed reload retained input metadata");
-    require(model.output_metadata().empty(), "failed reload retained output metadata");
-    requireFailure(
-        [&]() { static_cast<void>(model.forward({{1.0F, 2.0F}})); },
-        "Model not loaded");
+    for (const auto& invalid : {directory / "missing.onnx", invalid_input, invalid_output})
+    {
+        require(model.load(valid.string()), "initial static load failed");
+        require(model.forward({{1.0F, 2.0F}}) == std::vector<float>({1.0F, 2.0F}),
+                "initial inference differs");
+        require(!model.load(invalid.string()), "invalid reload unexpectedly passed");
+        require(!model.is_loaded(), "failed reload retained loaded state");
+        require(model.input_metadata().empty(), "failed reload retained input metadata");
+        require(model.output_metadata().empty(), "failed reload retained output metadata");
+        requireFailure(
+            [&]() { static_cast<void>(model.forward({{1.0F, 2.0F}})); },
+            "Model not loaded");
+        requireFailure(
+            [&]() { model.forwardInto(nullptr, 0, {nullptr, 0}); },
+            "Model not loaded");
+        require(model.load(replacement.string()), "reload recovery failed");
+        require(model.is_loaded(), "recovered model did not report loaded state");
+        const std::vector<float> input{3.0F, -2.0F, 1.0F};
+        require(model.forward({input}) == input, "recovered model retained stale caches");
+    }
 }
 } // namespace
 

@@ -195,15 +195,6 @@ void ONNXModel::forwardInto(
             throw std::invalid_argument(
                 "ONNX inference requires exactly one input tensor");
         }
-        if (input_metadata_.size() != 1
-            || output_metadata_.size() != 1
-            || input_node_names_.size() != 1
-            || output_node_names_.size() != 1)
-        {
-            throw std::logic_error(
-                "ONNX model cache is inconsistent with the single-tensor contract");
-        }
-
         if (inputs == nullptr || inputs[0].data == nullptr)
         {
             throw std::invalid_argument("ONNX input tensor view is null");
@@ -375,15 +366,20 @@ void ONNXModel::setup_input_output_info()
             output_metadata_.back().shape,
             "cached ONNX output shape");
     }
+
+    // Establish the private cache invariant before load() publishes loaded_.
+    if (input_metadata_.size() != 1
+        || output_metadata_.size() != 1
+        || input_node_names_.size() != 1
+        || output_node_names_.size() != 1)
+    {
+        throw std::logic_error(
+            "ONNX model cache is inconsistent with the single-tensor contract");
+    }
 }
 
 void ONNXModel::validateOutput(const Ort::Value& output) const
 {
-    if (output_metadata_.size() != 1)
-    {
-        throw std::logic_error("ONNX output metadata cache is inconsistent");
-    }
-
     if (!output.IsTensor())
     {
         throw std::runtime_error("ONNX Runtime output is not a tensor");
