@@ -167,10 +167,28 @@ class BuildWorkflowTests(unittest.TestCase):
         ):
             self.assertNotIn(unused_dependency, cmake)
 
+    def test_dependency_discovery_precedes_use_and_is_target_scoped(self) -> None:
+        cmake = CMAKE_FILE.read_text(encoding="utf-8")
+        interpreter = cmake.index(
+            "find_package(Python3 COMPONENTS Interpreter REQUIRED)"
+        )
+        self.assertLess(interpreter, cmake.index("find_package(ament_cmake"))
+        self.assertLess(interpreter, cmake.index('"${Python3_EXECUTABLE}"'))
+        self.assertIn("find_package(yaml-cpp CONFIG REQUIRED", cmake)
         self.assertIn(
-            'list(APPEND PREBUILT_LIB_PATHS "${ONNX_RUNTIME_DIR}/lib")',
+            "target_compile_definitions(inference_runtime PUBLIC USE_ONNX)",
             cmake,
         )
+        for global_command in (
+            "add_definitions", "add_compile_definitions", "add_compile_options",
+            "include_directories", "link_directories",
+        ):
+            self.assertNotRegex(cmake, rf"(?m)^\s*{global_command}\s*\(")
+        for global_setting in (
+            "CMAKE_EXE_LINKER_FLAGS", "CMAKE_SHARED_LINKER_FLAGS",
+            "CMAKE_INSTALL_RPATH", "CMAKE_BUILD_WITH_INSTALL_RPATH",
+        ):
+            self.assertNotIn(f"set({global_setting}", cmake)
 
     def test_selected_builds_include_dependency_closure(self) -> None:
         content = BUILD_SCRIPT.read_text(encoding="utf-8")

@@ -217,7 +217,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 63 | LW-063 | P2 / low | resolved | Share the ONNX Runtime environment without weakening model isolation |
 | 64 | LW-064 | P2 / low | resolved | Remove or correctly implement the misleading FDILink CRC32 API |
 | 65 | LW-065 | P2 / low | resolved | Restore a clean FDILink lint and package-metadata baseline |
-| 66 | LW-066 | P2 / low | pending | Make dependency discovery ordered and build settings target-scoped |
+| 66 | LW-066 | P2 / low | resolved | Make dependency discovery ordered and build settings target-scoped |
 
 ---
 
@@ -5483,7 +5483,7 @@ baseline noise, and makes package provenance unsuitable for release.
 ## [LW-066] Make dependency discovery ordered and build settings target-scoped
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-018, LW-027, LW-058
 
 ### Problem
@@ -5525,6 +5525,46 @@ provenance harder to reason about.
 - Debug, strict, production Release, Jetson configuration, runtime-linkage, and
   build-workflow regressions pass from clean build directories.
 - Generated deployment paths and installed runtime resolution remain unchanged.
+
+### Resolution (2026-09-05)
+
+- 用户明确批准实施 LW-066；仅修改 rl_sar 的 CMake、构建工作流测试，新增
+  生成目标属性回归测试，并更新本项记录；这些变更与本记录一并提交。
+- 显式发现 Python Interpreter 已移到 ament 及生产 provenance 命令之前。
+  全新 Debug/生产配置自动找到系统 Python 3.10；严格构建显式选用 Conda
+  Python 3.13.9，仍不向 C++ 目标引入 Python 运行库。
+- 去掉全局定义、头文件目录、链接搜索目录、链接器选项和累计 RPATH。
+  各库公开自身头文件与实际依赖；USE_ONNX 由 inference_runtime PUBLIC
+  传播以保持公开类布局一致，POLICY_DIR 仅由开发版 rl_sdk PUBLIC 传播，
+  模拟器源码路径宏仅属于 rl_sim_LW；删除未使用的全局 Boost 宏。严格警告
+  PRIVATE 应用于本目录受维护编译目标，vendor 目标不继承这些警告选项。
+- yaml-cpp 通过显式 CONFIG 查找和导入目标链接；Linux 使用系统 multiarch
+  配置目录，与已有系统 fmt 隔离策略一致。ONNX/MuJoCo 链接选项仅传播到
+  实际消费者；构建 RPATH 由目标依赖生成，安装路径仅设置到对应安装目标。
+  生产真机与 profiler 保留原有 `$ORIGIN/onnxruntime` 和安装布局。
+- 新增 lw_build_target_scope，读取 compile_commands.json 和 ELF 动态段，
+  检查头文件/ABI 宏、维护与 vendor 警告范围、普通目标依赖隔离，以及代表性
+  二进制的 ONNX/MuJoCo RPATH 与无 Python/Conda 链接约束。构建工作流测试
+  同时锁定 Python 发现顺序和禁止全局设置。用旧 build 产物作负对照时，
+  新检查按预期拒绝旧的全局 ONNX 设置。
+- 全新 `/tmp/lw066-debug` 与 `/tmp/lw066-strict` 构建成功；两者完整 CTest
+  均为 **52/52** 通过。严格构建使用 `LW_STRICT_WARNINGS=ON`。
+  独立干净副本 `/tmp/lw066-production.Jq9VTu/repo` 的生产 Release 构建
+  成功，完整 CTest **48/48** 通过；配置未传入 Python3_EXECUTABLE，ONNX
+  provenance 校验正常执行。隔离副本验证快照为 `10131b1`，不是主分支提交。
+- 在该隔离副本运行现有 build_lw_deployment.sh，重新构建 serial、FDILink
+  和 rl_sar；安装及迁移后的包解析、launch 参数解析、动态库解析、策略哈希
+  和 `--verify-deployment-only` 均通过。readelf 确认生产 RPATH 精确为
+  `$ORIGIN/onnxruntime`；ldd 确认 ONNX 位于包内，yaml-cpp/fmt 来自系统，
+  不含 libpython/Conda/MuJoCo。保留验证包于
+  `/tmp/lw066-production.Jq9VTu/bundle`，并非正式发布包。
+- 全新 `/tmp/lw066-jetson-config` 用平台检测测试覆盖项进入 Jetson 模式，
+  未生成 MuJoCo/rl_sim_LW 目标；Jetson 检测、运行库架构、构建工作流三项
+  CTest **3/3** 通过。缺失 ONNX 的全新 Jetson 配置按预期失败。本机为
+  x86_64，这只是配置分支回归，不宣称已完成 aarch64 编译或 Jetson 实机验证。
+- git diff --check 通过。未改动策略或控制逻辑，未访问真实串口、IMU、
+  电机或启动 MuJoCo GUI；部署进程仅运行验证模式。用户未跟踪技能目录
+  保持原样，未纳入修改或提交；未处理其他问题。
 
 ---
 

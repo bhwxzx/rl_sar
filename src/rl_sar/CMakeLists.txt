@@ -10,42 +10,33 @@ option(
     "Treat warnings in maintained LW targets as build errors"
     OFF
 )
-if(LW_STRICT_WARNINGS)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        add_compile_options(
-            "$<$<COMPILE_LANGUAGE:CXX>:-Wall>"
-            "$<$<COMPILE_LANGUAGE:CXX>:-Wextra>"
-            "$<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>"
-            "$<$<COMPILE_LANGUAGE:CXX>:-Werror>"
-        )
-    elseif(MSVC)
-        add_compile_options(
-            "$<$<COMPILE_LANGUAGE:CXX>:/W4>"
-            "$<$<COMPILE_LANGUAGE:CXX>:/WX>"
-        )
-    else()
-        message(FATAL_ERROR
-            "LW_STRICT_WARNINGS is unsupported by ${CMAKE_CXX_COMPILER_ID}")
+function(lw_enable_strict_warnings target_name)
+    if(LW_STRICT_WARNINGS)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(${target_name} PRIVATE
+                "$<$<COMPILE_LANGUAGE:CXX>:-Wall>"
+                "$<$<COMPILE_LANGUAGE:CXX>:-Wextra>"
+                "$<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>"
+                "$<$<COMPILE_LANGUAGE:CXX>:-Werror>"
+            )
+        elseif(MSVC)
+            target_compile_options(${target_name} PRIVATE
+                "$<$<COMPILE_LANGUAGE:CXX>:/W4>"
+                "$<$<COMPILE_LANGUAGE:CXX>:/WX>"
+            )
+        else()
+            message(FATAL_ERROR
+                "LW_STRICT_WARNINGS is unsupported by ${CMAKE_CXX_COMPILER_ID}")
+        endif()
     endif()
-endif()
+endfunction()
 
 function(lw_silence_vendor_warnings target_name)
     if(NOT TARGET ${target_name})
         message(FATAL_ERROR "Unknown LW vendor target: ${target_name}")
     endif()
-    if(LW_STRICT_WARNINGS)
-        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-            target_compile_options(
-                ${target_name} PRIVATE
-                "$<$<COMPILE_LANGUAGE:CXX>:-w>"
-            )
-        elseif(MSVC)
-            target_compile_options(
-                ${target_name} PRIVATE
-                "$<$<COMPILE_LANGUAGE:CXX>:/w>"
-            )
-        endif()
-    endif()
+    # Vendor targets do not inherit the maintained-code warning policy.
+    set_property(TARGET ${target_name} PROPERTY LW_VENDOR_TARGET TRUE)
 endfunction()
 
 # System environment detection
@@ -55,10 +46,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug)
-endif()
-string(TOUPPER "${CMAKE_BUILD_TYPE}" UPPER_BUILD_TYPE)
-if(UPPER_BUILD_TYPE STREQUAL "DEBUG")
-    add_compile_options(-g)
 endif()
 
 # Get project root directory
@@ -102,10 +89,8 @@ if(LW_PRODUCTION_DEPLOYMENT)
     endif()
 endif()
 
-add_definitions(-DCMAKE_CURRENT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-add_definitions(-DPOLICY_DIR="${PROJECT_ROOT_DIR}/policy")
-add_definitions(-DBOOST_BIND_GLOBAL_PLACEHOLDERS)
-
+# Discover our interpreter before ament or any provenance command can use it.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -192,8 +177,6 @@ if(EXISTS "${ONNX_RUNTIME_DIR}/include" AND EXISTS "${ONNX_RUNTIME_DIR}/lib")
         string(STRIP "${ONNX_RUNTIME_VERSION}" ONNX_RUNTIME_VERSION)
     endif()
 
-    include_directories("${ONNX_RUNTIME_DIR}/include")
-
     # Detect library extension
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         set(LIB_EXT "so")
@@ -218,7 +201,6 @@ if(EXISTS "${ONNX_RUNTIME_DIR}/include" AND EXISTS "${ONNX_RUNTIME_DIR}/lib")
 
     if(ONNX_RUNTIME_LIB_PATH)
         set(USE_ONNX "ON")
-        add_compile_definitions(USE_ONNX)
         if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
             add_library(onnxruntime_prebuilt STATIC IMPORTED GLOBAL)
         else()
@@ -229,6 +211,11 @@ if(EXISTS "${ONNX_RUNTIME_DIR}/include" AND EXISTS "${ONNX_RUNTIME_DIR}/lib")
             IMPORTED_LOCATION "${ONNX_RUNTIME_LIB_PATH}"
             INTERFACE_INCLUDE_DIRECTORIES "${ONNX_RUNTIME_DIR}/include"
         )
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            # CMake 3.10-compatible transitive linker option, only for consumers.
+            target_link_libraries(onnxruntime_prebuilt INTERFACE
+                "-Wl,--disable-new-dtags")
+        endif()
 
         set(ONNX_RUNTIME_LIB onnxruntime_prebuilt)
         message(STATUS "ONNX Runtime library: ${ONNX_RUNTIME_LIB_PATH}")
@@ -308,30 +295,8 @@ else()
     endif()
 endif()
 
-# RPATH Configuration for inference libraries
-if(USE_ONNX)
-    set(CMAKE_SKIP_BUILD_RPATH FALSE)
-    set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
-    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
-
-    set(PREBUILT_LIB_PATHS "")
-    list(APPEND PREBUILT_LIB_PATHS "${ONNX_RUNTIME_DIR}/lib")
-    set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${PREBUILT_LIB_PATHS}")
-
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--disable-new-dtags")
-        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--disable-new-dtags")
-    endif()
-
-    message(STATUS "Configured RPATH:")
-    foreach(path ${PREBUILT_LIB_PATHS})
-        message(STATUS "  - ${path}")
-    endforeach()
-endif()
-
 find_package(TBB REQUIRED)
 find_package(Threads REQUIRED)
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -453,9 +418,24 @@ if(BUILD_TESTING)
 endif()
 
 if(SYSTEM_TYPE STREQUAL "Linux")
+    # Like fmt, use the ROS system ABI, not a package in the active Conda prefix.
+    set(LW_SYSTEM_YAML_CONFIG_DIR
+        "/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/cmake/yaml-cpp")
+    set(yaml-cpp_DIR "${LW_SYSTEM_YAML_CONFIG_DIR}")
+    find_package(yaml-cpp CONFIG REQUIRED
+        PATHS "${LW_SYSTEM_YAML_CONFIG_DIR}" NO_DEFAULT_PATH)
+else()
+    find_package(yaml-cpp CONFIG REQUIRED)
+endif()
+if(TARGET yaml-cpp::yaml-cpp)
+    set(YAML_CPP_LIBRARIES yaml-cpp::yaml-cpp)
+elseif(TARGET yaml-cpp)
     set(YAML_CPP_LIBRARIES yaml-cpp)
-link_directories(/usr/local/lib)
-include_directories(${YAML_CPP_INCLUDE_DIR})
+else()
+    message(FATAL_ERROR "yaml-cpp must provide an imported CMake target")
+endif()
+
+if(SYSTEM_TYPE STREQUAL "Linux")
     find_package(OpenSSL REQUIRED)
     add_library(
         lw_deployment_bundle
@@ -469,14 +449,6 @@ include_directories(${YAML_CPP_INCLUDE_DIR})
         lw_deployment_bundle
         PUBLIC ${YAML_CPP_LIBRARIES} OpenSSL::Crypto
     )
-elseif(SYSTEM_TYPE STREQUAL "Darwin")
-    find_library(YAML_CPP_LIB yaml-cpp REQUIRED)
-    set(YAML_CPP_LIBRARIES ${YAML_CPP_LIB})
-    link_directories(/opt/homebrew/lib)
-    if(YAML_CPP_INCLUDE_DIR)
-        include_directories(${YAML_CPP_INCLUDE_DIR})
-    endif()
-
 endif()
 
 # LW_sdk
@@ -528,27 +500,14 @@ if(BUILD_TESTING)
     add_test(NAME lw_debug_publisher COMMAND test_lw_debug_publisher)
 endif()
 
-include_directories(
-    include
-    library/core/observation_buffer
-    library/core/rl_sdk
-    library/core/loop
-    library/core/safety
-    library/core/debug
-    library/core/fsm
-    library/core/vector_math
-    library/core/motion_loader
-    library/core/inference_runtime
-    library/core/logger
-    library/core/simulation
-    fsm_robot
-)
-
 # library for inference runtime
 add_library(inference_runtime library/core/inference_runtime/inference_runtime.cpp)
+target_include_directories(inference_runtime PUBLIC
+    library/core/inference_runtime library/core/logger)
 if(USE_ONNX)
     target_link_libraries(inference_runtime PUBLIC ${ONNX_RUNTIME_LIB})
-    target_compile_definitions(inference_runtime PRIVATE USE_ONNX)
+    # This macro changes the public class layout; consumers must agree.
+    target_compile_definitions(inference_runtime PUBLIC USE_ONNX)
 endif()
 
 add_library(
@@ -571,12 +530,16 @@ install(TARGETS inference_runtime DESTINATION lib/${PROJECT_NAME})
 
 # library for LW motion loader
 add_library(motion_loader_lw library/core/motion_loader/motion_loader_lw.cpp)
+target_include_directories(motion_loader_lw
+    PUBLIC library/core/motion_loader library/core/vector_math
+    PRIVATE library/core/logger)
 
 # library for rl sdk
 add_library(
     lw_configuration_validation
     library/core/rl_sdk/lw_configuration_validation.cpp
 )
+target_include_directories(lw_configuration_validation PUBLIC library/core/rl_sdk)
 target_link_libraries(lw_configuration_validation PUBLIC
     inference_runtime
     ${YAML_CPP_LIBRARIES}
@@ -590,8 +553,13 @@ target_compile_definitions(
     rl_sdk_lw_deployment
     PUBLIC RL_REQUIRE_EXPLICIT_POLICY_ROOT
 )
+# Only the development SDK initializes a default root in its public header.
+target_compile_definitions(rl_sdk PUBLIC POLICY_DIR="${PROJECT_ROOT_DIR}/policy")
 foreach(RL_SDK_TARGET rl_sdk rl_sdk_lw_deployment)
+    target_include_directories(${RL_SDK_TARGET} PUBLIC
+        library/core/rl_sdk library/core/fsm library/core/safety)
     target_link_libraries(${RL_SDK_TARGET} PUBLIC
+        observation_buffer
         motion_loader_lw
         inference_runtime
         lw_configuration_validation
@@ -792,6 +760,7 @@ if(BUILD_TESTING)
     add_executable(test_lw_joystick_safety
         test/test_lw_joystick_safety.cpp
     )
+    target_include_directories(test_lw_joystick_safety PRIVATE library/core/safety)
     if(TARGET lw_joystick_vendor)
         target_link_libraries(
             test_lw_joystick_safety
@@ -803,6 +772,7 @@ if(BUILD_TESTING)
     add_executable(test_lw_runtime_sync
         test/test_lw_runtime_sync.cpp
     )
+    target_include_directories(test_lw_runtime_sync PRIVATE library/core/safety)
     target_link_libraries(test_lw_runtime_sync PRIVATE
         Threads::Threads
     )
@@ -905,6 +875,8 @@ if(BUILD_TESTING)
         test_lw_config_profile
         test/test_lw_config_profile.cpp
     )
+    target_include_directories(test_lw_config_profile PRIVATE
+        library/core/safety library/core/loop library/core/logger)
     target_link_libraries(
         test_lw_config_profile
         PRIVATE Threads::Threads
@@ -928,6 +900,7 @@ install(TARGETS rl_sdk DESTINATION lib/${PROJECT_NAME})
 
 # library for observation buffer
 add_library(observation_buffer library/core/observation_buffer/observation_buffer.cpp)
+target_include_directories(observation_buffer PUBLIC library/core/observation_buffer)
 install(TARGETS observation_buffer DESTINATION lib/${PROJECT_NAME})
 if(BUILD_TESTING)
     add_executable(
@@ -958,10 +931,6 @@ if(SYSTEM_TYPE STREQUAL "Linux"
         set(MUJOCO_INCLUDE_DIR "${MUJOCO_DIR}/include")
         set(MUJOCO_LIB_DIR "${MUJOCO_DIR}/lib")
 
-        # Add MuJoCo library path to global RPATH
-        set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${MUJOCO_LIB_DIR}")
-        message(STATUS "Added MuJoCo to RPATH: ${MUJOCO_LIB_DIR}")
-
         # Find GLFW
         find_package(glfw3 REQUIRED)
 
@@ -975,6 +944,7 @@ if(SYSTEM_TYPE STREQUAL "Linux"
             INTERFACE_INCLUDE_DIRECTORIES "${MUJOCO_INCLUDE_DIR}"
             IMPORTED_NO_SONAME TRUE
         )
+        target_link_libraries(mujoco_prebuilt INTERFACE "-Wl,--disable-new-dtags")
 
         add_library(
             lw_mujoco_control_adapter
@@ -1005,6 +975,10 @@ if(SYSTEM_TYPE STREQUAL "Linux"
 
         # Build executable
         add_executable(rl_sim_LW src/rl_sim_LW.cpp)
+        target_include_directories(rl_sim_LW PRIVATE include fsm_robot library/core/loop)
+        target_compile_definitions(rl_sim_LW PRIVATE
+            CMAKE_CURRENT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        set_property(TARGET rl_sim_LW APPEND PROPERTY INSTALL_RPATH "${MUJOCO_LIB_DIR}")
 
         target_link_libraries(rl_sim_LW
             rl_sdk observation_buffer lw_mujoco_control_adapter
@@ -1109,6 +1083,8 @@ if(SYSTEM_TYPE STREQUAL "Linux")
             lw_config_profiler
             src/lw_config_profiler.cpp
         )
+        target_include_directories(rl_real_LW PRIVATE include fsm_robot library/core/loop)
+        target_include_directories(lw_config_profiler PRIVATE library/core/loop)
         target_link_libraries(rl_real_LW
             LW_sdk
             lw_joystick_vendor
@@ -1214,6 +1190,16 @@ if(BUILD_TESTING AND SYSTEM_TYPE STREQUAL "Linux")
             ${CMAKE_CURRENT_SOURCE_DIR}/test/test_lw_runtime_linkage.py
             ${LW_RUNTIME_LINKAGE_TEST_ARGUMENTS}
     )
+    add_test(
+        NAME lw_build_target_scope
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test/test_lw_build_target_scope.py
+            --build-dir ${CMAKE_CURRENT_BINARY_DIR}
+            --onnx-dir ${ONNX_RUNTIME_DIR}
+            --mujoco-dir ${PROJECT_ROOT_DIR}/library/mujoco
+            --strict $<IF:$<BOOL:${LW_STRICT_WARNINGS}>,ON,OFF>
+            --readelf ${LW_READELF_EXECUTABLE}
+    )
 endif()
 
 # executable for actuator net
@@ -1268,6 +1254,45 @@ if(LW_PRODUCTION_DEPLOYMENT)
             DESTINATION share/${PROJECT_NAME}/${dir}
         )
 endif()
+
+# Robot FSM headers belong only to the targets that exercise the LW FSM.
+if(BUILD_TESTING)
+    foreach(LW_FSM_TEST test_lw_fsm_transitions test_lw_allocation_bound
+                        test_lw_motion_reference_rate)
+        target_include_directories(${LW_FSM_TEST} PRIVATE fsm_robot)
+    endforeach()
+endif()
+
+# Build RPATH is derived by CMake from each target's link dependencies. Only
+# installed runtime consumers need explicit install paths; production executables
+# retain the relocatable $ORIGIN path set above.
+if(USE_ONNX)
+    foreach(LW_INSTALLED_ONNX_TARGET inference_runtime rl_sdk rl_sim_LW
+                                     rl_real_LW lw_config_profiler)
+        if(TARGET ${LW_INSTALLED_ONNX_TARGET})
+            if(LW_PRODUCTION_DEPLOYMENT AND
+               LW_INSTALLED_ONNX_TARGET MATCHES "^(rl_real_LW|lw_config_profiler)$")
+                continue()
+            endif()
+            set_property(TARGET ${LW_INSTALLED_ONNX_TARGET} APPEND PROPERTY
+                INSTALL_RPATH "${ONNX_RUNTIME_DIR}/lib")
+            set_property(TARGET ${LW_INSTALLED_ONNX_TARGET} PROPERTY
+                INSTALL_RPATH_USE_LINK_PATH FALSE)
+        endif()
+    endforeach()
+endif()
+
+# Apply warnings to this directory's maintained compiled targets, never imported
+# dependencies, interface usage requirements, or vendor compilation units.
+get_property(LW_BUILD_TARGETS DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(LW_BUILD_TARGET IN LISTS LW_BUILD_TARGETS)
+    get_target_property(LW_TARGET_TYPE ${LW_BUILD_TARGET} TYPE)
+    get_target_property(LW_TARGET_VENDOR ${LW_BUILD_TARGET} LW_VENDOR_TARGET)
+    if(NOT LW_TARGET_VENDOR AND
+       LW_TARGET_TYPE MATCHES "^(EXECUTABLE|STATIC_LIBRARY|SHARED_LIBRARY|OBJECT_LIBRARY|MODULE_LIBRARY)$")
+        lw_enable_strict_warnings(${LW_BUILD_TARGET})
+    endif()
+endforeach()
 
 # add_executable(test_vector_math test/test_vector_math.cpp)
 # install(TARGETS test_vector_math DESTINATION lib/${PROJECT_NAME})
