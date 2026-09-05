@@ -618,6 +618,58 @@ void testInvalidPolicyConfigurationIsRejected()
         "motion_time_offset_frames' must be nonnegative");
 }
 
+void testActionClippingConfigurationIsValidatedAtLoad()
+{
+    const fs::path policy_root(POLICY_DIR);
+    const YAML::Node base = loadConfig(policy_root / "LW/base.yaml", "LW");
+    const YAML::Node original = loadConfig(
+        policy_root / "LW/robot_lab/leg_loco/config.yaml",
+        "LW/robot_lab/leg_loco");
+    for (const std::string key : {"clip_actions_lower", "clip_actions_upper"})
+    {
+        const auto reject = [&](const YAML::Node& candidate)
+        {
+            requireFailure(
+                [&]() { ValidateLWPolicyConfiguration(base, candidate, "clipping"); },
+                key);
+        };
+        YAML::Node missing = YAML::Clone(original);
+        missing.remove(key);
+        reject(missing);
+        YAML::Node scalar = YAML::Clone(original);
+        scalar[key] = "not-a-vector";
+        reject(scalar);
+        for (const std::size_t size : {0U, 9U, 11U})
+        {
+            YAML::Node candidate = YAML::Clone(original);
+            candidate[key] = std::vector<float>(size, 0.0f);
+            reject(candidate);
+        }
+        for (const float invalid : {std::numeric_limits<float>::quiet_NaN(),
+                                    std::numeric_limits<float>::infinity(),
+                                    -std::numeric_limits<float>::infinity()})
+        {
+            YAML::Node candidate = YAML::Clone(original);
+            auto bounds = candidate[key].as<std::vector<float>>();
+            bounds[3] = invalid;
+            candidate[key] = bounds;
+            reject(candidate);
+        }
+    }
+    YAML::Node reversed = YAML::Clone(original);
+    auto lower = reversed["clip_actions_lower"].as<std::vector<float>>();
+    lower[0] = reversed["clip_actions_upper"][0].as<float>() + 1.0f;
+    reversed["clip_actions_lower"] = lower;
+    requireFailure(
+        [&]() { ValidateLWPolicyConfiguration(base, reversed, "reversed-clipping"); },
+        "clip_actions_lower exceeds clip_actions_upper");
+
+    reversed["clip_actions_upper"][0] = lower[0];
+    const auto equal = ValidateLWPolicyConfiguration(base, reversed, "equal-clipping");
+    require(equal.runtime.clip_actions_lower[0] == equal.runtime.clip_actions_upper[0],
+            "equal clipping bounds must remain valid");
+}
+
 void testModelDimensionMismatchIsRejected()
 {
     const LWPolicyDimensions dimensions{10, 59, 59, 10};
@@ -684,6 +736,7 @@ int main()
         testMotionObservationContracts();
         testInvalidBaseConfigurationIsRejected();
         testInvalidPolicyConfigurationIsRejected();
+        testActionClippingConfigurationIsValidatedAtLoad();
         testModelDimensionMismatchIsRejected();
         testObservationQuaternionUsesWxyzIdentity();
     }

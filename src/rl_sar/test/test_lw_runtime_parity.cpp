@@ -142,7 +142,7 @@ public:
         require(output.size == kNumDofs, "counting model output differs");
         ++forward_calls;
         last_input.assign(inputs[0].data, inputs[0].data + inputs[0].size);
-        std::fill_n(output.data, output.size, 0.0f);
+        std::copy(actions.begin(), actions.end(), output.data);
     }
 
     std::string get_model_type() const override
@@ -152,6 +152,7 @@ public:
 
     std::size_t forward_calls = 0;
     std::vector<float> last_input;
+    std::vector<float> actions = std::vector<float>(kNumDofs, 0.0f);
 };
 
 struct AdapterTrace
@@ -333,6 +334,57 @@ MotionInferenceSetup prepareMotionInferenceHarness(
         harness.rl.ActivateLWPolicy(policy);
     harness.cycle(0.4f);
     return {std::move(model), generation};
+}
+
+void testValidatedActionClippingAndInvalidModelOutputs()
+{
+    {
+        Harness harness;
+        const auto setup = prepareMotionInferenceHarness(harness, {"ang_vel"}, 3);
+        const auto definition = harness.rl.GetLWPolicyDefinition(
+            "LW/robot_lab/leg_to_wheel");
+        const auto& lower = definition->runtime.clip_actions_lower;
+        const auto& upper = definition->runtime.clip_actions_upper;
+        std::vector<float> expected(kNumDofs);
+        for (std::size_t i = 0; i < kNumDofs; ++i)
+        {
+            switch (i % 5)
+            {
+                case 0: setup.model->actions[i] = lower[i] - 1.0f;
+                        expected[i] = lower[i]; break;
+                case 1: setup.model->actions[i] = lower[i];
+                        expected[i] = lower[i]; break;
+                case 2: setup.model->actions[i] = (lower[i] + upper[i]) * 0.5f;
+                        expected[i] = setup.model->actions[i]; break;
+                case 3: setup.model->actions[i] = upper[i];
+                        expected[i] = upper[i]; break;
+                case 4: setup.model->actions[i] = upper[i] + 1.0f;
+                        expected[i] = upper[i]; break;
+            }
+        }
+        harness.core.runInferenceCycle(false);
+        LWInferenceTraceSnapshot trace;
+        require(harness.core.readInferenceTrace(trace), "clipped inference was not published");
+        requireVectorEqual(trace.observations.actions, expected, "clipped model actions");
+        require(harness.rl.LoadLWPolicyOutput() != nullptr, "clipped policy output is missing");
+    }
+    for (const float invalid : {std::numeric_limits<float>::quiet_NaN(),
+                                std::numeric_limits<float>::infinity(),
+                                -std::numeric_limits<float>::infinity()})
+    {
+        Harness harness;
+        const auto setup = prepareMotionInferenceHarness(harness, {"ang_vel"}, 3);
+        setup.model->actions[2] = invalid;
+        harness.core.runInferenceCycle(false);
+        require(setup.model->forward_calls == 1, "invalid-action model was not exercised");
+        require(harness.core.safetySnapshot().decision.latest_event
+                    == LWSafetyEvent::PolicyActionInvalid,
+                "invalid model action was clipped or classified incorrectly");
+        require(harness.core.controlledFallbackLatched(), "invalid action did not latch fallback");
+        require(harness.adapter.actions.back() == LWSafetyAction::PassiveDamping,
+                "invalid action did not request passive damping");
+        require(harness.rl.LoadLWPolicyOutput() == nullptr, "invalid action output was published");
+    }
 }
 
 LWMotionReferenceSnapshot makeMotionReference(
@@ -1076,6 +1128,7 @@ int main()
         testTemporaryInhibitionPreservesPhaseClock();
         testInputIsConsumedOnceAndHeldOutputRemainsUsable();
         testMotionReferenceRuntimeGating();
+        testValidatedActionClippingAndInvalidModelOutputs();
         testStalledControlInputTriggersS2Parity();
         testPolicyGenerationSwitchWaitsForMatchingInput();
         testPolicyGenerationSwitchBindsTypedRuntimeConfiguration();

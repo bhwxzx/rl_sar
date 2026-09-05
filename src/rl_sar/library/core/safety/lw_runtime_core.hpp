@@ -605,35 +605,14 @@ private:
             policy_configuration.clip_actions_upper;
         const auto& lower =
             policy_configuration.clip_actions_lower;
-        if (!upper.empty() && !lower.empty())
+        // Bounds belong to the immutable policy definition and were validated
+        // by ValidateLWPolicyConfiguration before preloading/activation.
+        for (std::size_t index = 0; index < num_dofs; ++index)
         {
-            const LWValidationResult upper_result =
-                LWValidateFiniteVector(
-                    LWValidationField::ClipActionsUpper,
-                    upper,
-                    num_dofs);
-            const LWValidationResult lower_result =
-                LWValidateFiniteVector(
-                    LWValidationField::ClipActionsLower,
-                    lower,
-                    num_dofs);
-            if (!upper_result.valid() || !lower_result.valid())
-            {
-                const LWValidationResult& clip_result =
-                    upper_result.valid() ? lower_result : upper_result;
-                reportSafetyEvent(
-                    LWSafetyEvent::PolicyConfigurationInvalid,
-                    "[Safety] Invalid LW action clipping configuration: "
-                        + clip_result.failureDescription());
-                return false;
-            }
-            for (std::size_t index = 0; index < num_dofs; ++index)
-            {
-                inference_obs_.actions[index] = clamp(
-                    inference_obs_.actions[index],
-                    lower[index],
-                    upper[index]);
-            }
+            inference_obs_.actions[index] = clamp(
+                inference_obs_.actions[index],
+                lower[index],
+                upper[index]);
         }
         return true;
     }

@@ -14,13 +14,13 @@
 
 ## 当前待办
 
-LW-067 已完成；当前待办为 LW-068～LW-071，尚未获实施审批。
+LW-067、LW-068 已完成；当前待办为 LW-069～LW-071，尚未获实施审批。
 下表保留本轮处理进度，由用户选择下一项。
 
 | 顺序 | ID | 优先级 | 状态 | 问题 |
 |---:|---|---|---|---|
 | 1 | [LW-067](#lw-067) | P2 / medium | resolved | 修复构建目标检查对合法编译配置的误报 |
-| 2 | [LW-068](#lw-068) | P2 / low | pending | 将只读动作裁剪配置校验集中到所属边界 |
+| 2 | [LW-068](#lw-068) | P2 / low | resolved | 将只读动作裁剪配置校验集中到所属边界 |
 | 3 | [LW-069](#lw-069) | P2 / low | pending | 合并基础配置及启动超时参数的重复校验 |
 | 4 | [LW-070](#lw-070) | P2 / low | pending | 将 ONNX 私有缓存不变量检查集中到加载阶段 |
 | 5 | [LW-071](#lw-071) | P2 / low | pending | 减少源码写法绑定和重复生命周期测试断言 |
@@ -103,7 +103,7 @@ LW-067 已完成；当前待办为 LW-068～LW-071，尚未获实施审批。
 ## [LW-068] Validate immutable action-clipping configuration at its owning boundary
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-013, LW-038
 
 ### Problem and Evidence
@@ -130,6 +130,25 @@ LW-067 已完成；当前待办为 LW-068～LW-071，尚未获实施审批。
 - Finite actions retain identical clipping results; invalid model actions
   retain the existing safety response.
 - Configuration, inference/runtime parity, and allocation regressions pass.
+
+### Resolution (2026-09-05)
+
+- 用户明确批准仅实施 LW-068；变更与本验收记录一并提交。
+- 已核对真机、Sim2Sim 与 profiler 的正式调用路径：PreloadModel 先调用
+  ValidateLWPolicyConfiguration，再由 PreloadLWPolicyContext 发布只读定义，
+  ActivateLWPolicy 只激活已预加载的定义。保留现有加载校验，不新增重复入口。
+- lw_runtime_core.hpp 删除每轮对裁剪上下限长度/有限值的重复扫描及空数组
+  跳过分支，直接使用已验证上下限裁剪。每轮模型动作尺寸/有限值检查、
+  裁剪后的输出检查和安全响应保持原样。
+- 在已有配置测试中覆盖两侧边界缺失、非数组、空数组、长度错误、NaN/Inf、
+  上下限颠倒及上下限相等；在已有运行时测试中注入固定模型输出，核对区间内、
+  边界上和越界动作的裁剪结果，并验证 NaN、正负 Inf 触发
+  PolicyActionInvalid/PassiveDamping 且不发布策略输出。
+- 配置、运行时一致性及分配约束定向 CTest **3/3** 通过；在已有
+  `/tmp/lw067-debug` 和 `/tmp/lw067-strict` 目录重建全部目标，两者完整
+  CTest 各 **53/53** 通过。git diff --check 通过。
+- 修改限于运行时核心、上述两份测试及本项记录；策略资产、控制时序与其他
+  问题未修改，未访问真实硬件。未测量性能收益，也未进行新的生产部署验证。
 
 ---
 
