@@ -14,11 +14,12 @@
 
 ## 当前待办
 
-当前待办为 LW-067～LW-071，均未获实施审批。按照下表顺序，由用户选择下一项。
+LW-067 已完成；当前待办为 LW-068～LW-071，尚未获实施审批。
+下表保留本轮处理进度，由用户选择下一项。
 
 | 顺序 | ID | 优先级 | 状态 | 问题 |
 |---:|---|---|---|---|
-| 1 | [LW-067](#lw-067) | P2 / medium | pending | 修复构建目标检查对合法编译配置的误报 |
+| 1 | [LW-067](#lw-067) | P2 / medium | resolved | 修复构建目标检查对合法编译配置的误报 |
 | 2 | [LW-068](#lw-068) | P2 / low | pending | 将只读动作裁剪配置校验集中到所属边界 |
 | 3 | [LW-069](#lw-069) | P2 / low | pending | 合并基础配置及启动超时参数的重复校验 |
 | 4 | [LW-070](#lw-070) | P2 / low | pending | 将 ONNX 私有缓存不变量检查集中到加载阶段 |
@@ -42,7 +43,7 @@
 ## [LW-067] Fix target-scope test false positives for valid compiler configurations
 
 **Priority**: P2 / medium
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-066
 
 ### Problem and Evidence
@@ -70,6 +71,30 @@
   project strict-warning settings are still detected by negative cases.
 - Ordinary Debug and strict checks remain green; no production RPATH or
   application behavior changes.
+
+### Resolution (2026-09-05)
+
+- 用户明确批准仅实施 LW-067；变更与本验收记录一并提交。
+- 参数检查统一解析分离/连写的 include、define、undefine 选项，支持
+  相对路径和带空格路径。SDK/ONNX 隔离检查使用解析后的路径与宏。
+- CMake 仅在 Linux BUILD_TESTING 下导出各编译目标实际 COMPILE_OPTIONS；
+  严格警告同时核对目标属性与最终命令，允许用户通过 CMAKE_CXX_FLAGS
+  额外启用警告。检查仍能拒绝项目给 vendor 施加的严格警告，以及被用户
+  同名选项掩盖的项目警告缺失。保留必需目标存在性和原有 ELF/RPATH 检查。
+- 修改 CMake 测试接线和 test_lw_build_target_scope.py，新增
+  test_lw_build_target_scope_regressions.py；5 项针对性回归覆盖等价参数
+  写法、额外用户警告、缺失/取消 ONNX 宏、实际依赖泄漏、项目严格警告缺失
+  及 vendor 警告泄漏。正负例均通过。
+- 全新 `/tmp/lw067-debug` 和 `/tmp/lw067-strict` 构建成功，完整 CTest
+  各 **53/53** 通过。全新 `/tmp/lw067-user-warnings` 使用
+  `LW_STRICT_WARNINGS=OFF; CMAKE_CXX_FLAGS=-Wall`，全新
+  `/tmp/lw067-normal-includes` 使用 `CMAKE_NO_SYSTEM_FROM_IMPORTED=ON`；
+  两者完整构建成功，构建工作流、运行时链接、目标作用域及解析回归共
+  **4/4** 定向 CTest 各自通过。最终保留目标存在性检查后，四种配置的
+  两项作用域相关测试再次各 **2/2** 通过。
+- git diff --check 通过。生产 RPATH、C++ 控制代码和策略资产未改动；
+  未进行新的生产部署或硬件验证。用户技能目录保持原样，LW-068～LW-071
+  未实施。
 
 ---
 

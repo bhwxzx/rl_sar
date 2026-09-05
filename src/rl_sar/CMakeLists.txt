@@ -1198,7 +1198,13 @@ if(BUILD_TESTING AND SYSTEM_TYPE STREQUAL "Linux")
             --onnx-dir ${ONNX_RUNTIME_DIR}
             --mujoco-dir ${PROJECT_ROOT_DIR}/library/mujoco
             --strict $<IF:$<BOOL:${LW_STRICT_WARNINGS}>,ON,OFF>
+            --target-options-dir ${CMAKE_CURRENT_BINARY_DIR}/lw_target_options/$<CONFIG>
             --readelf ${LW_READELF_EXECUTABLE}
+    )
+    add_test(
+        NAME lw_build_target_scope_regressions
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test/test_lw_build_target_scope_regressions.py
     )
 endif()
 
@@ -1291,6 +1297,14 @@ foreach(LW_BUILD_TARGET IN LISTS LW_BUILD_TARGETS)
     if(NOT LW_TARGET_VENDOR AND
        LW_TARGET_TYPE MATCHES "^(EXECUTABLE|STATIC_LIBRARY|SHARED_LIBRARY|OBJECT_LIBRARY|MODULE_LIBRARY)$")
         lw_enable_strict_warnings(${LW_BUILD_TARGET})
+    endif()
+    if(BUILD_TESTING AND SYSTEM_TYPE STREQUAL "Linux" AND
+       LW_TARGET_TYPE MATCHES "^(EXECUTABLE|STATIC_LIBRARY|SHARED_LIBRARY|OBJECT_LIBRARY|MODULE_LIBRARY)$")
+        # Target options exclude CMAKE_CXX_FLAGS supplied by users/toolchains.
+        # Export actual properties, not a second copy of the expected policy.
+        file(GENERATE
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/lw_target_options/$<CONFIG>/${LW_BUILD_TARGET}.txt"
+            CONTENT "$<JOIN:$<TARGET_PROPERTY:${LW_BUILD_TARGET},COMPILE_OPTIONS>,\n>\n")
     endif()
 endforeach()
 

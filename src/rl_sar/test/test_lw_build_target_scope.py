@@ -13,10 +13,75 @@ from test_lw_runtime_linkage import (
     verify_binary,
 )
 
+ISOLATED_TARGETS = (
+    "observation_buffer", "test_observation_buffer",
+    "test_lw_safety_policy", "lw_joystick_vendor",
+)
+
 
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
+
+
+def preprocessor_options(
+    tokens: list[str], directory: Path,
+) -> tuple[set[Path], set[str]]:
+    """Parse joined/separate GCC/Clang options after shell tokenization."""
+    includes: set[Path] = set()
+    definitions: set[str] = set()
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        for option in ("-isystem", "-iquote", "-idirafter", "-I", "-D", "-U"):
+            if not token.startswith(option):
+                continue
+            value = token[len(option):]
+            if not value:
+                index += 1
+                require(index < len(tokens), f"Missing argument for {option}")
+                value = tokens[index]
+            if option == "-D":
+                definitions.add(value.split("=", 1)[0])
+            elif option == "-U":
+                definitions.discard(value)
+            else:
+                includes.add((directory / value).resolve())
+            break
+        index += 1
+    return includes, definitions
+
+
+def verify_compile_command(
+    target: str, tokens: list[str], directory: Path,
+    onnx_dir: Path, strict: bool, target_options: list[str],
+) -> None:
+    includes, definitions = preprocessor_options(tokens, directory)
+    has_onnx_header = (onnx_dir / "include").resolve() in includes
+    require(("USE_ONNX" in definitions) == has_onnx_header,
+            f"{target}: ONNX public header/layout contract differs")
+    require("BOOST_BIND_GLOBAL_PLACEHOLDERS" not in definitions,
+            f"{target}: obsolete global Boost definition")
+    require(("CMAKE_CURRENT_SOURCE_DIR" in definitions) == (target == "rl_sim_LW"),
+            f"{target}: simulator source path leaked or is missing")
+
+    vendor = target in ("lw_joystick_vendor", "lw_mujoco_simulate_vendor")
+    for warning in ("-Wall", "-Wextra", "-Wpedantic", "-Werror"):
+        require((warning in target_options) == (strict and not vendor),
+                f"{target}: incorrect project warning policy: {warning}")
+        if strict and not vendor:
+            require(warning in tokens,
+                    f"{target}: strict warning missing from command: {warning}")
+    # Extra user/toolchain warnings in the final command are allowed, including
+    # for vendor units. They are not evidence of a project target-option leak.
+
+    if target in ISOLATED_TARGETS:
+        require(not definitions.intersection({"USE_ONNX", "POLICY_DIR"}),
+                f"{target}: unrelated SDK compile definition")
+        for forbidden in ("onnxruntime", "yaml-cpp", "core/rl_sdk",
+                          "fsm_robot", "library/mujoco"):
+            require(not any(forbidden in str(path) for path in includes),
+                    f"{target}: unrelated compile dependency {forbidden}")
 
 
 def main() -> None:
@@ -25,6 +90,7 @@ def main() -> None:
     parser.add_argument("--onnx-dir", required=True, type=Path)
     parser.add_argument("--mujoco-dir", required=True, type=Path)
     parser.add_argument("--strict", choices=("ON", "OFF"), required=True)
+    parser.add_argument("--target-options-dir", required=True, type=Path)
     parser.add_argument("--readelf", required=True)
     args = parser.parse_args()
     commands = json.loads(
@@ -37,28 +103,16 @@ def main() -> None:
         require(match is not None, f"Missing target in command: {entry['file']}")
         target = match.group(1)
         targets[target] = tokens
-        has_onnx_header = str(args.onnx_dir / "include") in tokens
-        require(("-DUSE_ONNX" in tokens) == has_onnx_header,
-                f"{target}: ONNX public header/layout contract differs")
-        require(not any("BOOST_BIND_GLOBAL_PLACEHOLDERS" in t for t in tokens),
-                f"{target}: obsolete global Boost definition")
-        source_macro = any(t.startswith("-DCMAKE_CURRENT_SOURCE_DIR=") for t in tokens)
-        require(source_macro == (target == "rl_sim_LW"),
-                f"{target}: simulator source path leaked or is missing")
-        vendor = target in ("lw_joystick_vendor", "lw_mujoco_simulate_vendor")
-        for warning in ("-Wall", "-Wextra", "-Wpedantic", "-Werror"):
-            require((warning in tokens) == (args.strict == "ON" and not vendor),
-                    f"{target}: incorrect maintained/vendor warning policy: {warning}")
+        target_options = (args.target_options_dir / f"{target}.txt").read_text(
+            encoding="utf-8",
+        ).splitlines()
+        verify_compile_command(
+            target, tokens, Path(entry["directory"]), args.onnx_dir,
+            args.strict == "ON", target_options,
+        )
 
-    # These small targets must not inherit the SDK, ONNX, YAML or simulator.
-    for target in ("observation_buffer", "test_observation_buffer",
-                   "test_lw_safety_policy", "lw_joystick_vendor"):
-        tokens = targets[target]
-        for forbidden in ("USE_ONNX", "POLICY_DIR", "onnxruntime", "yaml-cpp",
-                          "core/rl_sdk", "fsm_robot", "library/mujoco"):
-            require(not any(forbidden in token for token in tokens),
-                    f"{target}: unrelated compile dependency {forbidden}")
-
+    require(set(ISOLATED_TARGETS).issubset(targets),
+            "Required isolated targets are missing from compile_commands.json")
     onnx_enabled = "test_inference_runtime" in targets
     for target, needs_onnx, needs_mujoco in (
         ("test_observation_buffer", False, False),
