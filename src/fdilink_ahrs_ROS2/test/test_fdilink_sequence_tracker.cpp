@@ -3,11 +3,10 @@
 #include <cstdint>
 #include <limits>
 
-#include "fdilink_sequence_tracker.h"
+#include "./fdilink_sequence_tracker.h"
 
 namespace
 {
-
 TEST(FDILinkSequenceTracker, EstablishesBaselineThenAcceptsInOrderFrames)
 {
   FDILink::SequenceTracker tracker;
@@ -62,7 +61,7 @@ TEST(FDILinkSequenceTracker, CountsDuplicateWithoutInventingLoss)
   EXPECT_EQ(tracker.statistics().confirmed_lost, 0U);
 
   EXPECT_EQ(
-      tracker.observe(11U).event, FDILink::SequenceEvent::InOrder);
+    tracker.observe(11U).event, FDILink::SequenceEvent::InOrder);
 }
 
 TEST(FDILinkSequenceTracker, ClassifiesBackwardAndHalfRangeJumpsAsDiscontinuities)
@@ -85,7 +84,7 @@ TEST(FDILinkSequenceTracker, RebasesAfterDiscontinuity)
   FDILink::SequenceTracker tracker;
   tracker.observe(200U);
   EXPECT_EQ(
-      tracker.observe(100U).event, FDILink::SequenceEvent::Discontinuity);
+    tracker.observe(100U).event, FDILink::SequenceEvent::Discontinuity);
 
   const auto recovered = tracker.observe(101U);
   EXPECT_EQ(recovered.event, FDILink::SequenceEvent::InOrder);
@@ -99,5 +98,4 @@ TEST(FDILinkSequenceTracker, SaturatingCounterAdditionCannotWrap)
   EXPECT_EQ(FDILink::saturatingSequenceCountAdd(maximum - 1U, 2U), maximum);
   EXPECT_EQ(FDILink::saturatingSequenceCountAdd(maximum - 2U, 2U), maximum);
 }
-
 }  // namespace

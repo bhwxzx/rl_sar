@@ -38,19 +38,17 @@ if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
-  # the following line skips the linter which checks for copyrights
-  # uncomment the line when a copyright and license is not present in all source files
-  #set(ament_cmake_copyright_FOUND TRUE)
-  # the following line skips cpplint (only works in a git repo)
-  # uncomment the line when this package is not in a git repo
-  #set(ament_cmake_cpplint_FOUND TRUE)
+  # Copyright declarations are outside this package's local acceptance scope.
+  set(ament_cmake_copyright_FOUND TRUE)
+  # The .h files contain C++ namespaces and templates.
+  set(ament_cmake_uncrustify_ADDITIONAL_ARGS LANGUAGE CPP)
   ament_lint_auto_find_test_dependencies()
 endif()
 
 include_directories(
   include
   src
-  ${Eigen3_INCLUDE_DIRS} 
+  ${Eigen3_INCLUDE_DIRS}
 )
 
 
@@ -118,7 +116,7 @@ install(TARGETS
 )
 
 install(
-  DIRECTORY launch 
+  DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
 

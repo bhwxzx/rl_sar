@@ -216,7 +216,7 @@ This file is the authoritative remediation order for the LW real-robot deploymen
 | 62 | LW-062 | P2 / low | resolved | Reuse contiguous buffers throughout the inference hot path |
 | 63 | LW-063 | P2 / low | resolved | Share the ONNX Runtime environment without weakening model isolation |
 | 64 | LW-064 | P2 / low | resolved | Remove or correctly implement the misleading FDILink CRC32 API |
-| 65 | LW-065 | P2 / low | pending | Restore a clean FDILink lint and package-metadata baseline |
+| 65 | LW-065 | P2 / low | resolved | Restore a clean FDILink lint and package-metadata baseline |
 | 66 | LW-066 | P2 / low | pending | Make dependency discovery ordered and build settings target-scoped |
 
 ---
@@ -5410,7 +5410,7 @@ would silently receive an invalid checksum under a misleading public name.
 ## [LW-065] Restore a clean FDILink lint and package-metadata baseline
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-044, LW-045, LW-046, LW-047, LW-064
 
 ### Problem
@@ -5443,12 +5443,40 @@ baseline noise, and makes package provenance unsuitable for release.
 
 ### Acceptance Criteria
 
-- The reconfigured FDILink package passes all 13 registered CTest tests.
+- Per the user's 2026-09-05 scope adjustment, copyright declarations are not
+  required for local acceptance: omit the standalone copyright test and filter
+  only cpplint's legal/copyright category. All remaining 12 CTest tests pass.
 - Package metadata contains no TODO placeholder and matches the repository's
   actual licensing and ownership decisions.
 - Launch files produce the same nodes, parameters, and topics before and after
   formatting.
 - No unrelated rl_sar formatting or behavior change is bundled.
+
+### Resolution (2026-09-05)
+
+- 用户批准实施 LW-065，并明确维护者为 `liufengrong
+  <1044867193@qq.com>`；用户表示无法提供 FDILink 原始代码来源或许可证。
+  用户随后明确“无需版权声明，对我来说可以使用即可”，因此调整本地验收范围，
+  按上述 12 项检查完成本项。尚未 Git 提交。
+- 已整理包内 C++、launch 和 CMake 格式，修正头文件保护宏、include 顺序及
+  命名空间导入；日志计数使用 `PRIu64` 与原有 uint64 值匹配。保留既有全局
+  参数字符串的存储与生命周期，仅对这两行说明并限定 `runtime/string` lint
+  例外。uncrustify 显式按 CPP 解析包含命名空间和模板的 .h 文件，避免与
+  cpplint 的 C++ 格式规则冲突。按用户要求停用独立 copyright 检查，新增包内
+  CPPLINT.cfg 仅过滤 legal/copyright，其余检查继续启用。
+- package.xml 已更新版本 0.1.0、驱动描述和用户确认的维护者；许可证字段仍
+  如实填写 `License not declared`，未补写原始代码版权或推定授权声明。
+- imu_tf.cpp 已改用 tf2_geometry_msgs.hpp；全新全包
+  `-Wall -Wextra -Wpedantic -Werror -fsanitize=undefined,alignment` 构建成功，
+  包括两个节点与四个 C++ 测试。五项功能测试均通过且无 UBSan 报告。
+  初次全部 CTest 为 11/13，仅版权声明相关检查失败；应用用户明确调整后的
+  验收范围，普通构建和上述严格警告/UBSan 构建重新配置后的全部 CTest
+  均为 12/12 通过。
+- 两个 launch 的 Node 与 LaunchDescription 调用参数经修改前后 AST 对比
+  一致；保留 imu_tf launch 原有缺少 executable 的状态。git diff --check
+  通过。生命周期测试仅使用伪终端/不存在的设备路径，未访问真实硬件。
+- 原始代码来源与授权仍未核实；本地验收豁免不表示获得了新的授权。
+  用户未跟踪技能目录保持原样，LW-066 未处理。
 
 ---
 

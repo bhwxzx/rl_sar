@@ -1,4 +1,4 @@
-#include <ahrs_driver.h>
+#include "./ahrs_driver.h"
 
 #include <algorithm>
 #include <array>
@@ -14,10 +14,9 @@ namespace
 constexpr std::uint32_t kSerialReadTimeoutMs = 20;
 constexpr std::size_t kSerialReadBufferSize = 256;
 
-const char* sequenceEventName(SequenceEvent event) noexcept
+const char * sequenceEventName(SequenceEvent event) noexcept
 {
-  switch (event)
-  {
+  switch (event) {
     case SequenceEvent::ForwardGap:
       return "forward gap";
     case SequenceEvent::Duplicate:
@@ -39,35 +38,34 @@ ahrsBringup::ahrsBringup()
   if_debug_ = declare_parameter<bool>("if_debug_", false);
 
   const std::int64_t device_type =
-      declare_parameter<std::int64_t>("device_type_", 1);
-  if (device_type != 0 && device_type != 1)
-  {
+    declare_parameter<std::int64_t>("device_type_", 1);
+  if (device_type != 0 && device_type != 1) {
     throw std::invalid_argument("device_type_ must be 0 or 1");
   }
   device_type_ = static_cast<int>(device_type);
 
   imu_topic = declare_parameter<std::string>("imu_topic", "/imu");
   imu_frame_id_ =
-      declare_parameter<std::string>("imu_frame_id_", "gyro_link");
+    declare_parameter<std::string>("imu_frame_id_", "gyro_link");
   mag_pose_2d_topic = declare_parameter<std::string>(
-      "mag_pose_2d_topic", "/mag_pose_2d");
+    "mag_pose_2d_topic", "/mag_pose_2d");
   Euler_angles_topic = declare_parameter<std::string>(
-      "Euler_angles_topic", "/euler_angles");
+    "Euler_angles_topic", "/euler_angles");
   gps_topic = declare_parameter<std::string>("gps_topic", "/gps/fix");
   Magnetic_topic =
-      declare_parameter<std::string>("Magnetic_topic", "/magnetic");
+    declare_parameter<std::string>("Magnetic_topic", "/magnetic");
   twist_topic =
-      declare_parameter<std::string>("twist_topic", "/system_speed");
+    declare_parameter<std::string>("twist_topic", "/system_speed");
   NED_odom_topic = declare_parameter<std::string>(
-      "NED_odom_topic", "/NED_odometry");
+    "NED_odom_topic", "/NED_odometry");
   serial_port_ = declare_parameter<std::string>(
-      "serial_port_", "/dev/fdilink_ahrs");
+    "serial_port_", "/dev/fdilink_ahrs");
 
   const std::int64_t serial_baud =
-      declare_parameter<std::int64_t>("serial_baud_", 921600);
-  if (serial_baud <= 0
-      || serial_baud > static_cast<std::int64_t>(
-          std::numeric_limits<std::uint32_t>::max()))
+    declare_parameter<std::int64_t>("serial_baud_", 921600);
+  if (serial_baud <= 0 ||
+    serial_baud > static_cast<std::int64_t>(
+      std::numeric_limits<std::uint32_t>::max()))
   {
     throw std::invalid_argument("serial_baud_ must fit a positive uint32");
   }
@@ -76,18 +74,17 @@ ahrsBringup::ahrsBringup()
   imu_pub_ = create_publisher<sensor_msgs::msg::Imu>(imu_topic, 10);
   gps_pub_ = create_publisher<sensor_msgs::msg::NavSatFix>(gps_topic, 10);
   mag_pose_pub_ =
-      create_publisher<geometry_msgs::msg::Pose2D>(mag_pose_2d_topic, 10);
+    create_publisher<geometry_msgs::msg::Pose2D>(mag_pose_2d_topic, 10);
   Euler_angles_pub_ =
-      create_publisher<geometry_msgs::msg::Vector3>(Euler_angles_topic, 10);
+    create_publisher<geometry_msgs::msg::Vector3>(Euler_angles_topic, 10);
   Magnetic_pub_ =
-      create_publisher<geometry_msgs::msg::Vector3>(Magnetic_topic, 10);
+    create_publisher<geometry_msgs::msg::Vector3>(Magnetic_topic, 10);
   twist_pub_ =
-      create_publisher<geometry_msgs::msg::Twist>(twist_topic, 10);
+    create_publisher<geometry_msgs::msg::Twist>(twist_topic, 10);
   NED_odom_pub_ =
-      create_publisher<nav_msgs::msg::Odometry>(NED_odom_topic, 10);
+    create_publisher<nav_msgs::msg::Odometry>(NED_odom_topic, 10);
 
-  try
-  {
+  try {
     serial_.setPort(serial_port_);
     serial_.setBaudrate(serial_baud_);
     serial_.setFlowcontrol(serial::flowcontrol_none);
@@ -95,42 +92,35 @@ ahrsBringup::ahrsBringup()
     serial_.setStopbits(serial::stopbits_one);
     serial_.setBytesize(serial::eightbits);
     serial::Timeout timeout =
-        serial::Timeout::simpleTimeout(kSerialReadTimeoutMs);
+      serial::Timeout::simpleTimeout(kSerialReadTimeoutMs);
     serial_.setTimeout(timeout);
     serial_.open();
-  }
-  catch (const serial::IOException& error)
-  {
+  } catch (const serial::IOException & error) {
     throw std::runtime_error(
-        "cannot open FDILink serial port " + serial_port_ + ": "
-        + error.what());
+            "cannot open FDILink serial port " + serial_port_ + ": " +
+            error.what());
   }
 
-  if (!serial_.isOpen())
-  {
+  if (!serial_.isOpen()) {
     throw std::runtime_error(
-        "FDILink serial port did not open: " + serial_port_);
+            "FDILink serial port did not open: " + serial_port_);
   }
   RCLCPP_INFO(
-      get_logger(),
-      "FDILink serial port initialized: %s at %u baud, timeout %u ms",
-      serial_port_.c_str(), serial_baud_, kSerialReadTimeoutMs);
+    get_logger(),
+    "FDILink serial port initialized: %s at %u baud, timeout %u ms",
+    serial_port_.c_str(), serial_baud_, kSerialReadTimeoutMs);
 }
 
 ahrsBringup::~ahrsBringup()
 {
-  try
-  {
-    if (serial_.isOpen())
-    {
+  try {
+    if (serial_.isOpen()) {
       serial_.close();
     }
-  }
-  catch (const std::exception& error)
-  {
+  } catch (const std::exception & error) {
     std::fprintf(
-        stderr, "Failed to close FDILink serial port cleanly: %s\n",
-        error.what());
+      stderr, "Failed to close FDILink serial port cleanly: %s\n",
+      error.what());
   }
 }
 
@@ -139,62 +129,50 @@ void ahrsBringup::processLoop()
   RCLCPP_INFO(get_logger(), "ahrsBringup::processLoop: start");
   std::array<std::uint8_t, kSerialReadBufferSize> read_buffer{};
 
-  while (rclcpp::ok())
-  {
-    if (!serial_.isOpen())
-    {
+  while (rclcpp::ok()) {
+    if (!serial_.isOpen()) {
       throw std::runtime_error("FDILink serial port closed during receive");
     }
 
     const std::size_t bytes_available = serial_.available();
-    const std::size_t requested = bytes_available == 0
-        ? 1
-        : std::min(bytes_available, read_buffer.size());
+    const std::size_t requested = bytes_available == 0 ?
+      1 :
+      std::min(bytes_available, read_buffer.size());
     const std::size_t bytes_read =
-        serial_.read(read_buffer.data(), requested);
+      serial_.read(read_buffer.data(), requested);
 
-    if (bytes_read == 0)
-    {
-      if (frame_parser_.hasPartialFrame())
-      {
+    if (bytes_read == 0) {
+      if (frame_parser_.hasPartialFrame()) {
         frame_parser_.reset();
-        if (if_debug_)
-        {
+        if (if_debug_) {
           RCLCPP_WARN(
-              get_logger(),
-              "FDILink frame timed out before completion; partial data discarded");
+            get_logger(),
+            "FDILink frame timed out before completion; partial data discarded");
         }
       }
       continue;
     }
 
-    for (std::size_t index = 0; index < bytes_read; ++index)
-    {
+    for (std::size_t index = 0; index < bytes_read; ++index) {
       ValidatedFrame frame;
       const FrameParserEvent event =
-          frame_parser_.consume(read_buffer[index], frame);
-      if (event == FrameParserEvent::Rejected)
-      {
+        frame_parser_.consume(read_buffer[index], frame);
+      if (event == FrameParserEvent::Rejected) {
         ++crc_error_;
-        if (if_debug_)
-        {
+        if (if_debug_) {
           RCLCPP_WARN(get_logger(), "Rejected malformed FDILink frame");
         }
-      }
-      else if (event == FrameParserEvent::FrameReady)
-      {
+      } else if (event == FrameParserEvent::FrameReady) {
         handleValidatedFrame(frame);
       }
     }
 
-    if (bytes_read < requested && frame_parser_.hasPartialFrame())
-    {
+    if (bytes_read < requested && frame_parser_.hasPartialFrame()) {
       frame_parser_.reset();
-      if (if_debug_)
-      {
+      if (if_debug_) {
         RCLCPP_WARN(
-            get_logger(),
-            "FDILink short read ended an incomplete frame; partial data discarded");
+          get_logger(),
+          "FDILink short read ended an incomplete frame; partial data discarded");
       }
     }
   }
@@ -203,135 +181,117 @@ void ahrsBringup::processLoop()
   RCLCPP_INFO(get_logger(), "ahrsBringup::processLoop: stop");
 }
 
-void ahrsBringup::handleValidatedFrame(const ValidatedFrame& frame)
+void ahrsBringup::handleValidatedFrame(const ValidatedFrame & frame)
 {
-  switch (frame.type)
-  {
+  switch (frame.type) {
     case TYPE_IMU:
-    {
-      ImuPayload candidate;
-      if (!decodeImuPayload(frame, candidate))
       {
-        throw std::runtime_error("validated FDILink IMU payload did not decode");
-      }
-      updateSequence(frame.serial_number);
-      const ImuPayloadValidation validation = validateImuPayload(candidate);
-      if (!validation.motion_valid)
-      {
-        has_valid_imu_ = false;
-        has_valid_magnetic_ = false;
-        reportSemanticRejection(frame.type, "non-finite IMU motion");
-        break;
-      }
+        ImuPayload candidate;
+        if (!decodeImuPayload(frame, candidate)) {
+          throw std::runtime_error("validated FDILink IMU payload did not decode");
+        }
+        updateSequence(frame.serial_number);
+        const ImuPayloadValidation validation = validateImuPayload(candidate);
+        if (!validation.motion_valid) {
+          has_valid_imu_ = false;
+          has_valid_magnetic_ = false;
+          reportSemanticRejection(frame.type, "non-finite IMU motion");
+          break;
+        }
 
-      imu_payload_ = candidate;
-      has_valid_imu_ = true;
-      if (validation.magnetic_valid)
-      {
-        magnetic_field_ = {{
+        imu_payload_ = candidate;
+        has_valid_imu_ = true;
+        if (validation.magnetic_valid) {
+          magnetic_field_ = {{
             candidate.magnetometer_x,
             candidate.magnetometer_y,
             candidate.magnetometer_z,
-        }};
-        has_valid_magnetic_ = true;
-      }
-      else
-      {
-        has_valid_magnetic_ = false;
-        reportSemanticRejection(frame.type, "non-finite magnetic field");
-      }
+          }};
+          has_valid_magnetic_ = true;
+        } else {
+          has_valid_magnetic_ = false;
+          reportSemanticRejection(frame.type, "non-finite magnetic field");
+        }
 
-      if (has_valid_ahrs_)
-      {
-        publishImuFrame();
-      }
-      else if (if_debug_)
-      {
-        RCLCPP_WARN(
+        if (has_valid_ahrs_) {
+          publishImuFrame();
+        } else if (if_debug_) {
+          RCLCPP_WARN(
             get_logger(),
             "Ignoring IMU frame until a complete AHRS frame is available");
+        }
+        break;
       }
-      break;
-    }
     case TYPE_AHRS:
-    {
-      AhrsPayload candidate;
-      if (!decodeAhrsPayload(frame, candidate))
       {
-        throw std::runtime_error("validated FDILink AHRS payload did not decode");
-      }
-      updateSequence(frame.serial_number);
-      const AhrsPayloadValidationStatus validation =
+        AhrsPayload candidate;
+        if (!decodeAhrsPayload(frame, candidate)) {
+          throw std::runtime_error("validated FDILink AHRS payload did not decode");
+        }
+        updateSequence(frame.serial_number);
+        const AhrsPayloadValidationStatus validation =
           validateAhrsPayload(candidate);
-      if (validation != AhrsPayloadValidationStatus::Valid)
-      {
-        has_valid_ahrs_ = false;
-        reportSemanticRejection(
+        if (validation != AhrsPayloadValidationStatus::Valid) {
+          has_valid_ahrs_ = false;
+          reportSemanticRejection(
             frame.type,
-            validation == AhrsPayloadValidationStatus::NonFinite
-                ? "non-finite AHRS orientation"
-                : "AHRS quaternion norm out of range");
+            validation == AhrsPayloadValidationStatus::NonFinite ?
+            "non-finite AHRS orientation" :
+            "AHRS quaternion norm out of range");
+          break;
+        }
+
+        ahrs_payload_ = candidate;
+        has_valid_ahrs_ = true;
+        publishAhrsFrame();
         break;
       }
-
-      ahrs_payload_ = candidate;
-      has_valid_ahrs_ = true;
-      publishAhrsFrame();
-      break;
-    }
     case TYPE_INSGPS:
-    {
-      InsGpsPayload candidate;
-      if (!decodeInsGpsPayload(frame, candidate))
       {
-        throw std::runtime_error(
-            "validated FDILink INSGPS payload did not decode");
-      }
-      updateSequence(frame.serial_number);
-      if (validateInsGpsPayload(candidate)
-          != InsGpsPayloadValidationStatus::Valid)
-      {
-        reportSemanticRejection(frame.type, "non-finite INSGPS output");
+        InsGpsPayload candidate;
+        if (!decodeInsGpsPayload(frame, candidate)) {
+          throw std::runtime_error(
+                  "validated FDILink INSGPS payload did not decode");
+        }
+        updateSequence(frame.serial_number);
+        if (validateInsGpsPayload(candidate) !=
+          InsGpsPayloadValidationStatus::Valid)
+        {
+          reportSemanticRejection(frame.type, "non-finite INSGPS output");
+          break;
+        }
+
+        insgps_payload_ = candidate;
+        publishInsGpsFrame();
         break;
       }
-
-      insgps_payload_ = candidate;
-      publishInsGpsFrame();
-      break;
-    }
     case TYPE_GEODETIC_POS:
-    {
-      GeodeticPositionPayload candidate;
-      if (!decodeGeodeticPositionPayload(
-          frame, candidate))
       {
-        throw std::runtime_error(
-            "validated FDILink geodetic-position payload did not decode");
-      }
-      updateSequence(frame.serial_number);
-      const GeodeticPayloadValidationStatus validation =
+        GeodeticPositionPayload candidate;
+        if (!decodeGeodeticPositionPayload(
+            frame, candidate))
+        {
+          throw std::runtime_error(
+                  "validated FDILink geodetic-position payload did not decode");
+        }
+        updateSequence(frame.serial_number);
+        const GeodeticPayloadValidationStatus validation =
           validateGeodeticPositionPayload(candidate);
-      if (validation != GeodeticPayloadValidationStatus::Valid)
-      {
-        const char* reason = "non-finite geodetic position";
-        if (validation == GeodeticPayloadValidationStatus::LatitudeOutOfRange)
-        {
-          reason = "geodetic latitude out of range";
+        if (validation != GeodeticPayloadValidationStatus::Valid) {
+          const char * reason = "non-finite geodetic position";
+          if (validation == GeodeticPayloadValidationStatus::LatitudeOutOfRange) {
+            reason = "geodetic latitude out of range";
+          } else if (validation == GeodeticPayloadValidationStatus::LongitudeOutOfRange) {
+            reason = "geodetic longitude out of range";
+          }
+          reportSemanticRejection(frame.type, reason);
+          break;
         }
-        else if (
-            validation
-            == GeodeticPayloadValidationStatus::LongitudeOutOfRange)
-        {
-          reason = "geodetic longitude out of range";
-        }
-        reportSemanticRejection(frame.type, reason);
+
+        geodetic_position_payload_ = candidate;
+        publishGeodeticPositionFrame();
         break;
       }
-
-      geodetic_position_payload_ = candidate;
-      publishGeodeticPositionFrame();
-      break;
-    }
     case TYPE_GROUND:
     case TYPE_GROUND_EXTENDED:
       updateSequence(frame.serial_number);
@@ -348,21 +308,20 @@ void ahrsBringup::publishImuFrame()
   imu_data.header.frame_id = imu_frame_id_;
 
   const Eigen::Quaterniond q_ahrs(
-      ahrs_payload_.quaternion_w,
-      ahrs_payload_.quaternion_x,
-      ahrs_payload_.quaternion_y,
-      ahrs_payload_.quaternion_z);
+    ahrs_payload_.quaternion_w,
+    ahrs_payload_.quaternion_x,
+    ahrs_payload_.quaternion_y,
+    ahrs_payload_.quaternion_z);
   const Eigen::Quaterniond q_r =
-      Eigen::AngleAxisd(PI, Eigen::Vector3d::UnitZ())
-      * Eigen::AngleAxisd(PI, Eigen::Vector3d::UnitY())
-      * Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitX());
+    Eigen::AngleAxisd(PI, Eigen::Vector3d::UnitZ()) *
+    Eigen::AngleAxisd(PI, Eigen::Vector3d::UnitY()) *
+    Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitX());
   const Eigen::Quaterniond q_rr =
-      Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitZ())
-      * Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitY())
-      * Eigen::AngleAxisd(PI, Eigen::Vector3d::UnitX());
+    Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitZ()) *
+    Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitY()) *
+    Eigen::AngleAxisd(PI, Eigen::Vector3d::UnitX());
 
-  if (device_type_ == 0)
-  {
+  if (device_type_ == 0) {
     imu_data.orientation.w = ahrs_payload_.quaternion_w;
     imu_data.orientation.x = ahrs_payload_.quaternion_x;
     imu_data.orientation.y = ahrs_payload_.quaternion_y;
@@ -373,9 +332,7 @@ void ahrsBringup::publishImuFrame()
     imu_data.linear_acceleration.x = imu_payload_.accelerometer_x;
     imu_data.linear_acceleration.y = imu_payload_.accelerometer_y;
     imu_data.linear_acceleration.z = imu_payload_.accelerometer_z;
-  }
-  else
-  {
+  } else {
     const Eigen::Quaterniond q_out = q_r * q_ahrs * q_rr;
     imu_data.orientation.w = q_out.w();
     imu_data.orientation.x = q_out.x();
@@ -403,8 +360,7 @@ void ahrsBringup::publishAhrsFrame()
   euler_angles.z = ahrs_payload_.heading;
   Euler_angles_pub_->publish(euler_angles);
 
-  if (has_valid_magnetic_)
-  {
+  if (has_valid_magnetic_) {
     geometry_msgs::msg::Vector3 magnetic;
     magnetic.x = magnetic_field_[0];
     magnetic.y = magnetic_field_[1];
@@ -444,77 +400,71 @@ void ahrsBringup::publishInsGpsFrame()
 }
 
 void ahrsBringup::magCalculateYaw(
-    double roll,
-    double pitch,
-    double& magyaw,
-    double magx,
-    double magy,
-    double magz)
+  double roll,
+  double pitch,
+  double & magyaw,
+  double magx,
+  double magy,
+  double magz)
 {
   const double temp1 = magy * cos(roll) + magz * sin(roll);
-  const double temp2 = magx * cos(pitch)
-      + magy * sin(pitch) * sin(roll)
-      - magz * sin(pitch) * cos(roll);
+  const double temp2 = magx * cos(pitch) +
+    magy * sin(pitch) * sin(roll) -
+    magz * sin(pitch) * cos(roll);
   magyaw = atan2(-temp1, temp2);
-  if (magyaw < 0)
-  {
+  if (magyaw < 0) {
     magyaw += 2 * PI;
   }
 }
 
 void ahrsBringup::reportSemanticRejection(
-    std::uint8_t type, const char* reason)
+  std::uint8_t type, const char * reason)
 {
   ++semantic_error_;
   RCLCPP_WARN_THROTTLE(
-      get_logger(), *get_clock(), 1000,
-      "Rejected semantically invalid FDILink frame 0x%02x (%s); total=%llu",
-      static_cast<unsigned int>(type), reason,
-      static_cast<unsigned long long>(semantic_error_));
+    get_logger(), *get_clock(), 1000,
+    "Rejected semantically invalid FDILink frame 0x%02x (%s); total=%" PRIu64,
+    static_cast<unsigned int>(type), reason,
+    semantic_error_);
 }
 
 void ahrsBringup::updateSequence(std::uint8_t serial_number)
 {
   const SequenceObservation observation =
-      sequence_tracker_.observe(serial_number);
-  if (!if_debug_
-      || observation.event == SequenceEvent::First
-      || observation.event == SequenceEvent::InOrder)
+    sequence_tracker_.observe(serial_number);
+  if (!if_debug_ ||
+    observation.event == SequenceEvent::First ||
+    observation.event == SequenceEvent::InOrder)
   {
     return;
   }
 
-  const SequenceStatistics& statistics = sequence_tracker_.statistics();
+  const SequenceStatistics & statistics = sequence_tracker_.statistics();
   RCLCPP_WARN_THROTTLE(
-      get_logger(), *get_clock(), 1000,
-      "FDILink sequence %s: expected %u, received %u, missing %u; "
-      "confirmed_lost=%llu, duplicates=%llu, discontinuities=%llu",
-      sequenceEventName(observation.event),
-      static_cast<unsigned int>(observation.expected),
-      static_cast<unsigned int>(observation.received),
-      static_cast<unsigned int>(observation.missing),
-      static_cast<unsigned long long>(statistics.confirmed_lost),
-      static_cast<unsigned long long>(statistics.duplicates),
-      static_cast<unsigned long long>(statistics.discontinuities));
+    get_logger(), *get_clock(), 1000,
+    "FDILink sequence %s: expected %u, received %u, missing %u; "
+    "confirmed_lost=%" PRIu64 ", duplicates=%" PRIu64 ", discontinuities=%" PRIu64,
+    sequenceEventName(observation.event),
+    static_cast<unsigned int>(observation.expected),
+    static_cast<unsigned int>(observation.received),
+    static_cast<unsigned int>(observation.missing),
+    statistics.confirmed_lost,
+    statistics.duplicates,
+    statistics.discontinuities);
 }
-
 }  // namespace FDILink
 
-int main(int argc, char** argv)
+int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  try
-  {
+  try {
     auto node = std::make_shared<FDILink::ahrsBringup>();
     node->processLoop();
     rclcpp::shutdown();
     return EXIT_SUCCESS;
-  }
-  catch (const std::exception& error)
-  {
+  } catch (const std::exception & error) {
     std::fprintf(stderr, "FDILink AHRS driver failed: %s\n", error.what());
-    if (rclcpp::ok())
-    {
+    if (rclcpp::ok()) {
       rclcpp::shutdown();
     }
     return EXIT_FAILURE;

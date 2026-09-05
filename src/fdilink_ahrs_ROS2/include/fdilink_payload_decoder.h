@@ -3,11 +3,10 @@
 
 #include <cstdint>
 
-#include "fdilink_frame_parser.h"
+#include "./fdilink_frame_parser.h"
 
 namespace FDILink
 {
-
 struct ImuPayload
 {
   float gyroscope_x = 0.0F;
@@ -71,15 +70,14 @@ struct GeodeticPositionPayload
 };
 
 bool decodeImuPayload(
-    const ValidatedFrame& frame, ImuPayload& output) noexcept;
+  const ValidatedFrame & frame, ImuPayload & output) noexcept;
 bool decodeAhrsPayload(
-    const ValidatedFrame& frame, AhrsPayload& output) noexcept;
+  const ValidatedFrame & frame, AhrsPayload & output) noexcept;
 bool decodeInsGpsPayload(
-    const ValidatedFrame& frame, InsGpsPayload& output) noexcept;
+  const ValidatedFrame & frame, InsGpsPayload & output) noexcept;
 bool decodeGeodeticPositionPayload(
-    const ValidatedFrame& frame,
-    GeodeticPositionPayload& output) noexcept;
-
+  const ValidatedFrame & frame,
+  GeodeticPositionPayload & output) noexcept;
 }  // namespace FDILink
 
 #endif  // FDILINK_PAYLOAD_DECODER_H_

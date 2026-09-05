@@ -5,7 +5,6 @@
 
 namespace FDILink
 {
-
 enum class SequenceEvent
 {
   First,
@@ -31,20 +30,19 @@ struct SequenceStatistics
 };
 
 std::uint64_t saturatingSequenceCountAdd(
-    std::uint64_t current, std::uint64_t increment) noexcept;
+  std::uint64_t current, std::uint64_t increment) noexcept;
 
 class SequenceTracker
 {
 public:
   SequenceObservation observe(std::uint8_t received) noexcept;
-  const SequenceStatistics& statistics() const noexcept;
+  const SequenceStatistics & statistics() const noexcept;
 
 private:
-  SequenceStatistics statistics_{};
+  SequenceStatistics statistics_ {};
   std::uint8_t last_received_ = 0;
   bool initialized_ = false;
 };
-
 }  // namespace FDILink
 
 #endif  // FDILINK_SEQUENCE_TRACKER_H_

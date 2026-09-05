@@ -1,11 +1,10 @@
 #ifndef FDILINK_PAYLOAD_VALIDATION_H_
 #define FDILINK_PAYLOAD_VALIDATION_H_
 
-#include "fdilink_payload_decoder.h"
+#include "./fdilink_payload_decoder.h"
 
 namespace FDILink
 {
-
 constexpr double MINIMUM_QUATERNION_NORM = 0.9;
 constexpr double MAXIMUM_QUATERNION_NORM = 1.1;
 constexpr double MINIMUM_LATITUDE_RADIANS = -1.5707963267948966;
@@ -40,14 +39,13 @@ enum class GeodeticPayloadValidationStatus
   LongitudeOutOfRange,
 };
 
-ImuPayloadValidation validateImuPayload(const ImuPayload& payload) noexcept;
+ImuPayloadValidation validateImuPayload(const ImuPayload & payload) noexcept;
 AhrsPayloadValidationStatus validateAhrsPayload(
-    const AhrsPayload& payload) noexcept;
+  const AhrsPayload & payload) noexcept;
 InsGpsPayloadValidationStatus validateInsGpsPayload(
-    const InsGpsPayload& payload) noexcept;
+  const InsGpsPayload & payload) noexcept;
 GeodeticPayloadValidationStatus validateGeodeticPositionPayload(
-    const GeodeticPositionPayload& payload) noexcept;
-
+  const GeodeticPositionPayload & payload) noexcept;
 }  // namespace FDILink
 
 #endif  // FDILINK_PAYLOAD_VALIDATION_H_
