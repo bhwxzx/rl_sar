@@ -7,6 +7,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+
+from lw_source_checks import cmake_calls
 
 
 BUILD_SCRIPT = Path(sys.argv.pop(1)).resolve()
@@ -147,15 +150,16 @@ class BuildWorkflowTests(unittest.TestCase):
     def test_cpp_runtime_does_not_link_unused_python_components(self) -> None:
         cmake = CMAKE_FILE.read_text(encoding="utf-8")
 
-        self.assertIn(
-            "find_package(Python3 COMPONENTS Interpreter REQUIRED)", cmake
-        )
-        self.assertIn("find_package(fmt CONFIG REQUIRED", cmake)
-        self.assertIn(
-            '"/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/cmake/fmt"', cmake
-        )
-        self.assertIn('set(fmt_DIR "${LW_SYSTEM_FMT_CONFIG_DIR}")', cmake)
-        self.assertIn("NO_DEFAULT_PATH", cmake)
+        calls = cmake_calls(cmake)
+        packages = [args for name, args, _ in calls if name == "find_package"]
+        python = next(args for args in packages if args[0] == "Python3")
+        self.assertEqual(set(python[1:]), {"COMPONENTS", "Interpreter", "REQUIRED"})
+        fmt = next(args for args in packages if args[0] == "fmt")
+        self.assertTrue({"CONFIG", "REQUIRED", "NO_DEFAULT_PATH"}.issubset(fmt))
+        settings = {args[0]: args[1:] for name, args, _ in calls if name == "set" and args}
+        self.assertEqual(settings["LW_SYSTEM_FMT_CONFIG_DIR"],
+                         ["/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/cmake/fmt"])
+        self.assertEqual(settings["fmt_DIR"], ["${LW_SYSTEM_FMT_CONFIG_DIR}"])
         for unused_dependency in (
             "Python3::Python",
             "Python3::Module",
@@ -165,30 +169,61 @@ class BuildWorkflowTests(unittest.TestCase):
             "PYTHON_LIB_DIR",
             "library/core/matplotlibcpp",
         ):
-            self.assertNotIn(unused_dependency, cmake)
+            self.assertFalse(any(unused_dependency in " ".join(args) for _, args, _ in calls))
 
     def test_dependency_discovery_precedes_use_and_is_target_scoped(self) -> None:
         cmake = CMAKE_FILE.read_text(encoding="utf-8")
-        interpreter = cmake.index(
-            "find_package(Python3 COMPONENTS Interpreter REQUIRED)"
-        )
-        self.assertLess(interpreter, cmake.index("find_package(ament_cmake"))
-        self.assertLess(interpreter, cmake.index('"${Python3_EXECUTABLE}"'))
-        self.assertIn("find_package(yaml-cpp CONFIG REQUIRED", cmake)
-        self.assertIn(
-            "target_compile_definitions(inference_runtime PUBLIC USE_ONNX)",
-            cmake,
-        )
+        calls = cmake_calls(cmake)
+        packages = {args[0]: (args, position) for name, args, position in calls
+                    if name == "find_package" and args}
+        interpreter = packages["Python3"][1]
+        self.assertLess(interpreter, packages["ament_cmake"][1])
+        interpreter_uses = [position for _, args, position in calls
+                            if any("${Python3_EXECUTABLE}" in arg for arg in args)]
+        self.assertTrue(interpreter_uses, "Python interpreter has no checked use")
+        self.assertLess(interpreter, min(interpreter_uses))
+        self.assertTrue({"CONFIG", "REQUIRED"}.issubset(packages["yaml-cpp"][0]))
+        # USE_ONNX/header propagation is checked in generated compile commands
+        # by lw_build_target_scope; Python/Conda linkage by lw_runtime_linkage.
         for global_command in (
             "add_definitions", "add_compile_definitions", "add_compile_options",
             "include_directories", "link_directories",
         ):
-            self.assertNotRegex(cmake, rf"(?m)^\s*{global_command}\s*\(")
+            self.assertNotIn(global_command, [name for name, _, _ in calls])
         for global_setting in (
             "CMAKE_EXE_LINKER_FLAGS", "CMAKE_SHARED_LINKER_FLAGS",
             "CMAKE_INSTALL_RPATH", "CMAKE_BUILD_WITH_INSTALL_RPATH",
         ):
-            self.assertNotIn(f"set({global_setting}", cmake)
+            self.assertFalse(any(name == "set" and args and args[0] == global_setting
+                                 for name, args, _ in calls))
+
+    def test_dependency_checks_accept_layout_but_reject_contract_changes(self) -> None:
+        original = CMAKE_FILE.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory(prefix="lw-cmake-checks-") as temporary:
+            fixture = Path(temporary) / "CMakeLists.txt"
+            with mock.patch.dict(globals(), CMAKE_FILE=fixture):
+                reformatted = original.replace("find_package(", "FIND_PACKAGE (\n  ")
+                reformatted = reformatted.replace("set(", "SET (\n  ")
+                reformatted = reformatted.replace("Python3 COMPONENTS Interpreter REQUIRED",
+                                                  "Python3 REQUIRED\n COMPONENTS Interpreter")
+                fixture.write_text(reformatted, encoding="utf-8")
+                self.test_cpp_runtime_does_not_link_unused_python_components()
+                self.test_dependency_discovery_precedes_use_and_is_target_scoped()
+                for changed, check in (
+                    (original.replace("COMPONENTS Interpreter REQUIRED", "COMPONENTS Interpreter Development REQUIRED"),
+                     self.test_cpp_runtime_does_not_link_unused_python_components),
+                    (original.replace("find_package(Python3 COMPONENTS Interpreter REQUIRED)", "")
+                     + "\nfind_package(Python3 COMPONENTS Interpreter REQUIRED)\n",
+                     self.test_dependency_discovery_precedes_use_and_is_target_scoped),
+                    (original + "\n ADD_COMPILE_OPTIONS ( -Wall )\n",
+                     self.test_dependency_discovery_precedes_use_and_is_target_scoped),
+                    (original + "\n SET ( CMAKE_INSTALL_RPATH /bad/path )\n",
+                     self.test_dependency_discovery_precedes_use_and_is_target_scoped),
+                ):
+                    with self.subTest(check=check.__name__, mutation=changed[-100:]):
+                        fixture.write_text(changed, encoding="utf-8")
+                        with self.assertRaises(AssertionError):
+                            check()
 
     def test_selected_builds_include_dependency_closure(self) -> None:
         content = BUILD_SCRIPT.read_text(encoding="utf-8")

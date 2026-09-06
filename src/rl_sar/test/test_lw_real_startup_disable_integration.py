@@ -3,6 +3,8 @@
 import pathlib
 import unittest
 
+from lw_source_checks import cpp_index, cpp_region, require_cpp_order
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 REAL_SOURCE = ROOT / "src" / "rl_real_LW.cpp"
@@ -16,26 +18,20 @@ class RealStartupDisableIntegrationTests(unittest.TestCase):
         source = REAL_SOURCE.read_text(encoding="utf-8")
         launch = REAL_LAUNCH.read_text(encoding="utf-8")
         publisher = DEBUG_PUBLISHER.read_text(encoding="utf-8")
-        constructor = source[
-            source.index("RL_Real::RL_Real(") : source.index("RL_Real::~RL_Real()")
-        ]
+        constructor = cpp_region(source, "RL_Real::RL_Real(", "RL_Real::~RL_Real()")
 
-        self.assertIn(
-            'declare_parameter<std::int64_t>(\n'
-            '            "debug_publish_rate_hz"',
+        cpp_index(constructor, 'declare_parameter<std::int64_t>("debug_publish_rate_hz"')
+        require_cpp_order(
             constructor,
+            "LWDebugPublishPeriod(debug_publish_rate_hz)",
+            "LWDebugPublisher::CreateIfEnabled(",
+            "this->loop_control->start();",
         )
-        validation = constructor.index("LWDebugPublishPeriod(debug_publish_rate_hz)")
-        creation = constructor.index("LWDebugPublisher::CreateIfEnabled(")
-        worker_start = constructor.index("this->loop_control->start();")
-        self.assertLess(validation, creation)
-        self.assertLess(creation, worker_start)
 
-        self.assertIn("snapshot_.tryPublish(sequenced_snapshot)", publisher)
-        self.assertNotIn("snapshot_.publish(", publisher)
-        self.assertIn(
-            "sequenced_snapshot.sequence <= last_published_sequence_", publisher
-        )
+        cpp_index(publisher, "snapshot_.tryPublish(sequenced_snapshot)")
+        with self.assertRaisesRegex(AssertionError, "Missing C\\+\\+ wiring"):
+            cpp_index(publisher, "snapshot_.publish(")
+        # Freshness/duplicate suppression is exercised by test_lw_debug_publisher.
 
         self.assertIn(
             "debug_publish_rate_hz = LaunchConfiguration('debug_publish_rate_hz')",
@@ -58,59 +54,37 @@ class RealStartupDisableIntegrationTests(unittest.TestCase):
         self.assertIn('"/fdilink/raw_imu"', source)
         self.assertIn('"/fdilink/raw_euler"', source)
         self.assertIn("LWImuAhrsGuard imu_ahrs_guard_", header)
-        self.assertNotIn('create_subscription<sensor_msgs::msg::Imu>(\n        "/imu"', source)
+        with self.assertRaisesRegex(AssertionError, "Missing C\\+\\+ wiring"):
+            cpp_index(source, 'create_subscription<sensor_msgs::msg::Imu>("/imu"')
 
     def test_disable_guard_precedes_ros_and_real_runtime(self) -> None:
         source = REAL_SOURCE.read_text(encoding="utf-8")
-        main = source[source.index("int main(") :]
-
-        verify = main.index("LWDeploymentBundle::Verify(")
-        verification_only = main.index("if (verify_deployment_only)")
-        startup_disable = main.index("LWStartupDisableGuard startup_disable;")
-        ros_init = main.index("rclcpp::init(argc, argv);")
-        real_runtime = main.index("std::make_shared<RL_Real>(")
-
-        self.assertLess(verify, verification_only)
-        self.assertLess(verification_only, startup_disable)
-        self.assertLess(startup_disable, ros_init)
-        self.assertLess(ros_init, real_runtime)
+        main = source[cpp_index(source, "int main("):]
+        require_cpp_order(
+            main, "LWDeploymentBundle::Verify(", "if (verify_deployment_only)",
+            "LWStartupDisableGuard startup_disable;", "rclcpp::init(argc, argv);",
+            "std::make_shared<RL_Real>(",
+        )
 
     def test_constructor_uses_established_guard_before_preload(self) -> None:
         source = REAL_SOURCE.read_text(encoding="utf-8")
-        constructor = source[
-            source.index("RL_Real::RL_Real(") : source.index("RL_Real::~RL_Real()")
-        ]
+        constructor = cpp_region(source, "RL_Real::RL_Real(", "RL_Real::~RL_Real()")
 
         self.assertNotIn("InitSerial(", constructor)
-        self.assertLess(
-            constructor.index("startup_disable_->requireHealthy();"),
-            constructor.index("this->PreloadModel(policy);"),
-        )
-        motion_preload = constructor.index("this->PreloadLWPolicyContext(policy);")
-        runtime_handoff = constructor.index("startup_disable_->handOffToRuntime(")
-        worker_start = constructor.index("this->loop_control->start();")
-        self.assertLess(motion_preload, runtime_handoff)
-        self.assertLess(motion_preload, worker_start)
-        self.assertLess(
-            runtime_handoff,
-            worker_start,
+        require_cpp_order(
+            constructor, "startup_disable_->requireHealthy();",
+            "this->PreloadModel(policy);", "this->PreloadLWPolicyContext(policy);",
+            "startup_disable_->handOffToRuntime(", "this->loop_control->start();",
         )
 
-    def test_normal_destruction_finalizes_after_worker_shutdown(self) -> None:
+    def test_command_gate_closes_before_worker_shutdown(self) -> None:
         source = REAL_SOURCE.read_text(encoding="utf-8")
-        destructor = source[
-            source.index("RL_Real::~RL_Real()") : source.index(
-                "void RL_Real::RuntimeDiagnosticsCallback()"
-            )
-        ]
-
-        self.assertLess(
-            destructor.index("startup_disable_->commandGate().close();"),
-            destructor.index("this->loop_control->shutdown();"),
-        )
-        self.assertLess(
-            destructor.index("this->loop_joystick->shutdown();"),
-            destructor.index("startup_disable_->finalize();"),
+        destructor = cpp_region(source, "RL_Real::~RL_Real()",
+                                "void RL_Real::RuntimeDiagnosticsCallback()")
+        # Finalization after all workers is owned by the shared lifecycle suite.
+        require_cpp_order(
+            destructor, "startup_disable_->commandGate().close();",
+            "this->loop_control->shutdown();",
         )
 
 

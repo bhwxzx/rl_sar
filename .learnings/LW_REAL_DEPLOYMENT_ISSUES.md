@@ -14,8 +14,8 @@
 
 ## 当前待办
 
-LW-067～LW-070 已完成；当前待办为 LW-071，尚未获实施审批。
-下表保留本轮处理进度，由用户选择下一项。
+LW-067～LW-071 已完成；当前无待处理条目。
+下表保留本轮处理进度。
 
 | 顺序 | ID | 优先级 | 状态 | 问题 |
 |---:|---|---|---|---|
@@ -23,7 +23,7 @@ LW-067～LW-070 已完成；当前待办为 LW-071，尚未获实施审批。
 | 2 | [LW-068](#lw-068) | P2 / low | resolved | 将只读动作裁剪配置校验集中到所属边界 |
 | 3 | [LW-069](#lw-069) | P2 / low | resolved | 合并基础配置及启动超时参数的重复校验 |
 | 4 | [LW-070](#lw-070) | P2 / low | resolved | 将 ONNX 私有缓存不变量检查集中到加载阶段 |
-| 5 | [LW-071](#lw-071) | P2 / low | pending | 减少源码写法绑定和重复生命周期测试断言 |
+| 5 | [LW-071](#lw-071) | P2 / low | resolved | 减少源码写法绑定和重复生命周期测试断言 |
 
 ## 本轮审查依据与边界
 
@@ -273,7 +273,7 @@ LW-067～LW-070 已完成；当前待办为 LW-071，尚未获实施审批。
 ## [LW-071] Reduce source-spelling coupling and duplicate lifecycle test assertions
 
 **Priority**: P2 / low
-**Status**: pending
+**Status**: resolved
 **Dependencies**: LW-059, LW-066, LW-067
 
 ### Problem and Evidence
@@ -302,6 +302,34 @@ LW-067～LW-070 已完成；当前待办为 LW-071，尚未获实施审批。
 - Regressions in worker shutdown/rollback ordering and relevant dependency
   contracts still fail meaningful checks, not merely text snapshots.
 - Relevant lifecycle, build-workflow, and runtime-linkage suites pass.
+
+### Resolution (2026-09-06)
+
+- 用户明确批准仅实施 LW-071；变更与本验收记录一并提交。
+- 新增小型 lw_source_checks 测试辅助模块：必要的 C++ 接线检查按词法片段
+  匹配，允许空白/换行变化并排除注释；CMake 依赖发现检查读取平坦声明的
+  命令与参数，不要求固定缩进、换行、命令大小写或等价的参数顺序。
+  此辅助模块不是通用解析器，也不以源码顺序检查替代实际行为测试。
+- 真机参数声明、启动禁用接线及命令门关闭检查改用上述辅助函数；删除
+  已由 debug publisher 行为测试覆盖的重复序号比较写法断言，保留非阻塞
+  发布接线检查。launch 接线及其他未涉及断言未做泛化清理。
+- 将真机/仿真工作线程关闭及后端停止顺序统一归属共享生命周期测试，
+  删除重复的仿真析构顺序测试和真机最终禁用顺序断言；启动失败回滚与
+  命令门关闭仍分别保留，不合并不同安全语义。
+- 删除 ONNX 宏传播的精确 CMake 声明断言，由现有 lw_build_target_scope
+  检查实际编译命令；继续运行 lw_runtime_linkage 检查实际链接产物。
+  保留解释器发现先于 ament/使用、系统 fmt 选择、禁止 Python 开发组件、
+  禁止全局编译/RPATH 污染等必要源码约束，未修改 LW-067 的检查器。
+- 在临时副本中执行正反例：已调整的调用布局和 CMake 声明重排通过；交换
+  真机/仿真回滚或析构关闭顺序、提前停止后端、注释掉命令门关闭、追加
+  Python Development、延后解释器发现、加入全局编译选项或 RPATH 均被拒绝。
+  副本不会改动生产源码或仓库 CMakeLists.txt。
+- 三项定向 CTest **3/3** 通过；复用 `/tmp/lw067-debug`、
+  `/tmp/lw067-strict` 构建并运行完整 CTest，各 **53/53** 通过，包含
+  生命周期、构建流程、实际依赖/链接、调试发布及运行时回归。
+  git diff --check 通过。
+- 修改限于三份现有 Python 测试、一个测试辅助模块及本项记录；生产代码、
+  构建配置、策略资产均未修改，未访问真实硬件。
 
 ---
 

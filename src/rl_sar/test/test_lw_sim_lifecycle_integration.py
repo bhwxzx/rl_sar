@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 
 import pathlib
+import tempfile
 import unittest
+from unittest import mock
+
+from lw_source_checks import cpp_index, cpp_region, require_cpp_order
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -56,11 +60,7 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
         constructors = {}
         for name, path in (("real", REAL_SOURCE), ("sim", SIM_SOURCE)):
             source = path.read_text(encoding="utf-8")
-            constructors[name] = source[
-                source.index("RL_Real::RL_Real(") : source.index(
-                    "RL_Real::~RL_Real()"
-                )
-            ]
+            constructors[name] = cpp_region(source, "RL_Real::RL_Real(", "RL_Real::~RL_Real()")
 
         setup_markers = {
             "real": (
@@ -79,9 +79,9 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
 
         for name, constructor in constructors.items():
             starts = [
-                constructor.index("this->loop_joystick->start();"),
-                constructor.index("this->loop_rl->start();"),
-                constructor.index("this->loop_control->start();"),
+                cpp_index(constructor, "this->loop_joystick->start();"),
+                cpp_index(constructor, "this->loop_rl->start();"),
+                cpp_index(constructor, "this->loop_control->start();"),
             ]
             self.assertEqual(
                 starts,
@@ -90,7 +90,7 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
             )
             first_start = starts[0]
             for marker in setup_markers[name]:
-                marker_position = constructor.index(marker)
+                marker_position = cpp_index(constructor, marker)
                 self.assertLess(
                     marker_position,
                     first_start,
@@ -104,77 +104,93 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
                 "CreateIfEnabled(",
                 "CSVInit(",
             ):
-                self.assertNotIn(
-                    marker,
-                    startup_tail,
-                    f"{name} added fallible resource setup after worker startup",
-                )
+                with self.assertRaisesRegex(AssertionError, "Missing C\\+\\+ wiring"):
+                    cpp_index(startup_tail, marker)
 
-            shutdowns = [
-                startup_tail.index("this->loop_control->shutdown();"),
-                startup_tail.index("this->loop_rl->shutdown();"),
-                startup_tail.index("this->loop_joystick->shutdown();"),
-            ]
-            self.assertEqual(
-                shutdowns,
-                sorted(shutdowns),
-                f"{name} startup rollback order drifted",
+            require_cpp_order(
+                startup_tail, "this->loop_control->shutdown();",
+                "this->loop_rl->shutdown();", "this->loop_joystick->shutdown();",
             )
 
     def test_real_and_sim_join_workers_before_backend_shutdown(self) -> None:
         real_source = REAL_SOURCE.read_text(encoding="utf-8")
         sim_source = SIM_SOURCE.read_text(encoding="utf-8")
-        real_destructor = real_source[
-            real_source.index("RL_Real::~RL_Real()") : real_source.index(
-                "void RL_Real::RuntimeDiagnosticsCallback()"
-            )
-        ]
-        sim_destructor = sim_source[
-            sim_source.index("RL_Real::~RL_Real()") : sim_source.index(
-                "void RL_Real::RequestSimulationStop()"
-            )
-        ]
+        real_destructor = cpp_region(real_source, "RL_Real::~RL_Real()",
+                                     "void RL_Real::RuntimeDiagnosticsCallback()")
+        sim_destructor = cpp_region(sim_source, "RL_Real::~RL_Real()",
+                                    "void RL_Real::RequestSimulationStop()")
 
-        for name, destructor in (
-            ("real", real_destructor),
-            ("sim", sim_destructor),
+        for destructor, backend_stop in (
+            (real_destructor, "startup_disable_->finalize();"),
+            (sim_destructor, "physics_lifecycle_->Stop();"),
         ):
-            shutdowns = [
-                destructor.index("this->loop_control->shutdown();"),
-                destructor.index("this->loop_rl->shutdown();"),
-                destructor.index("this->loop_joystick->shutdown();"),
-            ]
-            self.assertEqual(
-                shutdowns,
-                sorted(shutdowns),
-                f"{name} destructor worker shutdown order drifted",
+            require_cpp_order(
+                destructor, "this->loop_control->shutdown();",
+                "this->loop_rl->shutdown();", "this->loop_joystick->shutdown();",
+                backend_stop,
             )
 
-        self.assertLess(
-            real_destructor.index("this->loop_joystick->shutdown();"),
-            real_destructor.index("startup_disable_->finalize();"),
-        )
-        self.assertLess(
-            sim_destructor.index("this->loop_joystick->shutdown();"),
-            sim_destructor.index("physics_lifecycle_->Stop();"),
-        )
+    def test_lifecycle_checks_accept_layout_but_reject_order_regressions(self) -> None:
+        import test_lw_real_startup_disable_integration as real_tests
 
-    def test_destructor_joins_physics_after_business_workers(self) -> None:
-        source = SIM_SOURCE.read_text(encoding="utf-8")
-        destructor = source[
-            source.index("RL_Real::~RL_Real()") : source.index(
-                "void RL_Real::RequestSimulationStop()"
-            )
-        ]
+        original_real = REAL_SOURCE.read_text(encoding="utf-8")
+        original_sim = SIM_SOURCE.read_text(encoding="utf-8")
+        real_case = real_tests.RealStartupDisableIntegrationTests()
+        with tempfile.TemporaryDirectory(prefix="lw-wiring-checks-") as temporary:
+            real_path = pathlib.Path(temporary) / "real.cpp"
+            sim_path = pathlib.Path(temporary) / "sim.cpp"
+            def install(real: str, sim: str) -> None:
+                real_path.write_text(real, encoding="utf-8")
+                sim_path.write_text(sim, encoding="utf-8")
 
-        self.assertLess(
-            destructor.index("this->loop_control->shutdown();"),
-            destructor.index("physics_lifecycle_->Stop();"),
-        )
-        self.assertLess(
-            destructor.index("this->loop_joystick->shutdown();"),
-            destructor.index("physics_lifecycle_->Stop();"),
-        )
+            def reflow(source: str) -> str:
+                # Only whitespace in known calls changes; strings/comments stay intact.
+                for snippet in (
+                    "RL_Real::RL_Real(", "RL_Real::~RL_Real()",
+                    "this->loop_control->shutdown();", "this->loop_rl->shutdown();",
+                    "this->loop_joystick->shutdown();", "this->loop_control->start();",
+                    "this->loop_rl->start();", "this->loop_joystick->start();",
+                    "physics_lifecycle_->Stop();", "startup_disable_->finalize();",
+                    "LWDebugPublisher::CreateIfEnabled(",
+                ):
+                    source = source.replace(snippet, snippet.replace("(", " (\n").replace("->", " -> "))
+                return source.replace('declare_parameter<std::int64_t>(\n',
+                                      'declare_parameter<std::int64_t> ( ')
+
+            with mock.patch.dict(globals(), REAL_SOURCE=real_path, SIM_SOURCE=sim_path), \
+                 mock.patch.object(real_tests, "REAL_SOURCE", real_path):
+                install(reflow(original_real), reflow(original_sim))
+                self.test_real_and_sim_finish_fallible_setup_before_worker_start()
+                self.test_real_and_sim_join_workers_before_backend_shutdown()
+                real_case.test_debug_telemetry_is_rate_bounded_nonblocking_and_source_fresh()
+                real_case.test_disable_guard_precedes_ros_and_real_runtime()
+                real_case.test_constructor_uses_established_guard_before_preload()
+                real_case.test_command_gate_closes_before_worker_shutdown()
+
+                def swap(source: str, first: str, second: str) -> str:
+                    return source.replace(first, "LW_TEST_PLACEHOLDER").replace(second, first).replace(
+                        "LW_TEST_PLACEHOLDER", second)
+
+                for name, original in (("real", original_real), ("sim", original_sim)):
+                    for first, second, check in (
+                        ("this->loop_control->shutdown();", "this->loop_rl->shutdown();",
+                         self.test_real_and_sim_finish_fallible_setup_before_worker_start),
+                        ("this->loop_control->shutdown();", "this->loop_rl->shutdown();",
+                         self.test_real_and_sim_join_workers_before_backend_shutdown),
+                        ("this->loop_joystick->shutdown();",
+                         "startup_disable_->finalize();" if name == "real" else "physics_lifecycle_->Stop();",
+                         self.test_real_and_sim_join_workers_before_backend_shutdown),
+                    ):
+                        with self.subTest(runtime=name, first=first, second=second, check=check.__name__):
+                            changed = swap(original, first, second)
+                            install(changed if name == "real" else original_real,
+                                    changed if name == "sim" else original_sim)
+                            with self.assertRaisesRegex(AssertionError, "wiring order differs"):
+                                check()
+                install(original_real.replace("startup_disable_->commandGate().close();",
+                                              "// startup_disable_->commandGate().close();"), original_sim)
+                with self.assertRaisesRegex(AssertionError, "Missing C\\+\\+ wiring"):
+                    real_case.test_command_gate_closes_before_worker_shutdown()
 
     def test_invalid_scene_is_reported_before_thread_start(self) -> None:
         source = MUJOCO_UTILS.read_text(encoding="utf-8")
