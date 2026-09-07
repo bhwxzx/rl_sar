@@ -4,7 +4,7 @@
 
 - 归档日期：2026-09-06；核对基线：`d03c6bd`。
 - 保存本轮 5 项问题的完整审查背景、方案、审批与验收证据；当前状态以主文档为准。
-- 各项 Resolution 的结项提交已按 Git 历史补齐。
+- 各项解决记录的结项提交已按 Git 历史补齐。
 - 原问题行号、调用路径、临时目录及“后续问题未实施”等文字属于当时的历史语境，
   不代表当前状态，也不代表已完成实机安全验证。
 
@@ -23,51 +23,43 @@
 
 <a id="lw-067"></a>
 
-## [LW-067] Fix target-scope test false positives for valid compiler configurations
+## [LW-067] 修复构建目标检查对合法编译配置的误报
 
-**Priority**: P2 / medium
-**Status**: resolved
-**Dependencies**: LW-066
+**优先级**： P2 / 中
+**状态**： resolved
+**依赖**： LW-066
 
-### Problem and Evidence
+### 问题与证据
 
-- `src/rl_sar/test/test_lw_build_target_scope.py:40` recognizes a standalone
-  include-path token but not the equivalent `-I/path` spelling.
-- Line 50 requires warning options to be absent when strict mode is off,
-  including options explicitly supplied by the user or toolchain.
-- Fresh configure with `LW_STRICT_WARNINGS=OFF` and `CMAKE_CXX_FLAGS=-Wall`
-  succeeds, but the checker rejects test_lw_joinable_worker for `-Wall`.
-- Fresh configure with `CMAKE_NO_SYSTEM_FROM_IMPORTED=ON` succeeds, but the
-  checker misreports inference_runtime's ONNX header/layout contract.
+- `src/rl_sar/test/test_lw_build_target_scope.py:40` 能识别独立的头文件搜索路径参数，却不能识别等价的 `-I/path` 连写形式。
+- 第 50 行要求非严格模式下不得出现警告选项，连用户或工具链显式提供的选项也会被拒绝。
+- 使用 `LW_STRICT_WARNINGS=OFF` 和 `CMAKE_CXX_FLAGS=-Wall` 全新配置成功，但检查器因 `-Wall` 拒绝 test_lw_joinable_worker。
+- 使用 `CMAKE_NO_SYSTEM_FROM_IMPORTED=ON` 全新配置成功，但检查器误报 inference_runtime 的 ONNX 头文件与布局约定。
 
-### Intended Scope
+### 计划范围
 
-- Correct compiler-argument parsing and distinguish project warning policy
-  from user/toolchain flags; check actual dependency and ABI requirements.
-- Limit changes to the target-scope checker and its necessary regression
-  coverage/CMake wiring. General source-text test cleanup belongs to LW-071.
+- 修正编译参数解析，区分项目警告策略与用户、工具链选项；检查实际依赖和 ABI 要求。
+- 修改限于目标作用域检查器及必要的回归测试和 CMake 接线。通用源码文本测试清理归属 LW-071。
 
-### Acceptance Criteria
+### 验收标准
 
-- Both reproduced valid configurations pass the relevant scope checks.
-- Missing ONNX ABI definitions, genuinely leaked dependencies, and missing
-  project strict-warning settings are still detected by negative cases.
-- Ordinary Debug and strict checks remain green; no production RPATH or
-  application behavior changes.
+- 两种已复现的合法配置均通过相关作用域检查。
+- 反例仍能检出 ONNX ABI 定义缺失、实际依赖泄漏及项目严格警告设置缺失。
+- 普通 Debug 与严格检查保持通过；生产 RPATH 和应用行为不变。
 
-### Resolution (2026-09-05)
+### 解决记录 (2026-09-05)
 
 - 用户明确批准仅实施 LW-067；结项提交：`39a3d22`。
 - 参数检查统一解析分离/连写的 include、define、undefine 选项，支持
   相对路径和带空格路径。SDK/ONNX 隔离检查使用解析后的路径与宏。
 - CMake 仅在 Linux BUILD_TESTING 下导出各编译目标实际 COMPILE_OPTIONS；
   严格警告同时核对目标属性与最终命令，允许用户通过 CMAKE_CXX_FLAGS
-  额外启用警告。检查仍能拒绝项目给 vendor 施加的严格警告，以及被用户
+  额外启用警告。检查仍能拒绝项目给第三方代码施加的严格警告，以及被用户
   同名选项掩盖的项目警告缺失。保留必需目标存在性和原有 ELF/RPATH 检查。
 - 修改 CMake 测试接线和 test_lw_build_target_scope.py，新增
   test_lw_build_target_scope_regressions.py；5 项针对性回归覆盖等价参数
   写法、额外用户警告、缺失/取消 ONNX 宏、实际依赖泄漏、项目严格警告缺失
-  及 vendor 警告泄漏。正负例均通过。
+  及第三方代码警告泄漏。正负例均通过。
 - 全新 `/tmp/lw067-debug` 和 `/tmp/lw067-strict` 构建成功，完整 CTest
   各 **53/53** 通过。全新 `/tmp/lw067-user-warnings` 使用
   `LW_STRICT_WARNINGS=OFF; CMAKE_CXX_FLAGS=-Wall`，全新
@@ -83,41 +75,33 @@
 
 <a id="lw-068"></a>
 
-## [LW-068] Validate immutable action-clipping configuration at its owning boundary
+## [LW-068] 将只读动作裁剪配置校验集中到所属边界
 
-**Priority**: P2 / low
-**Status**: resolved
-**Dependencies**: LW-013, LW-038
+**优先级**： P2 / 低
+**状态**： resolved
+**依赖**： LW-013, LW-038
 
-### Problem and Evidence
+### 问题与证据
 
-- `src/rl_sar/library/core/safety/lw_runtime_core.hpp:604` checks empty bounds,
-  vector lengths, and finite values on every inference cycle.
-- `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp:510`
-  already validates both vectors and lower/upper ordering before publication
-  through the read-only policy definition.
-- The maintained production path provides no new configuration input between
-  those validations. Runtime cost reduction has not been quantified.
+- `src/rl_sar/library/core/safety/lw_runtime_core.hpp:604` 在每轮推理中检查裁剪边界是否为空、向量长度及数值有限性。
+- `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp:510` 已在通过只读策略定义发布前验证两个向量及上下限顺序。
+- 受维护的生产路径在这些校验之间没有新的配置输入。尚未量化运行开销的降低幅度。
 
-### Intended Scope
+### 计划范围
 
-- Establish the validated configuration contract at loading/activation and
-  remove repeated hot-path checks of those same immutable properties.
-- Preserve validation of newly inferred actions and the clipping operation.
-  Do not alter model output, policy files, or safety-event handling generally.
+- 在加载或激活阶段建立已验证的配置约定，移除热路径对相同不可变属性的重复检查。
+- 保留新推理动作的校验和裁剪操作，不改变模型输出、策略文件或通用安全事件处理。
 
-### Acceptance Criteria
+### 验收标准
 
-- Missing, malformed, nonfinite, and reversed clipping bounds fail before
-  inference workers consume a policy definition.
-- Finite actions retain identical clipping results; invalid model actions
-  retain the existing safety response.
-- Configuration, inference/runtime parity, and allocation regressions pass.
+- 缺失、格式错误、含非有限值或上下限颠倒的裁剪边界，在推理线程使用策略定义前即被拒绝。
+- 有限动作的裁剪结果一致；无效模型动作仍触发现有安全响应。
+- 配置、推理与运行时一致性、内存分配回归均通过。
 
-### Resolution (2026-09-05)
+### 解决记录 (2026-09-05)
 
 - 用户明确批准仅实施 LW-068；结项提交：`76dc6bb`。
-- 已核对真机、Sim2Sim 与 profiler 的正式调用路径：PreloadModel 先调用
+- 已核对真机、Sim2Sim 与性能分析器 的正式调用路径：PreloadModel 先调用
   ValidateLWPolicyConfiguration，再由 PreloadLWPolicyContext 发布只读定义，
   ActivateLWPolicy 只激活已预加载的定义。保留现有加载校验，不新增重复入口。
 - lw_runtime_core.hpp 删除每轮对裁剪上下限长度/有限值的重复扫描及空数组
@@ -137,49 +121,41 @@
 
 <a id="lw-069"></a>
 
-## [LW-069] Consolidate repeated base-configuration and startup timeout validation
+## [LW-069] 合并基础配置及启动超时参数的重复校验
 
-**Priority**: P2 / low
-**Status**: resolved
-**Dependencies**: LW-013, LW-038
+**优先级**： P2 / 低
+**状态**： resolved
+**依赖**： LW-013, LW-038
 
-### Problem and Evidence
+### 问题与证据
 
-- `src/rl_sar/src/rl_real_LW.cpp:106` validates the base configuration, then
-  repeats finite/positive checks for sensor_timeout, trusted_imu_timeout,
-  imu_ahrs_pair_max_age, and serial_write_timeout.
-- The same four rules exist in
-  `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp:345`.
-- ValidateLWPolicyConfiguration also revalidates the base configuration on
-  each policy preload, despite the maintained startup path having validated it.
+- `src/rl_sar/src/rl_real_LW.cpp:106` 验证基础配置后，又重复检查 sensor_timeout、trusted_imu_timeout、imu_ahrs_pair_max_age 和 serial_write_timeout 是否为有限正数。
+- `src/rl_sar/library/core/rl_sdk/lw_configuration_validation.cpp:345` 已有同样的四条规则。
+- 尽管受维护的启动路径已验证基础配置，ValidateLWPolicyConfiguration 仍在每次策略预加载时重复验证。
 
-### Intended Scope
+### 计划范围
 
-- Centralize these rules and reuse validated base results in maintained
-  startup/preload paths, while preserving a checked entry for raw YAML callers.
-- Preserve independent checks after time-unit conversion, especially rejection
-  of durations rounded to zero, and all startup-disable lifecycle guarantees.
+- 集中维护这些规则，并在受维护的启动与预加载路径中复用已验证的基础结果，同时为原始 YAML 调用方保留带校验的入口。
+- 保留时间单位转换后的独立检查，特别是拒绝舍入为零的时长，并保留全部启动禁能生命周期保证。
 
-### Acceptance Criteria
+### 验收标准
 
-- Every affected invalid configuration still fails before worker startup with
-  an actionable diagnostic; raw-YAML callers cannot bypass validation.
-- Valid real/profiler/simulation configurations retain their existing values.
-- Startup, configuration, and profiler regressions pass; no worker sequencing
-  or serial command changes are bundled.
+- 所有受影响的无效配置仍在工作线程启动前失败，并提供可操作的诊断；原始 YAML 调用方不能绕过校验。
+- 合法的实机、性能分析器和仿真配置保持原值。
+- 启动、配置及性能分析器回归通过；不捆绑线程顺序或串口命令变更。
 
-### Resolution (2026-09-05)
+### 解决记录 (2026-09-05)
 
 - 用户明确批准仅实施 LW-069；结项提交：`eeb1d16`。
 - 四个超时参数由 ValidateLWBaseConfiguration 统一解析、校验并保留到
   LWBaseRuntimeConfiguration；真机启动删除重复的有限值/正数检查，
-  真机和 profiler 直接使用类型化结果。原有时长转换、接收端非正时长检查、
+  真机和性能分析器 直接使用类型化结果。原有时长转换、接收端非正时长检查、
   启动禁用及工作线程顺序保持不变。
 - 新增 LWValidatedBaseConfiguration，构造时克隆并验证基础 YAML，私有只读
   快照与运行时结果绑定。真机、仿真及 profiler 安装此对象；PreloadModel
   复用它校验各策略，不再逐策略全量校验基础配置。原始 YAML 策略入口仍先
   完整验证基础配置，策略自身及合并配置的必要校验未删除。
-- 原运行时数值 setter 会清除已验证快照；未安装快照的预加载路径仍必须
+- 原运行时数值设置接口 会清除已验证快照；未安装快照的预加载路径仍必须
   验证 YAML，避免将未经验证的数值或过期快照当成校验凭据。基础配置来源
   或返回的合并 YAML 被修改时，不会影响已安装快照。
 - 配置测试覆盖四个参数缺失、错误类型、零/负值、NaN/正负 Inf、原始 YAML
@@ -187,7 +163,7 @@
   在两种入口间保持一致，类型化超时值与 YAML 一致。时间边界测试覆盖
   IMU、motor、IMU/AHRS 及串口超时由极小正秒数转换为零后的拒绝行为。
 - 复用 `/tmp/lw067-debug`、`/tmp/lw067-strict` 重建全部目标（包括真机、
-  仿真和 profiler）；最终完整 CTest 各 **53/53** 通过，包含配置、启动、
+  仿真和性能分析器）；最终完整 CTest 各 **53/53** 通过，包含配置、启动、
   profiler、运行时一致性和分配约束回归。git diff --check 通过。
 - 生命周期源码测试仅同步本项校验入口名称，保留原顺序断言，未实施 LW-071。
   未修改策略资产、串口命令或其他问题，未访问真实硬件，未测量性能收益。
@@ -196,38 +172,31 @@
 
 <a id="lw-070"></a>
 
-## [LW-070] Consolidate ONNX private-cache invariant checks at model load
+## [LW-070] 将 ONNX 私有缓存不变量检查集中到加载阶段
 
-**Priority**: P2 / low
-**Status**: resolved
-**Dependencies**: LW-050, LW-063
+**优先级**： P2 / 低
+**状态**： resolved
+**依赖**： LW-050, LW-063
 
-### Problem and Evidence
+### 问题与证据
 
-- `src/rl_sar/library/core/inference_runtime/inference_runtime.cpp:198`
-  checks four private metadata/name containers on every forwardInto call.
-- Line 382 checks the output metadata count again in validateOutput.
-- setup_input_output_info validates the single-input/output contract; load
-  sets loaded_ only after successful setup. These private caches do not change
-  during normal inference.
+- `src/rl_sar/library/core/inference_runtime/inference_runtime.cpp:198` 在每次 forwardInto 调用时检查四个私有元数据或名称容器。
+- 第 382 行在 validateOutput 中再次检查输出元数据数量。
+- setup_input_output_info 校验单输入、单输出约定；load 仅在设置成功后置位 loaded_。这些私有缓存在正常推理期间不会变化。
 
-### Intended Scope
+### 计划范围
 
-- Consolidate internal cache invariants at successful load and preserve
-  consistent state after failed or replacement loads.
-- Retain public tensor-view pointer/count/size checks. Removing checks on
-  actual ONNX execution results is not implied by this issue.
-- Do not change shared-environment ownership, model isolation, or reload
-  concurrency contracts.
+- 在成功加载时集中建立内部缓存不变量，并在加载失败或替换加载后维持一致状态。
+- 保留公开张量视图的指针、数量和大小检查。本问题不包含移除实际 ONNX 执行结果的检查。
+- 不改变共享环境所有权、模型隔离或重新加载的并发约定。
 
-### Acceptance Criteria
+### 验收标准
 
-- Invalid models fail loading; failed reloads leave the model unusable rather
-  than exposing partial caches. Valid inference remains numerically identical.
-- Invalid caller buffers and execution failures remain detectable.
-- Inference contracts, model isolation/lifetime, and runtime regressions pass.
+- 无效模型加载失败；重新加载失败后模型不可用，不能暴露部分缓存。合法推理的数值保持一致。
+- 仍能检测无效调用方缓冲区及执行失败。
+- 推理约定、模型隔离与生命周期、运行时回归均通过。
 
-### Resolution (2026-09-05)
+### 解决记录 (2026-09-05)
 
 - 用户明确批准仅实施 LW-070；结项提交：`8f32b25`。
 - 将 forwardInto 中四个私有元数据/名称容器的数量检查移到
@@ -245,7 +214,7 @@
   调用方存储保持、并发模型生命周期与合法模型数值回归。
 - 复用 `/tmp/lw067-debug`、`/tmp/lw067-strict` 重建全部目标，完整 CTest
   各 **53/53** 通过（包括推理契约、配置、运行时一致性、分配约束和
-  profiler 回归）；git diff --check 通过。
+  性能分析器回归）；git diff --check 通过。
 - 修改仅涉及推理实现、已有推理测试与本项记录；未处理 LW-071，未访问
   真实硬件，未测量性能收益。
 
@@ -253,40 +222,31 @@
 
 <a id="lw-071"></a>
 
-## [LW-071] Reduce source-spelling coupling and duplicate lifecycle test assertions
+## [LW-071] 减少源码写法绑定和重复生命周期测试断言
 
-**Priority**: P2 / low
-**Status**: resolved
-**Dependencies**: LW-059, LW-066, LW-067
+**优先级**： P2 / 低
+**状态**： resolved
+**依赖**： LW-059, LW-066, LW-067
 
-### Problem and Evidence
+### 问题与证据
 
-- `src/rl_sar/test/test_lw_real_startup_disable_integration.py:23` matches
-  literal source text including indentation and newlines.
-- `src/rl_sar/test/test_build_workflow.py:150` and subsequent checks require
-  exact CMake statement spelling rather than only the resulting contract.
-- `src/rl_sar/test/test_lw_sim_lifecycle_integration.py:162` repeats shutdown
-  ordering already implied by the immediately preceding test's worker order
-  and last-worker-before-physics assertions.
+- `src/rl_sar/test/test_lw_real_startup_disable_integration.py:23` 按包含缩进和换行的源码原文匹配。
+- `src/rl_sar/test/test_build_workflow.py:150` 及后续检查要求 CMake 语句写法完全一致，而非仅验证最终约定。
+- `src/rl_sar/test/test_lw_sim_lifecycle_integration.py:162` 重复断言退出顺序；紧邻的前一项测试已通过线程顺序及最后一个线程先于物理后端停止的断言覆盖该要求。
 
-### Intended Scope
+### 计划范围
 
-- Consolidate duplicate assertions and reduce exact source-spelling checks
-  in the identified tests, using existing behavior/artifact checks where they
-  cover the same requirement. Keep narrowly necessary wiring checks.
-- Preserve startup/rollback/shutdown coverage; do not delete whole safety
-  suites or introduce a broad production-code refactor just for testing.
-- LW-067 owns generated compiler-argument parsing and its reproduced errors.
+- 合并所列测试中的重复断言，减少对源码精确写法的依赖；已有行为或产物检查能覆盖同一要求时直接复用，保留必要且范围有限的接线检查。
+- 保留启动、失败回收及退出覆盖；不整套删除安全测试，也不单纯为测试而大幅重构生产代码。
+- 生成的编译参数解析及其已复现错误归属 LW-067。
 
-### Acceptance Criteria
+### 验收标准
 
-- Behavior-preserving whitespace/layout changes do not fail the affected
-  checks; duplicate lifecycle assertions have one clear owner.
-- Regressions in worker shutdown/rollback ordering and relevant dependency
-  contracts still fail meaningful checks, not merely text snapshots.
-- Relevant lifecycle, build-workflow, and runtime-linkage suites pass.
+- 不改变行为的空白或布局调整不再使相关检查失败；重复生命周期断言有唯一、明确的归属。
+- 工作线程退出、失败回收顺序及相关依赖约定的退化，仍会被有意义的检查检出，而非仅依赖文本快照。
+- 相关生命周期、构建流程及运行时链接测试均通过。
 
-### Resolution (2026-09-06)
+### 解决记录 (2026-09-06)
 
 - 用户明确批准仅实施 LW-071；结项提交：`d03c6bd`。
 - 新增小型 lw_source_checks 测试辅助模块：必要的 C++ 接线检查按词法片段
@@ -294,8 +254,8 @@
   命令与参数，不要求固定缩进、换行、命令大小写或等价的参数顺序。
   此辅助模块不是通用解析器，也不以源码顺序检查替代实际行为测试。
 - 真机参数声明、启动禁用接线及命令门关闭检查改用上述辅助函数；删除
-  已由 debug publisher 行为测试覆盖的重复序号比较写法断言，保留非阻塞
-  发布接线检查。launch 接线及其他未涉及断言未做泛化清理。
+  已由 调试发布器行为测试覆盖的重复序号比较写法断言，保留非阻塞
+  发布接线检查。启动文件接线及其他未涉及断言未做泛化清理。
 - 将真机/仿真工作线程关闭及后端停止顺序统一归属共享生命周期测试，
   删除重复的仿真析构顺序测试和真机最终禁用顺序断言；启动失败回滚与
   命令门关闭仍分别保留，不合并不同安全语义。
