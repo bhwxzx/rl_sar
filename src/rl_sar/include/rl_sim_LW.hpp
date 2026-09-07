@@ -68,6 +68,7 @@ private:
         const LWSafetyDecision& decision,
         const std::string& reason) noexcept;
     void ApplySimulationControls();
+    void StartRuntimeLoopsIfReady();
 
     // loop
     std::shared_ptr<LoopFunc> loop_joystick;

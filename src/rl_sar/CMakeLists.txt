@@ -300,6 +300,12 @@ find_package(Threads REQUIRED)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(test_lw_sim_startup test/test_lw_sim_startup.cpp)
+    target_include_directories(test_lw_sim_startup PRIVATE library/core/simulation)
+    target_link_libraries(test_lw_sim_startup PRIVATE Threads::Threads)
+    add_test(NAME lw_sim_startup COMMAND test_lw_sim_startup)
+    set_tests_properties(lw_sim_startup PROPERTIES TIMEOUT 10)
+
     add_executable(test_lw_joinable_worker
         test/test_lw_joinable_worker.cpp
     )

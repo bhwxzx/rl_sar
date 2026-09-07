@@ -32,6 +32,7 @@
 #include "simulate.h"
 #include "array_safety.h"
 #include "lw_joinable_worker.hpp"
+#include "lw_sim_startup.hpp"
 
 #define MUJOCO_PLUGIN_DIR "mujoco_plugin"
 
@@ -454,7 +455,7 @@ public:
   using ModelValidator = std::function<void(const mjModel&, mjData&)>;
 
   explicit LWMuJoCoPhysicsLifecycle(mj::Simulate& sim)
-      : sim_(sim), worker_([this]() { sim_.RequestExit(); }) {}
+      : sim_(sim), worker_([this]() { startup_.Cancel(); sim_.RequestExit(); }) {}
 
   ~LWMuJoCoPhysicsLifecycle() {
     Stop();
@@ -518,7 +519,10 @@ public:
               const std::unique_lock<std::recursive_mutex> lock(sim_.mtx);
               mj_forward(model_, data_);
             }
-            PhysicsLoop(sim_, model_, data_);
+            startup_.PublishReady();
+            if (startup_.WaitForRuntime([this]() { return sim_.exitrequest.load() != 0; })) {
+              PhysicsLoop(sim_, model_, data_);
+            }
           },
           std::chrono::seconds(2));
     } catch (...) {
@@ -527,7 +531,10 @@ public:
     }
   }
 
+  LWSimStartup& startup() noexcept { return startup_; }
+
   void Stop() noexcept {
+    startup_.Cancel();
     worker_.shutdown();
 
     const std::unique_lock<std::recursive_mutex> lock(sim_.mtx);
@@ -554,6 +561,7 @@ public:
 
 private:
   mj::Simulate& sim_;
+  LWSimStartup startup_;  // outlives the worker, including constructor unwinding
   LWJoinableWorker worker_;
   mjModel* model_ = nullptr;
   mjData* data_ = nullptr;

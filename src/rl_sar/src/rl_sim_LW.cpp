@@ -220,8 +220,8 @@ RL_Real::RL_Real(int argc, char **argv)
         loop_error_handler);
 
     // Match the real-robot lifecycle: finish every fallible resource setup
-    // before publishing this object to the worker callbacks. Worker startup
-    // must remain the final constructor stage.
+    // before the ROS executor can start runtime worker callbacks. Physics
+    // initialization alone cannot authorize runtime startup.
     this->operator_status_timer_ = ros2_node->create_wall_timer(
         100ms,
         std::bind(&RL_Real::OperatorStatusCallback, this));
@@ -242,27 +242,42 @@ RL_Real::RL_Real(int argc, char **argv)
     this->CSVInit(this->robot_name);
 #endif
 
+    // Runtime loops start from the ROS executor after render/physics readiness.
+}
+
+void RL_Real::StartRuntimeLoopsIfReady()
+{
     try
     {
-        this->loop_joystick->start();
-        this->loop_rl->start();
-        this->loop_control->start();
+        physics_lifecycle_->startup().StartIfReady(
+            [this](int stage)
+            {
+                if (stage == 0) this->loop_joystick->start();
+                else if (stage == 1) this->loop_rl->start();
+                else this->loop_control->start();
+            },
+            [this]() noexcept
+            {
+                this->loop_control->shutdown();
+                this->loop_rl->shutdown();
+                this->loop_joystick->shutdown();
+            },
+            [this]() { return !rclcpp::ok() || sim->exitrequest.load() != 0; });
     }
     catch (...)
     {
+        // StartIfReady has joined partial workers before touching runtime safety.
         runtime_core_.reportSafetyEvent(
             LWSafetyEvent::StartupLoopStartFailed,
             "[Safety] Failed to start Sim2Sim worker loops");
-        this->loop_control->shutdown();
-        this->loop_rl->shutdown();
-        this->loop_joystick->shutdown();
+        RequestSimulationStop();
         throw;
     }
-
 }
 
 RL_Real::~RL_Real() noexcept
 {
+    physics_lifecycle_->startup().Cancel();
     runtime_core_.reportSafetyEvent(LWSafetyEvent::NormalShutdown);
     this->loop_control->shutdown();
     this->loop_rl->shutdown();
@@ -279,6 +294,7 @@ RL_Real::~RL_Real() noexcept
 
 void RL_Real::RequestSimulationStop() noexcept
 {
+    if (physics_lifecycle_) physics_lifecycle_->startup().Cancel();
     if (sim)
     {
         sim->RequestExit();
@@ -464,6 +480,7 @@ void RL_Real::jointstate_plot_callback(void)
 
 void RL_Real::OperatorStatusCallback()
 {
+    StartRuntimeLoopsIfReady();
     LWOperatorStatusSnapshot status;
     if (!ReadLWOperatorStatus(status)
         || (operator_status_seen_
@@ -1230,6 +1247,7 @@ int main(int argc, char **argv)
             if (rl_sar->sim)
             {
                 rl_sar->sim->RenderLoop();
+                rl_sar->RequestSimulationStop();
             }
             if (shutdown_coordinator.requested())
             {

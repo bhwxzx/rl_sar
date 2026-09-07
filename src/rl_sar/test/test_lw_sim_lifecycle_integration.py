@@ -78,6 +78,23 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
         }
 
         for name, constructor in constructors.items():
+            if name == "sim":
+                setup = cpp_region(SIM_SOURCE.read_text(encoding="utf-8"),
+                                   "RL_Real::RL_Real(", "void RL_Real::StartRuntimeLoopsIfReady()")
+                for marker in setup_markers[name]:
+                    cpp_index(setup, marker)
+                for marker in ("this->loop_joystick->start();", "this->loop_rl->start();",
+                               "this->loop_control->start();"):
+                    with self.assertRaisesRegex(AssertionError, "Missing C\\+\\+ wiring"):
+                        cpp_index(setup, marker)
+                constructor = cpp_region(SIM_SOURCE.read_text(encoding="utf-8"),
+                                         "void RL_Real::StartRuntimeLoopsIfReady()",
+                                         "RL_Real::~RL_Real()")
+                cpp_index(constructor, "physics_lifecycle_->startup().StartIfReady(")
+                callback = cpp_region(SIM_SOURCE.read_text(encoding="utf-8"),
+                                      "void RL_Real::OperatorStatusCallback()",
+                                      "void RL_Real::HandleLoopError(")
+                cpp_index(callback, "StartRuntimeLoopsIfReady();")
             starts = [
                 cpp_index(constructor, "this->loop_joystick->start();"),
                 cpp_index(constructor, "this->loop_rl->start();"),
@@ -89,7 +106,7 @@ class LWSimLifecycleIntegrationTests(unittest.TestCase):
                 f"{name} worker startup order drifted",
             )
             first_start = starts[0]
-            for marker in setup_markers[name]:
+            for marker in (() if name == "sim" else setup_markers[name]):
                 marker_position = cpp_index(constructor, marker)
                 self.assertLess(
                     marker_position,
