@@ -302,8 +302,7 @@ inline void LWBuildPassiveDampingCommand(
 
 inline bool LWStateUsesAttitudeProtection(const std::string& state_name)
 {
-    return state_name == "RLFSMStateGetDown"
-        || state_name == "RLFSMStateRLLocomotion_Leg"
+    return state_name == "RLFSMStateRLLocomotion_Leg"
         || state_name == "RLFSMStateRLLocomotion_Wheel"
         || state_name == "RLFSMStateRL_LegToWheel"
         || state_name == "RLFSMStateRL_WheelToLeg";

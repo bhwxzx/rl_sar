@@ -163,6 +163,7 @@ void testStateSpecificAttitudeProtection()
         "RLFSMStatePassive",
         "RLFSMStateGetUp_Leg",
         "RLFSMStateGetUp_Wheel",
+        "RLFSMStateGetDown",
     };
     for (const auto& state : unprotected_states)
     {
@@ -173,7 +174,6 @@ void testStateSpecificAttitudeProtection()
     }
 
     const std::vector<std::string> protected_states = {
-        "RLFSMStateGetDown",
         "RLFSMStateRLLocomotion_Leg",
         "RLFSMStateRLLocomotion_Wheel",
         "RLFSMStateRL_LegToWheel",

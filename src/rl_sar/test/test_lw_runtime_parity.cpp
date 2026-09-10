@@ -984,6 +984,145 @@ void testS2ExecutesPassiveDamping()
     requireSafetyEqual(real, sim);
 }
 
+void testAttitudeFallbackIsDeliveredInTheTriggeringCycle()
+{
+    constexpr float half_angle = 76.0f * 0.017453292519943295f / 2.0f;
+    for (const std::string state_name : {
+             "RLFSMStateRLLocomotion_Leg",
+             "RLFSMStateRLLocomotion_Wheel",
+             "RLFSMStateRL_LegToWheel",
+             "RLFSMStateRL_WheelToLeg"})
+    {
+        for (const bool entering_state : {false, true})
+        {
+            for (const int axis : {1, 2})
+            {
+                for (const float sign : {-1.0f, 1.0f})
+                {
+                    Harness real;
+                    Harness sim;
+                    for (Harness* harness : {&real, &sim})
+                    {
+                        auto active = std::make_shared<ReplayState>(
+                            harness->rl, state_name, 0.25f);
+                        auto getup = std::make_shared<ReplayState>(
+                            harness->rl, "RLFSMStateGetUp_Leg", 0.25f);
+                        harness->rl.fsm.AddState(active);
+                        harness->rl.fsm.AddState(getup);
+                        harness->rl.fsm.SetInitialState(
+                            entering_state ? getup->GetStateName() : state_name);
+                        harness->cycle();
+                        require(harness->rl.delivered.size() == 1,
+                                "nominal command was not delivered");
+                        harness->rl.source.imu.quaternion =
+                            {std::cos(half_angle), 0.0f, 0.0f, 0.0f};
+                        harness->rl.source.imu.quaternion[axis] =
+                            sign * std::sin(half_angle);
+                        if (entering_state)
+                        {
+                            harness->rl.fsm.RequestStateChange(state_name);
+                        }
+                        harness->cycle();
+                        require(harness->rl.delivered.size() == 2,
+                                "attitude fault retained the previous command");
+                        require(harness->rl.fsm.current_state_->GetStateName()
+                                    == "RLFSMStatePassive",
+                                "attitude fault did not enter Passive this cycle");
+                        require(harness->core.controlledFallbackLatched()
+                                    && !harness->core.terminalLatched()
+                                    && !harness->core.safetySnapshot().shutdown_requested
+                                    && !harness->adapter.shutdown_requested,
+                                "attitude fault did not remain in running S2");
+                        require(harness->adapter.actions.size() == 1
+                                    && harness->adapter.actions.back()
+                                        == LWSafetyAction::PassiveDamping,
+                                "attitude fault requested a terminal action");
+                        RobotCommand<float> expected;
+                        expected.motor_command.resize(kNumDofs);
+                        expected.motor_command.q = harness->rl.source.motor_state.q;
+                        expected.motor_command.dq.assign(kNumDofs, 0.0f);
+                        expected.motor_command.tau.assign(kNumDofs, 0.0f);
+                        expected.motor_command.kp.assign(kNumDofs, 0.0f);
+                        expected.motor_command.kd.assign(kNumDofs, 5.0f);
+                        requireCommandEqual(harness->rl.delivered.back(), expected);
+
+                        // Restoring attitude and pressing GetUp must not clear S2.
+                        harness->rl.source.imu.quaternion = {1.0f, 0.0f, 0.0f, 0.0f};
+                        harness->cycle(0.6f, Input::Keyboard::Num0, Input::Gamepad::A);
+                        require(harness->rl.delivered.size() == 3
+                                    && harness->rl.fsm.current_state_->GetStateName()
+                                        == "RLFSMStatePassive"
+                                    && harness->rl.control.x == 0.0f
+                                    && harness->rl.control.y == 0.0f
+                                    && harness->rl.control.yaw == 0.0f
+                                    && harness->rl.control.current_keyboard
+                                        == Input::Keyboard::None
+                                    && harness->rl.control.current_gamepad
+                                        == Input::Gamepad::None
+                                    && harness->core.controlledFallbackLatched(),
+                                "attitude fallback recovered without a restart");
+                        requireCommandEqual(harness->rl.delivered.back(), expected);
+                        require(harness->adapter.actions.size() == 1,
+                                "latched attitude fault was repeatedly reported");
+                    }
+                    requireSafetyEqual(real, sim);
+                    requireCommandEqual(real.rl.delivered.back(), sim.rl.delivered.back());
+                }
+            }
+        }
+    }
+}
+
+void testGetDownIgnoresAngleButRejectsInvalidFeedback()
+{
+    Harness real;
+    Harness sim;
+    for (Harness* harness : {&real, &sim})
+    {
+        auto getdown = std::make_shared<ReplayState>(
+            harness->rl, "RLFSMStateGetDown", 0.25f);
+        harness->rl.fsm.AddState(getdown);
+        harness->rl.fsm.SetInitialState(getdown->GetStateName());
+        // 180-degree roll is valid feedback despite exceeding the angle limit.
+        harness->rl.source.imu.quaternion = {0.0f, 1.0f, 0.0f, 0.0f};
+        harness->cycle();
+        require(harness->rl.delivered.size() == 1
+                    && harness->rl.fsm.current_state_ == getdown
+                    && harness->adapter.actions.empty(),
+                "GetDown incorrectly applied attitude protection");
+        require(harness->rl.delivered.back().motor_command.kp[0] == 20.0f,
+                "GetDown command was replaced with damping");
+
+        harness->rl.source.imu.quaternion[0] =
+            std::numeric_limits<float>::quiet_NaN();
+        harness->cycle();
+        require(harness->rl.delivered.size() == 1
+                    && harness->core.terminalLatched()
+                    && harness->adapter.shutdown_requested
+                    && harness->adapter.actions.back()
+                        == LWSafetyAction::HardDisableAndShutdown,
+                "GetDown bypassed invalid-feedback protection");
+    }
+    requireSafetyEqual(real, sim);
+}
+
+void testInvalidFinalCommandRemainsTerminalDuringDamping()
+{
+    Harness harness;
+    harness.core.reportSafetyEvent(LWSafetyEvent::AttitudeLimitExceeded);
+    LWControlCycleHooks hooks;
+    hooks.adapter_controls = [&harness]()
+    {
+        harness.rl.robot_command.motor_command.kd[0] =
+            std::numeric_limits<float>::quiet_NaN();
+    };
+    harness.core.runControlCycle(hooks);
+    require(harness.rl.delivered.empty()
+                && harness.core.terminalLatched()
+                && harness.adapter.shutdown_requested,
+            "S2 bypassed invalid final command protection");
+}
+
 void testS3AndS4LatchAndZeroActuators()
 {
     for (const auto event : {
@@ -1136,6 +1275,9 @@ int main()
         testLWKeyboardVelocityCommandsAreIgnored();
         testNonLWStateControllerRetainsLegacyKeyboardVelocity();
         testS2ExecutesPassiveDamping();
+        testAttitudeFallbackIsDeliveredInTheTriggeringCycle();
+        testGetDownIgnoresAngleButRejectsInvalidFeedback();
+        testInvalidFinalCommandRemainsTerminalDuringDamping();
         testS3AndS4LatchAndZeroActuators();
         testInjectedFaultDecisionParity();
         std::cout << "LW runtime parity tests passed" << std::endl;

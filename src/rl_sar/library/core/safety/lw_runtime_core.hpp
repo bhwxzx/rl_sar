@@ -287,7 +287,8 @@ public:
         {
             return;
         }
-        if (!validateFeedbackAndAttitude())
+        // Attitude S2 can continue to damping; invalid feedback/FSM is terminal.
+        if (!validateFeedbackAndAttitude() && terminalLatched())
         {
             return;
         }
@@ -300,15 +301,6 @@ public:
         if (fallback_before_controller)
         {
             applyControlledFallbackCommand();
-            if (rl_->fsm.current_state_
-                && rl_->fsm.current_state_->GetStateName()
-                    != "RLFSMStatePassive")
-            {
-                rl_->StateController(
-                    &rl_->robot_state,
-                    &rl_->robot_command,
-                    false);
-            }
         }
         else
         {
@@ -325,9 +317,17 @@ public:
         publishPolicyInput(state_capture_time);
 
         call(hooks.adapter_controls);
-        if (!validateFeedbackAndAttitude()
-            || !validateCommandForSend(rl_->robot_command)
-            || terminalLatched())
+        if (!validateFeedbackAndAttitude())
+        {
+            if (terminalLatched())
+            {
+                return;
+            }
+            // A transition or adapter update exposed an excessive attitude.
+            // Replace its command before final validation and delivery.
+            applyControlledFallbackCommand();
+        }
+        if (!validateCommandForSend(rl_->robot_command) || terminalLatched())
         {
             return;
         }
@@ -738,6 +738,10 @@ private:
                 != "RLFSMStatePassive")
         {
             rl_->fsm.RequestStateChange("RLFSMStatePassive");
+            rl_->StateController(
+                &rl_->robot_state,
+                &rl_->robot_command,
+                false);
         }
         LWBuildPassiveDampingCommand(
             rl_->robot_state,

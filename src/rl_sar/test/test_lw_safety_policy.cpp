@@ -56,6 +56,7 @@ void testSourceSpecificActions()
              LWSafetyEvent::PolicyOutputInvalid,
              LWSafetyEvent::PolicyConfigurationInvalid,
              LWSafetyEvent::PolicyInputUnavailable,
+             LWSafetyEvent::AttitudeLimitExceeded,
              LWSafetyEvent::PolicyOutputUnavailable})
     {
         require_action(event, LWSafetyAction::PassiveDamping);
@@ -71,7 +72,6 @@ void testSourceSpecificActions()
              LWSafetyEvent::WaitingDisableIncomplete,
              LWSafetyEvent::FeedbackInvalid,
              LWSafetyEvent::FsmStateMissing,
-             LWSafetyEvent::AttitudeLimitExceeded,
              LWSafetyEvent::RobotCommandInvalid,
              LWSafetyEvent::NullRobotCommand,
              LWSafetyEvent::FeedbackReadFailed,

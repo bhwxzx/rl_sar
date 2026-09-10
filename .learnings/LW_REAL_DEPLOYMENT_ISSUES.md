@@ -14,10 +14,70 @@
 
 ## 当前状态
 
-截至 2026-09-06，已记录的 LW-001～LW-071 共 71 项均已结项，当前无待处理条目。
+截至 2026-09-10，历史 LW-001～LW-071 共 71 项均已结项。
+LW-072 已完成批准范围内的修改与离线验证，当前无待处理条目。GetDown 已取消
+姿态角度限制，其他受保护状态姿态越限改为当周期进入锁存的 Passive 阻尼，
+程序保持运行。
 结项仅表示各项批准范围内的修改和所记录验证已完成，不代表所有实机风险已消除。
-近期关于超时阈值、故障分级及恢复方式的讨论尚未形成获批修改项，本次整理不新增
-编号、不重新打开历史问题，也不调整安全参数或处理策略。
+
+## 本次完成问题
+
+<a id="lw-072"></a>
+
+### [LW-072] 调整 GetDown 姿态保护范围及姿态越限阻尼动作
+
+**状态**： resolved
+**批准日期**：2026-09-10
+
+- 问题与证据：用户在 Sim2Sim 的 `RLFSMStateGetDown` 中记录到
+  `roll=-24.9037 deg, pitch=75.4931 deg, threshold=75 deg`，随后执行
+  `hard-disable-and-shutdown` 并结束全部循环。当前 GetDown 被列入姿态保护，
+  `AttitudeLimitExceeded` 属于 S4，且越限会提前结束当前控制周期。
+- 批准范围：GetDown 移出角度保护；腿式/轮式行走及两种形态转换保留 75°
+  阈值；姿态越限改为 S2，当周期转入 Passive 并发送 `Kp=0`、`Kd=5`、
+  目标速度与前馈力矩为零的命令，保持程序运行。沿用 S2 锁存，恢复角度或
+  按起身键不恢复运动，须重启。实机及 Sim2Sim 共用该逻辑。
+- 保护边界：GetUp 和 Passive 继续免于角度限制；无效反馈、非法最终命令
+  等原有终止保护保持有效。
+- 验收标准：覆盖 GetDown 大角度、控制前越限、切入受保护状态后越限、
+  正负横滚/俯仰、同周期阻尼交付、无退出请求、锁存及无效反馈保护。
+- 历史关联：[LW-005](archive/LW_REAL_DEPLOYMENT_RESOLVED_001_066.md#lw-005)、
+  [LW-016](archive/LW_REAL_DEPLOYMENT_RESOLVED_001_066.md#lw-016)。本项更新当前行为，
+  不改写历史审批与验证记录。
+
+#### 解决记录
+
+- 解决日期：2026-09-10；本条记录与实现一并提交，提交标题为
+  `调整 LW 姿态保护范围并将越限改为阻尼`。
+- 实施：`lw_control_safety.hpp` 移除 GetDown 角度保护；
+  `lw_safety_policy.hpp` 将姿态越限映射到 S2 Passive 阻尼；
+  `lw_runtime_core.hpp` 在控制前及状态切换后发现越限时，均在当前周期
+  消费 S2 锁存、切换 Passive 并交付阻尼命令。最终命令继续经过校验，
+  无效反馈或无效最终命令仍触发终止保护。
+- 修改文件：上述三份共享安全头文件；`test_lw_control_safety.cpp`、
+  `test_lw_safety_policy.cpp`、`test_lw_runtime_parity.cpp`、
+  `test_lw_mujoco_control_adapter.cpp`；
+  `docs/LW_BUILD_DEPLOYMENT_CN.md` 及本记录。
+- 构建：`cmake --build build/rl_sar -j2` 通过，包含 `rl_real_LW` 和
+  `rl_sim_LW`。最终构建日志未出现编译警告或错误；
+  `install/rl_sar/lib/rl_sar/rl_sim_LW` 仍链接到此次更新的构建产物。
+- 验证：`ctest --test-dir build/rl_sar --output-on-failure` 为 **53/54**。
+  姿态保护、安全决策、共享运行时及 MuJoCo 适配器测试全部通过；新增覆盖
+  四个受保护状态的正负横滚/俯仰、控制前与切换后当周期阻尼、角度恢复及
+  起身输入不能解除锁存、GetDown 大角度、NaN 反馈与阻尼中的 NaN 最终命令。
+  MuJoCo 无图形界面测试确认姿态 S2 保持阻尼输出且不请求仿真退出。
+- 验证限制：唯一失败项 `lw_configuration_validation` 报告
+  `LW/robot_lab/leg_loco output differs at index 0`，源于用户已有未提交
+  模型与固定输出基线不一致。将 HEAD 中策略资源提取至独立临时目录，
+  仅在临时编译该测试时调整 `POLICY_DIR`，测试通过；未替换工作区模型或
+  修改输出基线。最终完整回归仍如实记为 53/54。
+- 证据：最终构建日志 `/tmp/lw072-final-build.log`、完整回归日志
+  `/tmp/lw072-final-ctest.log`、已提交模型独立核对日志
+  `/tmp/lw072-committed-model-o_0_x4uq/test.log`；`git diff --check` 通过。
+- 边界：未启动交互式仿真、实机节点或串口设备，未进行实机动作验收。
+  用户的 `policy/LW/robot_lab/leg_loco/policy.onnx`、未跟踪的根目录
+  `library/` 和 `.agents/skills/inspect-context-compactions/` 均保留。
+- 后续事项：本项无额外代码待办；S2 锁存按审批保留，需重启才能恢复运动。
 
 ## 已完成问题索引
 

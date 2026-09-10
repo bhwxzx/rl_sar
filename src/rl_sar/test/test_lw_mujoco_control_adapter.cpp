@@ -313,6 +313,18 @@ void TestReorderedLayoutAndSafetyActions()
     bool simulation_running = true;
     int simulation_run = 1;
     std::atomic<int> exit_request{0};
+    adapter.ExecuteSafetyDecision(
+        *data,
+        LWSafetyDecisionFor(LWSafetyEvent::AttitudeLimitExceeded),
+        {simulation_running, simulation_run, exit_request});
+    Require(simulation_running && simulation_run == 1
+                && exit_request.load() == 0,
+            "attitude S2 incorrectly requested simulation shutdown");
+    Require(data->ctrl[beta_actuator] == -1.25
+                && data->ctrl[alpha_actuator] == 2.5
+                && data->ctrl[extra_actuator] == 7.0,
+            "attitude S2 hard-disabled the damping command");
+
     std::fill(data->ctrl, data->ctrl + model->nu, 3.0);
     allocation_count.store(0, std::memory_order_relaxed);
     count_allocations.store(true, std::memory_order_relaxed);
