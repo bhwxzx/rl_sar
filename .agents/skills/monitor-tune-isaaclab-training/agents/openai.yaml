@@ -1,0 +1,4 @@
+interface:
+  display_name: "IsaacLab Advisor / Sim2Sim Reports"
+  short_description: "Assess IsaacLab policies or produce MuJoCo Sim2Sim reports"
+  default_prompt: "Use $monitor-tune-isaaclab-training to assess my IsaacLab policy or use sim2sim-report mode on this deployment computer to produce a bounded MuJoCo test report with full evidence."

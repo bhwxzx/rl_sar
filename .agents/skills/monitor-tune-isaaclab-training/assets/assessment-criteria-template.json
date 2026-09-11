@@ -1,0 +1,34 @@
+{
+  "version": 2,
+  "contract": {
+    "scope": {
+      "task": null,
+      "run_id": null,
+      "backend": null,
+      "profile_id": null,
+      "algorithm": null,
+      "runner": null
+    },
+    "windows": {
+      "window_size": null,
+      "minimum_records": null,
+      "plateau_required_metrics": null
+    },
+    "required_metrics": {},
+    "observed_metrics": {},
+    "hard_failures": {
+      "non_finite_metrics": null,
+      "health_states": [],
+      "metric_limits": {}
+    },
+    "play_gates": {
+      "required_for_convergence": null,
+      "metrics": {}
+    }
+  },
+  "approval": {
+    "status": "draft",
+    "approved_at": null,
+    "approved_contract_sha256": null
+  }
+}

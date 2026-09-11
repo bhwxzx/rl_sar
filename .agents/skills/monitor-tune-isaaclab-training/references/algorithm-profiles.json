@@ -1,0 +1,261 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {
+      "id": "generic",
+      "profile_version": 2,
+      "is_generic": true,
+      "match": {
+        "backends": ["*"],
+        "algorithm_names": ["*"],
+        "runner_classes": ["*"]
+      },
+      "progress_patterns": [
+        {
+          "name": "learning_iteration",
+          "regex": "Learning iteration\\s+(?P<current>\\d+)(?:/(?P<target>\\d+))?",
+          "completion_offset": 1
+        },
+        {
+          "name": "epoch",
+          "regex": "(?:Epoch|epoch)\\s*[: ]\\s*(?P<current>\\d+)(?:/(?P<target>\\d+))?",
+          "completion_offset": 0
+        },
+        {
+          "name": "global_step",
+          "regex": "(?:global_step|Global step|Step)\\s*[: ]\\s*(?P<current>\\d+)(?:/(?P<target>\\d+))?",
+          "completion_offset": 0
+        }
+      ],
+      "metric_aliases": {
+        "Mean reward": "mean_reward",
+        "Mean episode length": "mean_episode_length",
+        "Total timesteps": "total_timesteps",
+        "Iteration time": "iteration_time_seconds"
+      },
+      "protected_parameter_patterns": [
+        "(?:^|\\.)(?:batch_size|num_updates|update_count|num_learning_epochs|num_mini_batches)(?:$|\\.)"
+      ],
+      "resume_required_args": [],
+      "evaluation_capabilities": {
+        "play_entrypoint": null,
+        "supported_artifacts": ["native"],
+        "history_contract": "review_required"
+      }
+    },
+    {
+      "id": "rsl-rl-generic",
+      "profile_version": 2,
+      "is_generic": true,
+      "extends": "generic",
+      "match": {
+        "backends": ["rsl_rl"],
+        "algorithm_names": ["*"],
+        "runner_classes": ["*"]
+      },
+      "metric_aliases": {
+        "Mean action noise std": "action_noise_std",
+        "Mean value_function loss": "value_function_loss",
+        "Mean surrogate loss": "surrogate_loss",
+        "Mean entropy loss": "entropy_loss",
+        "Metrics/base_velocity/error_vel_xy": "error_vel_xy",
+        "Metrics/base_velocity/error_vel_yaw": "error_vel_yaw",
+        "Episode_Termination/time_out": "time_out",
+        "Episode_Termination/terrain_out_of_bounds": "terrain_out_of_bounds",
+        "Episode_Termination/illegal_contact": "illegal_contact"
+      },
+      "resume_required_args": ["--resume"],
+      "evaluation_capabilities": {
+        "play_entrypoint": "scripts/reinforcement_learning/rsl_rl/play.py",
+        "supported_artifacts": ["native"],
+        "history_contract": "review_required"
+      }
+    },
+    {
+      "id": "rsl-rl-ppo",
+      "profile_version": 2,
+      "is_generic": false,
+      "extends": "rsl-rl-generic",
+      "match": {
+        "backends": ["rsl_rl"],
+        "algorithm_names": ["PPO"],
+        "runner_classes": ["OnPolicyRunner"]
+      },
+      "evaluation_capabilities": {
+        "play_entrypoint": "scripts/reinforcement_learning/rsl_rl/play.py",
+        "supported_artifacts": ["native", "jit", "onnx"],
+        "history_contract": "current_observation"
+      }
+    },
+    {
+      "id": "rsl-rl-distillation",
+      "profile_version": 2,
+      "is_generic": false,
+      "extends": "rsl-rl-generic",
+      "match": {
+        "backends": ["rsl_rl"],
+        "algorithm_names": ["Distillation"],
+        "runner_classes": ["DistillationRunner"]
+      },
+      "metric_aliases": {
+        "Mean action loss": "action_loss"
+      },
+      "evaluation_capabilities": {
+        "play_entrypoint": "scripts/reinforcement_learning/rsl_rl/play.py",
+        "supported_artifacts": ["native", "jit", "onnx"],
+        "history_contract": "current_observation"
+      }
+    },
+    {
+      "id": "rsl-rl-dwaq",
+      "profile_version": 2,
+      "is_generic": false,
+      "extends": "rsl-rl-generic",
+      "match": {
+        "backends": ["rsl_rl"],
+        "algorithm_names": ["DWAQPPO"],
+        "runner_classes": ["OnPolicyRunnerDwaq"]
+      },
+      "metric_aliases": {
+        "Mean autoencoder loss": "autoencoder_loss",
+        "Mean velocity_loss loss": "velocity_loss"
+      },
+      "protected_parameter_patterns": [
+        "(?:^|\\.)(?:vae_beta|latent_dim|velocity_dim)(?:$|\\.)"
+      ],
+      "evaluation_capabilities": {
+        "play_entrypoint": "scripts/reinforcement_learning/rsl_rl/play.py",
+        "supported_artifacts": ["native", "jit", "onnx"],
+        "history_contract": "flat_time_major_history"
+      }
+    },
+    {
+      "id": "rsl-rl-amp",
+      "profile_version": 2,
+      "is_generic": false,
+      "extends": "rsl-rl-generic",
+      "match": {
+        "backends": ["rsl_rl"],
+        "algorithm_names": ["AMPPPO"],
+        "runner_classes": ["OnPolicyRunnerAmp"]
+      },
+      "metric_aliases": {
+        "Mean amp/loss loss": "amp_loss",
+        "Mean amp/grad_pen loss": "amp_grad_pen_loss",
+        "Mean amp/policy_pred loss": "amp_policy_pred",
+        "Mean amp/expert_pred loss": "amp_expert_pred"
+      },
+      "protected_parameter_patterns": [
+        "(?:^|\\.)(?:amp_mini_batch_size|discriminator_batch_size|num_discriminator_updates|discriminator_updates|amp_num_updates)(?:$|\\.)"
+      ],
+      "evaluation_capabilities": {
+        "play_entrypoint": "scripts/reinforcement_learning/rsl_rl/play.py",
+        "supported_artifacts": ["native", "jit", "onnx"],
+        "history_contract": "current_observation"
+      }
+    },
+    {
+      "id": "rsl-rl-amp-dwaq",
+      "profile_version": 2,
+      "is_generic": false,
+      "extends": "rsl-rl-amp",
+      "match": {
+        "backends": ["rsl_rl"],
+        "algorithm_names": ["AMPDWAQPPO"],
+        "runner_classes": ["OnPolicyRunnerAmpDwaq"]
+      },
+      "metric_aliases": {
+        "Mean autoencoder loss": "autoencoder_loss",
+        "Mean velocity_loss loss": "velocity_loss"
+      },
+      "protected_parameter_patterns": [
+        "(?:^|\\.)(?:vae_beta|latent_dim|velocity_dim)(?:$|\\.)"
+      ],
+      "evaluation_capabilities": {
+        "play_entrypoint": "scripts/reinforcement_learning/rsl_rl/play.py",
+        "supported_artifacts": ["native", "jit", "onnx"],
+        "history_contract": "flat_time_major_history"
+      }
+    },
+    {
+      "id": "rsl-rl-roa",
+      "profile_version": 2,
+      "is_generic": false,
+      "extends": "rsl-rl-generic",
+      "match": {
+        "backends": ["rsl_rl"],
+        "algorithm_names": ["ROAPPO"],
+        "runner_classes": ["OnPolicyRunnerROA"]
+      },
+      "metric_aliases": {
+        "Mean hist_latent loss": "hist_latent_loss",
+        "Mean vel_loss loss": "vel_loss",
+        "Mean priv_reg loss": "priv_reg_loss"
+      },
+      "protected_parameter_patterns": [
+        "(?:^|\\.)(?:dagger_update_freq|priv_reg_coef_schedule|priv_reg_coef_schedule_resume)(?:$|\\.)"
+      ],
+      "evaluation_capabilities": {
+        "play_entrypoint": "scripts/reinforcement_learning/rsl_rl/play.py",
+        "supported_artifacts": ["native", "jit", "onnx"],
+        "history_contract": "flat_time_major_history"
+      }
+    },
+    {
+      "id": "rsl-rl-amp-roa",
+      "profile_version": 2,
+      "is_generic": false,
+      "extends": "rsl-rl-amp",
+      "match": {
+        "backends": ["rsl_rl"],
+        "algorithm_names": ["AMPROAPPO"],
+        "runner_classes": ["OnPolicyRunnerAmpROA"]
+      },
+      "metric_aliases": {
+        "Mean hist_latent loss": "hist_latent_loss",
+        "Mean vel_loss loss": "vel_loss",
+        "Mean priv_reg loss": "priv_reg_loss"
+      },
+      "protected_parameter_patterns": [
+        "(?:^|\\.)(?:dagger_update_freq|priv_reg_coef_schedule|priv_reg_coef_schedule_resume)(?:$|\\.)"
+      ],
+      "evaluation_capabilities": {
+        "play_entrypoint": "scripts/reinforcement_learning/rsl_rl/play.py",
+        "supported_artifacts": ["native", "jit", "onnx"],
+        "history_contract": "flat_time_major_history"
+      }
+    },
+    {
+      "id": "skrl-generic",
+      "profile_version": 2,
+      "is_generic": true,
+      "extends": "generic",
+      "match": {
+        "backends": ["skrl"],
+        "algorithm_names": ["*"],
+        "runner_classes": ["*"]
+      },
+      "evaluation_capabilities": {
+        "play_entrypoint": "scripts/reinforcement_learning/skrl/play.py",
+        "supported_artifacts": ["native"],
+        "history_contract": "review_required"
+      }
+    },
+    {
+      "id": "cusrl-generic",
+      "profile_version": 2,
+      "is_generic": true,
+      "extends": "generic",
+      "match": {
+        "backends": ["cusrl"],
+        "algorithm_names": ["*"],
+        "runner_classes": ["*"]
+      },
+      "evaluation_capabilities": {
+        "play_entrypoint": "scripts/reinforcement_learning/cusrl/play.py",
+        "supported_artifacts": ["native"],
+        "history_contract": "review_required"
+      }
+    }
+  ]
+}
