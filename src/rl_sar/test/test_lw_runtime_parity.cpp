@@ -561,7 +561,7 @@ void testEffectiveCommandKeepsGaitObservationCoherent()
         {0.4f, -0.2f, 0.3f},
         "nominal commands");
     constexpr float pi = 3.14159265358979323846f;
-    constexpr float expected_phase_time = 0.005f * 4.0f * 1.5f;
+    constexpr float expected_phase_time = 0.0f;
     requireVectorEqual(
         nominal.observations.gait_phase,
         {std::sin(2.0f * pi * expected_phase_time),
@@ -602,12 +602,67 @@ void testTemporaryInhibitionPreservesPhaseClock()
         harness.core.readInferenceTrace(recovered),
         "temporary inhibition recovery did not publish a trace");
     constexpr float pi = 3.14159265358979323846f;
-    constexpr float expected_phase_time = 3.0f * 0.005f * 4.0f * 1.5f;
+    constexpr float expected_phase_time = 2.0f * 0.005f * 4.0f * 1.5f;
     requireVectorEqual(
         recovered.observations.gait_phase,
         {std::sin(2.0f * pi * expected_phase_time),
          std::cos(2.0f * pi * expected_phase_time)},
         "temporary inhibition recovery gait phase");
+}
+
+void testGaitClockCommitAndActivationBoundaries()
+{
+    Harness harness;
+    prepareInferenceHarness(harness);
+    require(harness.core.gaitPhaseTime() == 0.0f, "initial gait clock not zero");
+    harness.core.runInferenceCycle(false);
+    LWInferenceTraceSnapshot first;
+    require(harness.core.readInferenceTrace(first), "missing phase trace");
+    const float delta = 0.005f * 4.0f * 1.5f;
+    require(first.gait_phase_before == 0.0f && first.gait_phase_used == 0.0f
+        && first.gait_phase_after == delta, "first phase commit boundary differs");
+    for (int i = 0; i < 3; ++i)
+    {
+        harness.core.runInferenceCycle(false);
+        require(harness.core.gaitPhaseTime() == delta,
+                "duplicate/read advanced gait clock");
+    }
+    harness.rl.ActivateLWPolicy("LW/robot_lab/leg_loco");
+    harness.cycle(0.4f);
+    harness.core.runInferenceCycle(false);
+    LWInferenceTraceSnapshot reactivated;
+    require(harness.core.readInferenceTrace(reactivated)
+        && reactivated.generation != first.generation
+        && reactivated.frame == 1 && reactivated.gait_phase_used == 0.0f,
+        "activation did not restart phase at episode zero");
+
+    Harness failed;
+    prepareInferenceHarness(failed);
+    LWInferenceCycleHooks hooks;
+    hooks.after_forward = [](){throw std::runtime_error("injected pre-publication failure");};
+    bool caught = false;
+    try { failed.core.runInferenceCycle(false, hooks); }
+    catch (const std::runtime_error&) { caught = true; }
+    require(caught && failed.core.gaitPhaseTime() == 0.0f,
+            "failed inference advanced phase");
+    failed.core.runInferenceCycle(false);
+    require(failed.core.gaitPhaseTime() == 0.0f,
+            "retry of consumed failed input advanced phase");
+}
+
+void testNoGaitPoliciesRetainLegacyClock()
+{
+    Harness harness;
+    const auto setup = prepareMotionInferenceHarness(harness, {"ang_vel"}, 3);
+    harness.rl.control.gait_frequency = 1.25f;
+    harness.cycle(0.4f);
+    harness.core.runInferenceCycle(false);
+    LWInferenceTraceSnapshot trace;
+    require(harness.core.readInferenceTrace(trace), "missing non-gait trace");
+    const float delta = 0.005f * 4.0f * 1.25f;
+    require(trace.gait_phase_before == 0.0f && trace.gait_phase_used == delta
+        && trace.gait_phase_after == delta && setup.model->last_input.size() == 3,
+        "non-gait policy phase bookkeeping changed");
 }
 
 void testInputIsConsumedOnceAndHeldOutputRemainsUsable()
@@ -1266,6 +1321,8 @@ int main()
         testEffectiveCommandKeepsGaitObservationCoherent();
         testTemporaryInhibitionPreservesPhaseClock();
         testInputIsConsumedOnceAndHeldOutputRemainsUsable();
+        testGaitClockCommitAndActivationBoundaries();
+        testNoGaitPoliciesRetainLegacyClock();
         testMotionReferenceRuntimeGating();
         testValidatedActionClippingAndInvalidModelOutputs();
         testStalledControlInputTriggersS2Parity();

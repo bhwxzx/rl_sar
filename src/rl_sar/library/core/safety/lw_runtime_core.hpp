@@ -28,6 +28,10 @@ struct LWRuntimeSafetySnapshot
 
 struct LWInferenceTraceSnapshot
 {
+    float gait_phase_before = 0.0f;
+    float gait_phase_used = 0.0f;
+    float gait_phase_after = 0.0f;
+    bool gait_phase_mask = false;
     std::uint64_t generation = 0;
     std::uint64_t frame = 0;
     std::uint64_t source_input_sequence = 0;
@@ -447,13 +451,19 @@ public:
             hooks.mutate_observation(inference_obs_, local_state);
         }
 
-        inference_gait_phase_time_ +=
-            policy_configuration.period_seconds
-            * effective_control.gait_frequency;
-        while (inference_gait_phase_time_ >= 1.0f)
+        const bool uses_gait_phase = std::find(
+            policy_configuration.observations.begin(),
+            policy_configuration.observations.end(),
+            "gait_phase") != policy_configuration.observations.end();
+        const float gait_phase_before = inference_gait_phase_time_;
+        // Preserve the unused phase bookkeeping for Wheel/motion policies.
+        // Gait policies observe phase zero on the first accepted input.
+        if (!uses_gait_phase)
         {
-            inference_gait_phase_time_ -= 1.0f;
+            advanceGaitPhase(policy_configuration.period_seconds,
+                             effective_control.gait_frequency);
         }
+        const float gait_phase_used = inference_gait_phase_time_;
         const float command_norm = std::sqrt(
             effective_control.x * effective_control.x
             + effective_control.y * effective_control.y
@@ -522,10 +532,22 @@ public:
         {
             return;
         }
+        // Prepare the next scheduled observation only after successful output
+        // publication. Duplicate inputs and failed attempts cannot tick this
+        // clock; observation reads/forward() do not advance it either.
+        if (uses_gait_phase)
+        {
+            advanceGaitPhase(policy_configuration.period_seconds,
+                             effective_control.gait_frequency);
+        }
         rl_->PublishLWPolicyProgress(
             activation->generation,
             inference_frame_);
         inference_trace_frame_.generation = activation->generation;
+        inference_trace_frame_.gait_phase_before = gait_phase_before;
+        inference_trace_frame_.gait_phase_used = gait_phase_used;
+        inference_trace_frame_.gait_phase_after = inference_gait_phase_time_;
+        inference_trace_frame_.gait_phase_mask = is_moving != 0.0f;
         inference_trace_frame_.frame = inference_frame_;
         inference_trace_frame_.source_input_sequence = policy_input.sequence;
         inference_trace_frame_.source_state_time =
@@ -555,7 +577,21 @@ public:
         return inference_obs_.actions;
     }
 
+    float gaitPhaseTime() const noexcept
+    {
+        return inference_gait_phase_time_;
+    }
+
 private:
+    void advanceGaitPhase(float period_seconds, float gait_frequency)
+    {
+        inference_gait_phase_time_ += period_seconds * gait_frequency;
+        while (inference_gait_phase_time_ >= 1.0f)
+        {
+            inference_gait_phase_time_ -= 1.0f;
+        }
+    }
+
     bool runForwardIntoActions()
     {
         requireBound();
