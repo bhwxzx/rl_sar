@@ -23,11 +23,11 @@
     <!-- <geom pos="1.2 0 0.04" type="box"  size="0.1 2 0.04" quat="1.0 0 0 0"/>
     <geom pos="1.6 0 0.04" type="box"  size="0.1 2 0.04" quat="1.0 0 0 0"/> -->
 
-    <geom pos="2.3 0 0.02" type="box"  size="0.2 2 0.05" quat="1.0 0 0 0"/>
+    <!-- <geom pos="2.3 0 0.02" type="box"  size="0.2 2 0.05" quat="1.0 0 0 0"/>
     <geom pos="2.7 0 0.02" type="box"  size="0.2 2 0.10" quat="1.0 0 0 0"/>
     <geom pos="3.1 0 0.02" type="box"  size="0.2 2 0.15" quat="1.0 0 0 0"/>
     <geom pos="3.5 0 0.02" type="box"  size="0.2 2 0.20" quat="1.0 0 0 0"/>
     <geom pos="3.9 0 0.02" type="box"  size="0.2 2 0.25" quat="1.0 0 0 0"/>
-    <geom pos="4.3 0 0.02" type="box"  size="0.2 2 0.30" quat="1.0 0 0 0"/>
+    <geom pos="4.3 0 0.02" type="box"  size="0.2 2 0.30" quat="1.0 0 0 0"/> -->
   </worldbody>
 </mujoco>
