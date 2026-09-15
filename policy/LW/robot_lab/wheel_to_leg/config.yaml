@@ -5,6 +5,8 @@ LW/robot_lab/wheel_to_leg:
   observations_history: []  # 0 is the latest observation
   observations_history_priority: "time"  # "time" or "term" priority
   clip_obs: 100.0
+  # Target bounds after action scale/default offset, in policy joint order:
+  # non-wheel position [rad], wheel velocity [rad/s]. No raw-action clipping.
   clip_actions_lower: [-100.0, -100.0,
                        -100.0, -100.0,
                        -100.0, -100.0,

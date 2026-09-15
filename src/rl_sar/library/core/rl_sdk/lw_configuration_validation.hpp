@@ -80,6 +80,8 @@ struct LWPolicyRuntimeConfiguration
     std::string observations_history_priority;
     std::vector<float> commands_scale;
     std::vector<float> action_scale;
+    // Processed target bounds in policy order: position [rad] or wheel
+    // velocity [rad/s], applied after scale/default offset, not to raw actions.
     std::vector<float> clip_actions_lower;
     std::vector<float> clip_actions_upper;
     std::vector<float> rl_kp;

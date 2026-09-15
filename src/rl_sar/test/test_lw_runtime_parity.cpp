@@ -313,9 +313,9 @@ struct MotionInferenceSetup
 MotionInferenceSetup prepareMotionInferenceHarness(
     Harness& harness,
     const std::vector<std::string>& observations,
-    int observation_dimension)
+    int observation_dimension,
+    const char* policy = "LW/robot_lab/leg_to_wheel")
 {
-    constexpr const char* policy = "LW/robot_lab/leg_to_wheel";
     harness.rl.SetPolicyRoot(POLICY_DIR);
     harness.rl.ReadYaml("LW", "base.yaml");
     YAML::Node policy_config = YAML::LoadFile(
@@ -336,37 +336,73 @@ MotionInferenceSetup prepareMotionInferenceHarness(
     return {std::move(model), generation};
 }
 
-void testValidatedActionClippingAndInvalidModelOutputs()
+void testTargetClippingAndInvalidModelOutputs()
 {
+    for (const char* policy : {"LW/robot_lab/leg_loco",
+                               "LW/robot_lab/wheel_loco",
+                               "LW/robot_lab/leg_to_wheel",
+                               "LW/robot_lab/wheel_to_leg"})
     {
-        Harness harness;
-        const auto setup = prepareMotionInferenceHarness(harness, {"ang_vel"}, 3);
-        const auto definition = harness.rl.GetLWPolicyDefinition(
-            "LW/robot_lab/leg_to_wheel");
-        const auto& lower = definition->runtime.clip_actions_lower;
-        const auto& upper = definition->runtime.clip_actions_upper;
-        std::vector<float> expected(kNumDofs);
-        for (std::size_t i = 0; i < kNumDofs; ++i)
+        for (const float requested_target : {-101.0f, -100.0f, 0.0f, 3.0f, 100.0f, 101.0f})
         {
-            switch (i % 5)
+            Harness harness;
+            const auto setup = prepareMotionInferenceHarness(
+                harness, {"actions"}, kNumDofs, policy);
+            const auto definition = harness.rl.GetLWPolicyDefinition(policy);
+            const auto& config = definition->runtime;
+            std::vector<float> expected_pos(kNumDofs), expected_vel(kNumDofs);
+            std::vector<float> expected_previous(kNumDofs);
+            for (std::size_t i = 0; i < kNumDofs; ++i)
             {
-                case 0: setup.model->actions[i] = lower[i] - 1.0f;
-                        expected[i] = lower[i]; break;
-                case 1: setup.model->actions[i] = lower[i];
-                        expected[i] = lower[i]; break;
-                case 2: setup.model->actions[i] = (lower[i] + upper[i]) * 0.5f;
-                        expected[i] = setup.model->actions[i]; break;
-                case 3: setup.model->actions[i] = upper[i];
-                        expected[i] = upper[i]; break;
-                case 4: setup.model->actions[i] = upper[i] + 1.0f;
-                        expected[i] = upper[i]; break;
+                const bool wheel = config.wheel_mask[i] != 0;
+                const float offset = wheel ? 0.0f : config.default_dof_pos[i];
+                setup.model->actions[i] = (requested_target - offset) / config.action_scale[i];
+                const float bounded = std::max(config.clip_actions_lower[i],
+                    std::min(requested_target, config.clip_actions_upper[i]));
+                expected_pos[i] = wheel ? config.default_dof_pos[i] : bounded;
+                expected_vel[i] = wheel ? bounded : 0.0f;
+                expected_previous[i] = std::max(-config.clip_obs,
+                    std::min(setup.model->actions[i], config.clip_obs));
             }
+            harness.core.runInferenceCycle(false);
+            LWInferenceTraceSnapshot trace;
+            require(harness.core.readInferenceTrace(trace), "target-clipped inference was not published");
+            requireVectorEqual(trace.observations.actions, setup.model->actions,
+                "raw model actions must remain unmodified");
+            requireVectorEqual(trace.output_dof_pos, expected_pos, "bounded position target");
+            requireVectorEqual(trace.output_dof_vel, expected_vel, "bounded velocity target");
+            std::vector<float> expected_tau(kNumDofs);
+            for (std::size_t i = 0; i < kNumDofs; ++i)
+            {
+                expected_tau[i] = config.rl_kp[i] * (trace.output_dof_pos[i] - trace.observations.dof_pos[i])
+                    + config.rl_kd[i] * (trace.output_dof_vel[i] - trace.observations.dof_vel[i]);
+            }
+            requireVectorEqual(trace.output_dof_tau, expected_tau, "PD must use bounded targets");
+            require(std::all_of(setup.model->last_input.begin(), setup.model->last_input.end(),
+                    [](float value) { return value == 0.0f; }),
+                "initial previous-action history must be zero");
+            harness.core.runInferenceCycle(false);
+            require(setup.model->forward_calls == 1, "duplicate input advanced inference");
+
+            harness.cycle(0.4f);
+            harness.core.runInferenceCycle(false);
+            require(setup.model->forward_calls == 2, "next input did not infer exactly once");
+            const auto& input = setup.model->last_input;
+            require(input.size() >= kNumDofs, "previous-action input is missing");
+            requireVectorEqual(std::vector<float>(input.end() - kNumDofs, input.end()),
+                expected_previous, "previous action must be raw action with observation clipping");
+            require(std::all_of(input.begin(), input.end() - kNumDofs,
+                    [](float value) { return value == 0.0f; }),
+                "history must advance by only one frame");
+
+            harness.rl.ActivateLWPolicy(policy);
+            harness.cycle(0.4f);
+            harness.core.runInferenceCycle(false);
+            require(setup.model->forward_calls == 3, "reactivation inference is missing");
+            require(std::all_of(setup.model->last_input.begin(), setup.model->last_input.end(),
+                    [](float value) { return value == 0.0f; }),
+                "reactivation must clear previous action and history");
         }
-        harness.core.runInferenceCycle(false);
-        LWInferenceTraceSnapshot trace;
-        require(harness.core.readInferenceTrace(trace), "clipped inference was not published");
-        requireVectorEqual(trace.observations.actions, expected, "clipped model actions");
-        require(harness.rl.LoadLWPolicyOutput() != nullptr, "clipped policy output is missing");
     }
     for (const float invalid : {std::numeric_limits<float>::quiet_NaN(),
                                 std::numeric_limits<float>::infinity(),
@@ -384,6 +420,30 @@ void testValidatedActionClippingAndInvalidModelOutputs()
         require(harness.adapter.actions.back() == LWSafetyAction::PassiveDamping,
                 "invalid action did not request passive damping");
         require(harness.rl.LoadLWPolicyOutput() == nullptr, "invalid action output was published");
+    }
+    // A finite model output can overflow during scaling. Target clipping must
+    // not hide that failure, including on the wheel velocity path.
+    for (const std::size_t joint : {0U, 8U})
+    {
+        Harness harness;
+        prepareMotionInferenceHarness(harness, {"ang_vel"}, 3);
+        auto config = harness.rl.GetLWPolicyDefinition(
+            "LW/robot_lab/leg_to_wheel")->runtime;
+        config.action_scale[joint] = 2.0f;
+        Observations<float> obs;
+        obs.dof_pos.assign(kNumDofs, 0.0f);
+        obs.dof_vel.assign(kNumDofs, 0.0f);
+        std::vector<float> actions(kNumDofs, 0.0f);
+        actions[joint] = std::numeric_limits<float>::max();
+        std::vector<float> pos(kNumDofs), vel(kNumDofs), tau(kNumDofs);
+        require(harness.core.acceptPolicyActions(actions, kNumDofs),
+            "finite raw action was rejected before processing");
+        harness.rl.ComputeLWOutput(config, obs, actions, pos, vel, tau);
+        require(!harness.core.acceptPolicyOutputs(pos, vel, tau, kNumDofs),
+            "target clipping concealed arithmetic overflow");
+        require(harness.core.safetySnapshot().decision.latest_event
+                    == LWSafetyEvent::PolicyOutputInvalid,
+            "overflow did not retain output-invalid safety handling");
     }
 }
 
@@ -1324,7 +1384,7 @@ int main()
         testGaitClockCommitAndActivationBoundaries();
         testNoGaitPoliciesRetainLegacyClock();
         testMotionReferenceRuntimeGating();
-        testValidatedActionClippingAndInvalidModelOutputs();
+        testTargetClippingAndInvalidModelOutputs();
         testStalledControlInputTriggersS2Parity();
         testPolicyGenerationSwitchWaitsForMatchingInput();
         testPolicyGenerationSwitchBindsTypedRuntimeConfiguration();

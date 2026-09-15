@@ -637,19 +637,8 @@ private:
             return false;
         }
 
-        const auto& upper =
-            policy_configuration.clip_actions_upper;
-        const auto& lower =
-            policy_configuration.clip_actions_lower;
-        // Bounds belong to the immutable policy definition and were validated
-        // by ValidateLWPolicyConfiguration before preloading/activation.
-        for (std::size_t index = 0; index < num_dofs; ++index)
-        {
-            inference_obs_.actions[index] = clamp(
-                inference_obs_.actions[index],
-                lower[index],
-                upper[index]);
-        }
+        // Training has no outer raw-action clipping. Preserve model output
+        // for the next observation; ComputeLWOutput clips processed targets.
         return true;
     }
     static void call(const std::function<void()>& hook)

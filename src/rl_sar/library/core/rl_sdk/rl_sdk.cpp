@@ -1090,10 +1090,20 @@ void RL::ComputeLWOutput(
         const float scaled = actions[index]
             * policy_configuration.action_scale[index];
         const bool wheel = policy_configuration.wheel_mask[index] != 0;
-        const float position_action = wheel ? 0.0f : scaled;
-        const float velocity_action = wheel ? scaled : 0.0f;
-        const float position_target = position_action
-            + policy_configuration.default_dof_pos[index];
+        // Isaac JointAction clips after scaling and adding the default offset.
+        // Wheel velocity offsets are zero in the deployed LW contract.
+        const float processed = wheel ? scaled
+            : scaled + policy_configuration.default_dof_pos[index];
+        // Do not turn arithmetic overflow into an apparently valid target:
+        // acceptPolicyOutputs must still reject non-finite results.
+        const float target = std::isfinite(processed)
+            ? clamp(processed,
+                    policy_configuration.clip_actions_lower[index],
+                    policy_configuration.clip_actions_upper[index])
+            : processed;
+        const float position_target = wheel
+            ? policy_configuration.default_dof_pos[index] : target;
+        const float velocity_action = wheel ? target : 0.0f;
         output_dof_pos[index] = position_target;
         output_dof_vel[index] = velocity_action;
         output_dof_tau[index] =

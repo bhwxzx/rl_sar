@@ -22,6 +22,30 @@ LW-072 已完成批准范围内的修改与离线验证，当时无待处理条�
 
 ## 当前选定问题
 
+### [LW-074] 对齐四个 LW 策略的动作目标裁剪顺序
+
+**状态**： resolved
+**批准日期**：2026-09-15
+
+- 用户确认所有训练策略的 `agent_cfg.clip_actions=None`，不存在外层原始动作裁剪，并明确批准简化方案；该事实来源于用户确认，不冒充本机历史训练运行时采集。
+- 批准范围：Leg、Wheel、Leg→Wheel、Wheel→Leg 共用运行时删除原始动作裁剪，改为缩放/默认值偏置后裁剪位置或轮速度目标，PD 使用最终目标；保留原始 previous action 和已有观测裁剪。
+- 不增加裁剪模式或配置开关；保留 `clip_actions_lower/upper` 名称和数值，明确其目标单位。保持模型、PD、动作缩放、默认姿态、历史、reset、步态相位、控制时序与场景。
+- 本次仅源码、配置注释、离线测试和说明记录；不启动闭环评估、实机程序、训练，不安装依赖，不提交推送。
+- 保留原有脏文件：两个 locomotion ONNX、`scene.xml`；保留未跟踪的 `library/` 与上下文检查技能目录。
+
+#### 解决记录
+
+- 解决日期：2026-09-15；用户随后授权提交。本记录随源码提交，标题为 `对齐 LW 四策略动作目标裁剪顺序（LW-074）`；未推送。
+- `lw_runtime_core.hpp` 保留模型输出形状/有限性检查，删除原始动作限幅，下一帧 actions 仍经过既有观测裁剪。`rl_sdk.cpp::ComputeLWOutput` 按关节控制模式，在 float32 缩放和默认角偏置后使用现有上下界裁剪目标，再计算 PD 力矩；当前轮速度默认偏置仍为零。计算溢出保留为非有限输出，由既有 PolicyOutputInvalid 路径拒绝。
+- 配套修改：四个策略 YAML 及 `lw_configuration_validation.hpp` 仅补充目标限幅语义注释；`docs/LW_BUILD_DEPLOYMENT_CN.md` 说明动作、previous action 与单位；`test_lw_runtime_parity.cpp` 更新裁剪回归测试。未新增配置字段或模式。
+- 四策略分别覆盖六类目标（-101、-100、0、3、100、101），每类验证初始推理、重复输入去重、下一帧 previous action、历史仅推进一帧与重新激活清零；验证 raw action 不被修改、非零默认角、位置/轮速度目标与最终目标对应的 PD。使用动作专用观测夹具隔离该契约，同时保留原有实际模型推理及相位等回归测试。
+- NaN、正负 Inf 原始动作仍触发 PolicyActionInvalid 与被动阻尼；有限原始动作在位置/轮速度缩放中溢出时，目标裁剪不掩盖 PolicyOutputInvalid。
+- 隔离构建/日志目录：`/tmp/lw074-20260915-8z2m0il1`。精确编译和链接 argv 见 `commands.json`、`verification.json`；运行命令为该目录下对应测试二进制，各日志与测试同名。
+- 测试 **5/5 通过**：`test_lw_runtime_parity`、`test_lw_configuration_validation`、`test_lw_allocation_bound`、`test_lw_control_safety`、`test_lw_policy_output_transport`。配置测试的固定模型输出基线使用 `git archive HEAD policy/LW` 提取的独立资源；运行时测试使用当前工作区资源，未替换模型或改写固定输出基线。
+- `rl_real_LW.cpp`、`rl_sim_LW.cpp` 隔离编译通过；未更新 build/install 中已安装程序，未启动节点或物理仿真。实机和 Sim2Sim 需后续重新构建才会使用本次源码。
+- 四份 YAML 与 HEAD 解析后逐值相同，仅注释变化；`git diff --check` 通过。原有两个 ONNX 的当前哈希仍为 `8d3ee152ca53c9f835318023e3095f868191c960c433c5a897317b2a7e38ce3b`（Leg）和 `1c08aa136ffd2039e1f21ddb435ec0fd411c726c18fa9462490fce25fc417ef1`（Wheel）。
+- 验证边界：结项仅覆盖动作处理实现及离线验证；没有本次闭环或实物改善证据，不据此解释站立漂移或声明 hardware-ready。
+
 ### [LW-073] 修正 LW_Leg AMP-ROA 步态相位首帧时序偏移
 
 **状态**： resolved

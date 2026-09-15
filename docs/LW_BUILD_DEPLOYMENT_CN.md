@@ -103,7 +103,20 @@ policy/LW/robot_lab/wheel_loco/policy.onnx
 policy/LW/robot_lab/wheel_to_leg/policy.onnx
 ```
 
-它们分别负责腿式运动、腿转轮、轮式运动和轮转腿。Sim2Sim 还需要开发机上存在 LW 的 MuJoCo 场景，例如：
+它们分别负责腿式运动、腿转轮、轮式运动和轮转腿。
+
+四个 LW 策略的共享动作处理契约（LW-074）：训练端已确认没有外层原始
+动作裁剪。模型输出先校验形状和有限性，位置关节执行
+`q_target = clip(action * action_scale + default_dof_pos)`；轮关节执行
+`dq_target = clip(action * action_scale)`，当前轮速度默认偏置为零。
+`clip_actions_lower/upper` 保留字段名称，表示策略关节顺序下的**最终目标**
+上下界：非轮关节单位 rad、轮关节单位 rad/s，不表示原始网络输出限幅。
+PD 使用裁剪后的目标。下一帧 previous action 保存原始网络输出，进入观测时
+仍执行已有 `clip_obs` 裁剪；历史、reset 与相位时序不变。非有限模型输出或
+目标计算溢出沿用故障处理，不通过裁剪掩盖。目标 ±100 是训练契约，不能作为
+机械关节安全范围或实物可用性的证明。
+
+Sim2Sim 还需要开发机上存在 LW 的 MuJoCo 场景，例如：
 
 ```text
 src/rl_sar_zoo/LW_description/mjcf/scene.xml
