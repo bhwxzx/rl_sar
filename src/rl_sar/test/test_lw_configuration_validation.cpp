@@ -309,20 +309,20 @@ void testCurrentLWConfigurationsAndModels()
     // Locomotion ONNX baselines cross-checked independently against the
     // archived JIT weights/forward structure with NumPy (not the JIT engine).
     const std::vector<ExpectedPolicy> policies = {
-        // Archive: LW/leg_loco/2026-09-12-22-03-53
-        // ONNX SHA-256: 8d3ee152ca53c9f835318023e3095f868191c960c433c5a897317b2a7e38ce3b
+        // Archive: LW/leg_loco/2026-09-16-15-45-12
+        // ONNX SHA-256: c5d94cd109557baaf3b3a57b9e146a95555ea7c323b538fcf8830aea829f42eb
         {"LW/robot_lab/leg_loco", 41, 410,
-         {-0x1.475956p-2F, -0x1.7c6092p+0F, -0x1.2c0e54p-2F,
-          0x1.091d2ap-2F, 0x1.c9237p-1F, 0x1.63bbcp+1F,
-          0x1.081994p+1F, -0x1.53a4f6p+1F, 0x1.f0873ap-3F,
-          0x1.f13b9p-4F}},
-        // Archive: LW/wheel_loco/2026-09-12-22-05-27
-        // ONNX SHA-256: 1c08aa136ffd2039e1f21ddb435ec0fd411c726c18fa9462490fce25fc417ef1
-        {"LW/robot_lab/wheel_loco", 39, 195,
-         {0x1.23e62ep-7F, -0x1.ef3a1cp-2F, -0x1.03f34cp-2F,
-          0x1.9a0b94p+1F, -0x1.054674p-3F, -0x1.fa08c8p-2F,
-          -0x1.3e0248p-1F, 0x1.3b5dc4p-4F, -0x1.8119b4p+2F,
-          0x1.41d08p+2F}},
+         {-0x1.3bc284p-1F, -0x1.1c118p+0F, -0x1.1ce5aep-1F,
+          -0x1.38e3bp+0F, 0x1.6629bep+1F, 0x1.934b88p+1F,
+          0x1.94bab4p+2F, -0x1.7ee4fep+0F, 0x1.240122p+2F,
+          0x1.3be86ep+0F}},
+        // Archive: LW/wheel_loco/2026-09-16-15-12-04
+        // ONNX SHA-256: b5f71d83ce6b8f9acdf73b8e7c4093fefc747db8ec9a08ae6bce72cdb5e9626e
+        {"LW/robot_lab/wheel_loco", 39, 390,
+         {0x1.9e81e2p-1F, 0x1.2e41bcp-4F, -0x1.2d5616p+0F,
+          -0x1.67d8c4p+1F, 0x1.00c102p-3F, 0x1.168754p+0F,
+          -0x1.20349cp-2F, 0x1.12df18p+0F, -0x1.2b71f4p-1F,
+          0x1.5d60a6p+1F}},
         {"LW/robot_lab/leg_to_wheel", 59, 59,
          {-0x1.585e7p-2F, -0x1.3f41a4p+0F, -0x1.49eb6cp+0F,
           -0x1.a6f982p-1F, 0x1.8bfbeap+0F, -0x1.60f2bp+1F,

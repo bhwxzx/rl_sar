@@ -22,6 +22,28 @@ LW-072 已完成批准范围内的修改与离线验证，当时无待处理条�
 
 ## 当前选定问题
 
+### [LW-076] 新模型配置与测试基线同步
+
+**状态**： resolved
+**批准日期**：2026-09-17
+
+- 用户明确批准本项最小方案：Wheel 历史索引从 5 帧改为从旧到新的 10 帧；配置回归测试的 Wheel 输入维度从 195 改为 390，同步 Leg/Wheel 固定推理输出、归档日期和模型哈希。
+- 新模型归档：Leg `2026-09-16-15-45-12`，ONNX SHA-256 `c5d94cd109557baaf3b3a57b9e146a95555ea7c323b538fcf8830aea829f42eb`；Wheel `2026-09-16-15-12-04`，ONNX SHA-256 `b5f71d83ce6b8f9acdf73b8e7c4093fefc747db8ec9a08ae6bce72cdb5e9626e`。均已与归档清单和工作区权重核对一致。
+- 保留用户已有的两份 ONNX、Leg 命令缩放 `[0.6,0,0.5]`、Wheel 命令缩放 `[0.8,0,0.8]` 和未跟踪的 `library/`。实施时发现 Wheel 历史索引已更新到批准值，保留该现有修改。运行时源码、PD、动作、历史/reset 实现及两种转换策略基线不变；保留维度校验和正式测试 `1e-6` 容差。
+- 验收：根据新归档 JIT 权重及前向结构进行 NumPy 独立复算，再运行三项原失败测试和完整 54 项回归。独立复算门限 `1e-5`，不等同于 JIT 引擎执行。
+- 边界：本项只处理已确认的尺寸和测试基线问题。归档声明环境历史重置，但缺少匹配版本的训练端逐项观测配置及 reset 填充证据，不能宣称完整部署契约已全部核验。不安装依赖，不训练，不启动实机或闭环评估。用户在验证完成后明确授权本地 Git 提交，将已验证的新模型及现有命令缩放一并纳入；未授权推送，未跟踪的 `library/` 不纳入提交。
+
+#### 解决记录
+
+- 解决时间：2026-09-17T16:29:49+08:00；基于 `1d31681`。本记录随本项修改一并提交，标题为 `同步 LW 新模型、历史配置与推理测试基线（LW-076）`；未推送。
+- 生效文件：`policy/LW/robot_lab/wheel_loco/config.yaml` 使用现有已更新的 `[9,8,7,6,5,4,3,2,1,0]` 历史索引，保持 `time` 排列和单帧 39 维；`src/rl_sar/test/test_lw_configuration_validation.cpp` 更新 Wheel 输入为 390，并同步两份模型的固定输出、归档日期和 SHA-256；本记录只新增和更新 LW-076。
+- 两份新 JIT 均为 ROADeploymentWrapper，当前帧取历史末尾，actor 拼接顺序为 current_obs、code_vel、hist_latent；actor_obs_normalizer 实际为 Identity。历史编码已包含在模型内，现有 C++ 历史容量和展平长度由配置驱动，本项未修改运行时源码。
+- 独立验证：归档 ONNX/JIT 哈希及部署 ONNX 哈希匹配；从新 JIT 权重和已检查的前向结构进行 NumPy float64 复算，与现有 C++ ONNX Runtime 固定输入输出的最大绝对差为 Leg `1.5967867916799605e-6`、Wheel `3.2118387167656692e-6`，均低于独立核对门限 `1e-5`。正式固定输出测试仍为 `1e-6` 容差。
+- 验证目录：`/tmp/lw076-20260917/`，含 `commands.json`、`crosscheck.py/json`、`probe.cpp`/`probe`、两份归档前向结构摘录以及构建、定向和完整测试日志。探针源码与二进制复用此前已检查的 C++ ORT 工具，独立复算按新 ROA 架构处理两个模型，未使用旧 Wheel DWAQ 计算路径。
+- 构建：`cmake --build build/rl_sar --target test_lw_configuration_validation test_lw_runtime_parity lw_config_profiler -j2` 成功，日志未出现 warning/error。交接中的 `/tmp/lw-strict-build.KjwdkQ` 已不存在；此次使用现有普通 build（`LW_STRICT_WARNINGS=OFF`），不宣称完成 strict build 验证。
+- 定向 CTest **3/3 通过**：`lw_runtime_parity`、`lw_configuration_validation`、`lw_config_profiler_integration`。随后 `ctest --test-dir build/rl_sar --output-on-failure` **54/54 通过**，10.81 秒。`git diff --check` 通过。
+- 原有模型和命令缩放保留，未操作实际串口、启动实机或闭环评估。完整回归通过仅证明本项离线验收通过；逐项训练观测和 reset 填充的证据限制仍保留，不据此声明 hardware-ready。
+
 ### [LW-075] 关闭吊装测算逐条力矩告警
 
 **状态**： resolved
