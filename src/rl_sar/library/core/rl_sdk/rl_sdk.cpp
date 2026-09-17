@@ -1133,8 +1133,10 @@ namespace
 {
 bool torqueProtectWithLimits(
     const std::vector<float>& origin_output_dof_tau,
-    const std::vector<float>& torque_limits)
+    const std::vector<float>& torque_limits,
+    bool print_warning = true)
 {
+    bool exceeded = false;
     std::vector<int> out_of_range_indices;
     std::vector<float> out_of_range_values;
     for (size_t i = 0; i < origin_output_dof_tau.size(); ++i)
@@ -1145,8 +1147,12 @@ bool torqueProtectWithLimits(
 
         if (torque_value < limit_lower || torque_value > limit_upper)
         {
-            out_of_range_indices.push_back(i);
-            out_of_range_values.push_back(torque_value);
+            exceeded = true;
+            if (print_warning)
+            {
+                out_of_range_indices.push_back(i);
+                out_of_range_values.push_back(torque_value);
+            }
         }
     }
     if (!out_of_range_indices.empty())
@@ -1164,7 +1170,7 @@ bool torqueProtectWithLimits(
         // this->control.SetKeyboard(Input::Keyboard::P);
         // std::cout << LOGGER::INFO << "Switching to STATE_POS_GETDOWN"<< std::endl;
     }
-    return !out_of_range_indices.empty();
+    return exceeded;
 }
 } // namespace
 
@@ -1179,11 +1185,13 @@ bool RL::TorqueProtect(
 
 bool RL::TorqueProtect(
     const std::vector<float>& origin_output_dof_tau,
-    const LWPolicyRuntimeConfiguration& policy_configuration) const
+    const LWPolicyRuntimeConfiguration& policy_configuration,
+    bool print_warning) const
 {
     return torqueProtectWithLimits(
         origin_output_dof_tau,
-        policy_configuration.torque_limits);
+        policy_configuration.torque_limits,
+        print_warning);
 }
 
 void RL::AttitudeProtect(const std::vector<float> &quaternion, float pitch_threshold, float roll_threshold)

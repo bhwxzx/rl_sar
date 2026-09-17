@@ -7,6 +7,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -334,6 +335,59 @@ MotionInferenceSetup prepareMotionInferenceHarness(
         harness.rl.ActivateLWPolicy(policy);
     harness.cycle(0.4f);
     return {std::move(model), generation};
+}
+
+void testTorqueWarningPrintingDoesNotChangeDetection()
+{
+    LWInferenceTraceSnapshot printed_trace;
+    for (const bool silent : {false, true})
+    {
+        Harness harness;
+        const auto setup = prepareMotionInferenceHarness(harness, {"ang_vel"}, 3);
+        setup.model->actions[4] = 20.0f;
+        LWInferenceCycleHooks hooks;
+        if (silent)
+        {
+            hooks.print_torque_warnings = false;
+        }
+        std::ostringstream captured;
+        auto* previous = std::cout.rdbuf(captured.rdbuf());
+        try
+        {
+            harness.core.runInferenceCycle(false, hooks);
+        }
+        catch (...)
+        {
+            std::cout.rdbuf(previous);
+            throw;
+        }
+        std::cout.rdbuf(previous);
+        require((captured.str().find("Torque(") == std::string::npos) == silent,
+            "torque warning printing does not match the requested mode");
+        require(harness.core.safetySnapshot().decision.latest_event
+                    == LWSafetyEvent::TorqueLimitWarning,
+            "silent torque warning lost the diagnostic safety event");
+        require(!harness.core.controlledFallbackLatched(),
+            "torque diagnostic unexpectedly changed control safety");
+        LWInferenceTraceSnapshot trace;
+        require(harness.core.readInferenceTrace(trace), "torque diagnostic blocked publication");
+        require(trace.observations.actions[4] == 20.0f
+                    && trace.output_dof_tau[4] > 120.0f,
+            "torque logging mode changed the action or hid the exceedance");
+        if (!silent)
+        {
+            printed_trace = trace;
+        }
+        else
+        {
+            requireVectorEqual(trace.output_dof_pos, printed_trace.output_dof_pos,
+                "silent mode position targets");
+            requireVectorEqual(trace.output_dof_vel, printed_trace.output_dof_vel,
+                "silent mode velocity targets");
+            requireVectorEqual(trace.output_dof_tau, printed_trace.output_dof_tau,
+                "silent mode calculated torques");
+        }
+    }
 }
 
 void testTargetClippingAndInvalidModelOutputs()
@@ -1384,6 +1438,7 @@ int main()
         testGaitClockCommitAndActivationBoundaries();
         testNoGaitPoliciesRetainLegacyClock();
         testMotionReferenceRuntimeGating();
+        testTorqueWarningPrintingDoesNotChangeDetection();
         testTargetClippingAndInvalidModelOutputs();
         testStalledControlInputTriggersS2Parity();
         testPolicyGenerationSwitchWaitsForMatchingInput();

@@ -1002,8 +1002,10 @@ private:
             [this, inference_samples]()
             {
                 publishMotionReference();
+                LWInferenceCycleHooks hooks;
+                hooks.print_torque_warnings = options_.mode != ProfileMode::HostOnly;
                 const auto started = std::chrono::steady_clock::now();
-                runtime_core_.runInferenceCycle(false);
+                runtime_core_.runInferenceCycle(false, hooks);
                 inference_samples->record(
                     std::chrono::steady_clock::now() - started);
             },

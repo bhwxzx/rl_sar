@@ -485,7 +485,8 @@ public:
         const YamlParams& policy_params) const;
     bool TorqueProtect(
         const std::vector<float>& origin_output_dof_tau,
-        const LWPolicyRuntimeConfiguration& policy_configuration) const;
+        const LWPolicyRuntimeConfiguration& policy_configuration,
+        bool print_warning = true) const;
     void AttitudeProtect(const std::vector<float> &quaternion, float pitch_threshold, float roll_threshold);
 
     // rl module

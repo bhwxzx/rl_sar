@@ -64,6 +64,9 @@ struct LWInferenceCycleHooks
         const Observations<float>&,
         const std::vector<float>&,
         const std::vector<float>&)> after_publish;
+    // Host-only profiling can omit synchronous console I/O without changing
+    // torque detection or the diagnostic safety event. Runtime defaults to on.
+    bool print_torque_warnings = true;
 };
 
 // Platform-neutral LW control, inference, validation, and safety orchestration.
@@ -502,7 +505,8 @@ public:
 
         if (rl_->TorqueProtect(
                 inference_output_dof_tau_,
-                policy_configuration))
+                policy_configuration,
+                hooks.print_torque_warnings))
         {
             reportSafetyEvent(LWSafetyEvent::TorqueLimitWarning);
         }
