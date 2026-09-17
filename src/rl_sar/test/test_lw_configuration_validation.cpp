@@ -6,9 +6,11 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <iomanip>
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -43,6 +45,78 @@ void requireFailure(
     }
     throw std::runtime_error(
         "expected validation failure containing: " + expected_text);
+}
+
+// Fixed-input FP32 regression: absolute tolerance near zero plus a small
+// relative allowance for larger outputs across CPU inference implementations.
+// This is a test comparison only; model weights and stored baselines stay fixed.
+void requireModelOutputClose(
+    float actual, float expected, const std::string& policy, std::size_t index)
+{
+    const double error = std::fabs(
+        static_cast<double>(actual) - static_cast<double>(expected));
+    const double allowed_error = 2.0e-6
+        + 1.0e-6 * std::fabs(static_cast<double>(expected));
+    if (std::isfinite(actual) && std::isfinite(expected) && error <= allowed_error)
+    {
+        return;
+    }
+    std::ostringstream message;
+    message << std::setprecision(std::numeric_limits<double>::max_digits10)
+            << policy << " output differs at index " << index
+            << ": expected=" << expected << ", actual=" << actual
+            << ", abs_error=" << error << ", allowed_error=" << allowed_error;
+    throw std::runtime_error(message.str());
+}
+
+void testModelOutputTolerance()
+{
+    // Adjacent representable float values straddle independently specified
+    // tolerance boundaries, including both signs and the near-zero case.
+    const std::vector<std::pair<float, double>> boundaries = {
+        {0.0F, 2.0e-6}, {1.0F, 3.0e-6}, {-1.0F, 3.0e-6}, {100.0F, 102.0e-6}};
+    for (const auto& boundary : boundaries)
+    {
+        for (const int direction : {-1, 1})
+        {
+            const float expected = boundary.first;
+            float inside = static_cast<float>(
+                static_cast<double>(expected) + direction * boundary.second);
+            if (std::fabs(static_cast<double>(inside) - expected) > boundary.second)
+            {
+                inside = std::nextafter(inside, expected);
+            }
+            const float outside = std::nextafter(
+                inside, direction > 0 ? std::numeric_limits<float>::infinity()
+                                      : -std::numeric_limits<float>::infinity());
+            requireModelOutputClose(inside, expected, "boundary", 7);
+            requireFailure(
+                [&] { requireModelOutputClose(outside, expected, "boundary", 7); },
+                "boundary output differs at index 7");
+        }
+    }
+    // The measured Jetson deviations are allowed without replacing the oracle.
+    requireModelOutputClose(-0.5564388036727905F, -0.5564398169517517F, "leg", 2);
+    requireModelOutputClose(6.323897361755371F, 6.323895454406738F, "leg", 6);
+    requireFailure(
+        [] { requireModelOutputClose(0.0001F, 0.0F, "changed-output", 0); },
+        "changed-output");
+    for (const float invalid : {std::numeric_limits<float>::quiet_NaN(),
+                               std::numeric_limits<float>::infinity(),
+                               -std::numeric_limits<float>::infinity()})
+    {
+        requireFailure([&] { requireModelOutputClose(invalid, 0.0F, "invalid", 0); },
+                       "invalid output differs");
+        requireFailure([&] { requireModelOutputClose(0.0F, invalid, "invalid", 0); },
+                       "invalid output differs");
+        requireFailure([&] { requireModelOutputClose(invalid, invalid, "invalid", 0); },
+                       "invalid output differs");
+    }
+    for (const auto* field : {"expected=", "actual=", "abs_error=", "allowed_error="})
+    {
+        requireFailure([] { requireModelOutputClose(1.0F, 0.0F, "diagnostic", 3); },
+                       field);
+    }
 }
 
 YAML::Node loadConfig(const fs::path& file, const std::string& key)
@@ -407,10 +481,8 @@ void testCurrentLWConfigurationsAndModels()
             policy.relative_path + " replaced caller-owned output storage");
         for (std::size_t index = 0; index < output.size(); ++index)
         {
-            require(
-                std::fabs(output[index] - policy.output[index]) <= 1.0e-6F,
-                policy.relative_path + " output differs at index "
-                    + std::to_string(index));
+            requireModelOutputClose(
+                output[index], policy.output[index], policy.relative_path, index);
         }
     }
 }
@@ -810,6 +882,7 @@ int main()
 {
     try
     {
+        testModelOutputTolerance();
         testCurrentLWConfigurationsAndModels();
         testContiguousObservationAssemblyMatchesPreviousOrdering();
         testSparseHistoryUsesSelectedFrameCountForModelInput();

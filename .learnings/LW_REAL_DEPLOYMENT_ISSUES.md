@@ -22,6 +22,25 @@ LW-072 已完成批准范围内的修改与离线验证，当时无待处理条�
 
 ## 当前选定问题
 
+### [LW-079] 固定输出回归采用绝对与相对误差容限
+
+**状态**： resolved
+**批准日期**：2026-09-17
+
+- 用户在诊断后明确批准，将固定模型输出比较改为 `abs(actual - expected) <= 2e-6 + 1e-6 * abs(expected)`，显式拒绝 NaN/Inf，并输出期望值、实际值、绝对误差和允许误差。
+- 仅修改配置回归测试中的固定输出比较、增加容差边界及非有限值验证；模型、固定基线、运行时和配置不变。基于 `d4ce20b`，开始前工作区干净。
+- 诊断证据：Jetson C++ ONNX Runtime 1.22.0 下腿式索引 2/6 偏差分别约 `1.0133e-6`/`1.9073e-6`；重复推理一致，模型哈希吻合，另外三个策略最大偏差约 `2.3842e-7`。详见 `/tmp/lw-model-baseline-review-z1ybh54x/results.json`。
+- 用户先批准实现与离线验证，随后明确要求 Git 提交并推送；不包含 Sim2Sim 或真实硬件操作。
+
+#### 解决记录
+
+- 解决时间：2026-09-17T20:57:46+08:00；基于 `d4ce20b`，实现与验证完成后按用户要求提交并推送。
+- `test_lw_configuration_validation.cpp` 的固定输出比较使用 `2e-6 + 1e-6 * abs(expected)`，以 double 计算误差及允许误差，实际值和期望值均须有限；失败打印策略、索引、expected、actual、abs_error、allowed_error。
+- 增加近零、正负 1、100 等幅值在容差内外相邻 float 值的边界检查，复现 Jetson 两个微小偏差可接受、明显偏差仍失败；NaN、正负 Inf 分别作为实际值、期望值或双方时均拒绝，核验失败信息包含四项数值字段。
+- 使用现有非生产 build/rl_sar 重编译 `test_lw_configuration_validation` 成功；定向 CTest `lw_configuration_validation` **1/1 通过**（0.21 秒），完整执行四个模型固定输入回归及该测试内其它配置校验。未修改或跳过基线，不宣称全仓回归/Sim2Sim/硬件验收通过。
+- 验证目录 `/tmp/lw079-4xca2kdv/`，保存 commands.json、validation.log、test-before.cpp、policy-hashes-before.json、verification.json 和 changes.patch；`policy/LW` 下全部文件哈希前后一致，固定基线块逐字节一致，`git diff --check` 通过。
+- 该修复只影响回归测试判断和错误诊断，不改变正式推理、运行时安全阈值、模型或已提交的参数配置。
+
 ### [LW-078] 分析完成后打印候选参数摘要
 
 **状态**： resolved
