@@ -2,15 +2,15 @@ LW:
   dt: 0.005
   decimation: 4
   # 每个电机板反馈帧在触发故障保护前允许的最大时效。
-  sensor_timeout: 0.1
+  sensor_timeout: 0.05
   # guard 输出的可信 IMU 在触发故障保护前允许的最大时效。当前值保留
   # 原 100 ms 行为，必须在吊装实测并由操作员批准后再收紧。
-  trusted_imu_timeout: 0.1
+  trusted_imu_timeout: 0.02
   # 一次有效 AHRS 事件授权下一帧原始 IMU 的最大配对时延。每次授权只
   # 能使用一次；当前值是未完成部署机测量前的保守占位值。
-  imu_ahrs_pair_max_age: 0.1
+  imu_ahrs_pair_max_age: 0.01
   # 将完整命令包排队写入两个串口时共用的截止时间。
-  serial_write_timeout: 0.002
+  serial_write_timeout: 0.001
   # 控制线程绑定的逻辑 CPU：
   # -1 表示不绑定，由操作系统调度；0、1、2... 表示绑定到对应逻辑 CPU。
   # 指定的 CPU 不存在或绑定失败时，控制循环将无法启动。
@@ -35,7 +35,7 @@ LW:
   # 0 表示禁用；0.02 表示晚到达到 20 ms 时触发。
   # 两个降级条件为“或”关系。触发后永久锁存本进程的 x/y/yaw 为 0，
   # 但保留 FSM 按钮以便请求 GetDown；重启程序后才能清除锁存。
-  control_loop_degraded_lateness: 0.02
+  control_loop_degraded_lateness: 0.015
 
   # 致命时序条件：连续跳过周期数和单次晚到秒数，任一满足即触发。
   # 0 表示禁用对应条件；当前两项均为 0，因此时序异常不会触发致命动作。

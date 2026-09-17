@@ -149,6 +149,9 @@ git status --short
 RELEASE_TAG=lw-release-20260816-01
 git fetch origin tag "$RELEASE_TAG"
 SOURCE_COMMIT=$(git rev-parse "${RELEASE_TAG}^{commit}")
+SHORT_COMMIT="${SOURCE_COMMIT:0:12}"
+DEPLOY_PREFIX="$RL_SAR_ROOT/build/lw_deployments/$SHORT_COMMIT"
+LW_PROFILE_DIR="$RL_SAR_ROOT/build/lw_profiles/$SHORT_COMMIT"
 git cat-file -e "${SOURCE_COMMIT}^{commit}"
 git show --stat --oneline "$SOURCE_COMMIT"
 
@@ -242,6 +245,8 @@ python3 "$LW_PROFILE_TOOL" collect-host \
 只单独启动 AHRS，不启动完整 LW launch：
 
 ```bash
+source /opt/ros/humble/setup.bash
+source "$DEPLOY_PREFIX/setup.bash"
 ros2 launch fdilink_ahrs ahrs_driver.launch.py
 ```
 
@@ -301,10 +306,10 @@ LW-077 起，profiler 报告使用 schema v4：在最终采样结束（或失败
 空值、非有限值和非正数：
 
 ```bash
-MAX_SAFE_SENSOR_TIMEOUT_MS=REPLACE_WITH_REVIEWED_VALUE
-MAX_SAFE_TRUSTED_IMU_TIMEOUT_MS=REPLACE_WITH_REVIEWED_VALUE
-MAX_SAFE_IMU_AHRS_PAIR_AGE_MS=REPLACE_WITH_REVIEWED_VALUE
-MAX_SAFE_CONTROL_GAP_MS=REPLACE_WITH_REVIEWED_VALUE
+MAX_SAFE_SENSOR_TIMEOUT_MS=100
+MAX_SAFE_TRUSTED_IMU_TIMEOUT_MS=100
+MAX_SAFE_IMU_AHRS_PAIR_AGE_MS=100
+MAX_SAFE_CONTROL_GAP_MS=20
 
 python3 "$LW_PROFILE_TOOL" analyze \
     --base-yaml "$LW_POLICY_ROOT/LW/base.yaml" \
