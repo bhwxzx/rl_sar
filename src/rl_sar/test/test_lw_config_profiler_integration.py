@@ -71,7 +71,7 @@ def main() -> int:
         if completed.returncode != 0:
             raise RuntimeError(f"host-only profiler failed: {completed.returncode}")
         report = json.loads(report_path.read_text(encoding="utf-8"))
-        if report.get("schema_version") != 3:
+        if report.get("schema_version") != 4:
             raise RuntimeError("host-only report schema differs")
         source_commit = report.get("source_commit")
         if source_commit != "unverified" and re.fullmatch(
@@ -106,6 +106,13 @@ def main() -> int:
         ):
             raise RuntimeError("a policy did not execute inference")
         hardware = report.get("hardware", {})
+        window = hardware.get("sampling_window", {})
+        if window != {
+            "semantics_version": 1, "clock": "steady", "started": False,
+            "closed": False, "start_steady_us": 0, "end_steady_us": 0,
+            "duration_us": 0,
+        }:
+            raise RuntimeError("host-only mode claims a hardware sampling window")
         if hardware.get("commands_sent") != "none":
             raise RuntimeError("host-only report claims hardware commands")
         if hardware.get("serial_write_duration", {}).get("count") != 0:

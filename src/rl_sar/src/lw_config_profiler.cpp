@@ -71,6 +71,7 @@ struct ProfilePolicyResult
 {
     std::string policy;
     LWProfileDistributionSnapshot inference;
+    std::shared_ptr<LWProfileDistribution> inference_samples;
     LoopTimingSnapshot control_timing;
     LoopTimingSnapshot inference_timing;
     LoopStartupSnapshot control_startup;
@@ -79,6 +80,7 @@ struct ProfilePolicyResult
 
 struct HardwareProfileResult
 {
+    LWProfileSamplingWindow::Snapshot sampling_window;
     LWProfileTimedSourceSnapshot imu;
     LWProfileTimedSourceSnapshot ahrs;
     LWProfileTimedSourceSnapshot trusted_imu;
@@ -459,13 +461,14 @@ public:
 
             if (options_.mode == ProfileMode::HardwareObserve)
             {
-                hardware_started_at_ = std::chrono::steady_clock::now();
+                hardware_sampling_.start();
                 initializeHardwareObservation(argc, argv);
                 requireDisableKeepaliveHealthy();
             }
         }
         catch (...)
         {
+            hardware_sampling_.close();
             stopExecutor();
             stopDisableKeepalive();
             if (hardware_serial_attempted_)
@@ -478,6 +481,7 @@ public:
 
     ~LWConfigProfiler()
     {
+        hardware_sampling_.close();
         stopExecutor();
         stopDisableKeepalive();
         if (options_.mode == ProfileMode::HardwareObserve)
@@ -488,19 +492,26 @@ public:
 
     int run()
     {
-        for (const std::string& policy : policyPaths())
+        const auto policies = policyPaths();
+        for (std::size_t index = 0; index < policies.size(); ++index)
         {
             if (failed_.load(std::memory_order_acquire))
             {
                 break;
             }
-            runPolicy(policy);
+            runPolicy(policies[index], index + 1 == policies.size());
         }
+        hardware_sampling_.close();
+        stopExecutor();
         if (options_.mode == ProfileMode::HardwareObserve)
         {
             hardware_result_ = snapshotHardware();
         }
-        stopExecutor();
+        for (auto& result : policy_results_)
+        {
+            result.inference = result.inference_samples->snapshot();
+            result.inference_samples.reset();
+        }
         if (options_.mode == ProfileMode::HardwareObserve)
         {
             stopDisableKeepalive();
@@ -551,20 +562,22 @@ public:
         }
 
         const LWFeedbackUpdate update = lw_sdk_.RecvFdData(lw_low_state_);
-        const auto now = std::chrono::steady_clock::now();
         if (update.readFailed())
         {
             throw std::runtime_error(
                 "motor feedback read failed: " + update.failureSummary());
         }
-        if (update.right.updated)
+        hardware_sampling_.record([&](auto now)
         {
-            right_feedback_.mark(now);
-        }
-        if (update.left.updated)
-        {
-            left_feedback_.mark(now);
-        }
+            if (update.right.updated)
+            {
+                right_feedback_.mark(now);
+            }
+            if (update.left.updated)
+            {
+                left_feedback_.mark(now);
+            }
+        });
 
         sensor_msgs::msg::Imu::SharedPtr imu;
         {
@@ -745,10 +758,11 @@ private:
             qos,
             [this](sensor_msgs::msg::Imu::SharedPtr message)
             {
-                const auto now = std::chrono::steady_clock::now();
-                imu_gaps_.mark(now);
-                const LWImuAhrsGuardDecision decision =
-                    imu_ahrs_guard_.observeImu(
+                LWImuAhrsGuardDecision decision;
+                const bool recorded = hardware_sampling_.record([&](auto now)
+                {
+                    imu_gaps_.mark(now);
+                    decision = imu_ahrs_guard_.observeImu(
                         now,
                         {message->orientation.w,
                          message->orientation.x,
@@ -757,15 +771,19 @@ private:
                         {message->angular_velocity.x,
                          message->angular_velocity.y,
                          message->angular_velocity.z});
-                if (decision.pair_age_observed)
-                {
-                    imu_ahrs_pair_age_.record(decision.pair_age);
-                }
-                if (!decision.accepted())
+                    if (decision.pair_age_observed)
+                    {
+                        imu_ahrs_pair_age_.record(decision.pair_age);
+                    }
+                    if (decision.accepted())
+                    {
+                        trusted_imu_gaps_.mark(now);
+                    }
+                });
+                if (!recorded || !decision.accepted())
                 {
                     return;
                 }
-                trusted_imu_gaps_.mark(now);
                 auto trusted =
                     std::make_shared<sensor_msgs::msg::Imu>(*message);
                 trusted->orientation.w /= decision.quaternion_norm;
@@ -781,13 +799,15 @@ private:
                 qos,
                 [this](geometry_msgs::msg::Vector3::SharedPtr message)
                 {
-                    const auto now = std::chrono::steady_clock::now();
-                    if (imu_ahrs_guard_.observeAhrs(
-                            now,
-                            {message->x, message->y, message->z}))
+                    hardware_sampling_.record([&](auto now)
                     {
-                        ahrs_gaps_.mark(now);
-                    }
+                        if (imu_ahrs_guard_.observeAhrs(
+                                now,
+                                {message->x, message->y, message->z}))
+                        {
+                            ahrs_gaps_.mark(now);
+                        }
+                    });
                 });
         executor_thread_ = std::thread([this]() { rclcpp::spin(node_); });
     }
@@ -945,7 +965,7 @@ private:
              motion_loader_->GetInitQuat()});
     }
 
-    void runPolicy(const std::string& policy)
+    void runPolicy(const std::string& policy, bool final_policy)
     {
         prepareMotionReference(policy);
         auto inference_samples = std::make_shared<LWProfileDistribution>();
@@ -1023,12 +1043,17 @@ private:
                 std::chrono::duration<double>(options_.duration_seconds),
                 [this]() { return failed_.load(std::memory_order_acquire); });
         }
+        if (final_policy || failed_.load(std::memory_order_acquire))
+        {
+            hardware_sampling_.close();
+        }
         control_loop.shutdown();
         inference_loop.shutdown();
 
         ProfilePolicyResult result;
         result.policy = policy;
-        result.inference = inference_samples->snapshot();
+        // Keep the bounded samples; sort only after all sensor sampling stops.
+        result.inference_samples = std::move(inference_samples);
         result.control_timing = control_loop.timingSnapshot();
         result.inference_timing = inference_loop.timingSnapshot();
         result.control_startup = control_loop.startupSnapshot();
@@ -1043,6 +1068,7 @@ private:
         if (failed_.compare_exchange_strong(
                 expected, true, std::memory_order_acq_rel))
         {
+            hardware_sampling_.close();
             std::lock_guard<std::mutex> lock(failure_mutex_);
             failure_message_ = message;
         }
@@ -1052,18 +1078,22 @@ private:
     HardwareProfileResult snapshotHardware() const
     {
         HardwareProfileResult result;
-        result.imu = imu_gaps_.snapshotSince(hardware_started_at_);
-        result.ahrs = ahrs_gaps_.snapshotSince(hardware_started_at_);
+        result.sampling_window = hardware_sampling_.snapshot();
+        if (!result.sampling_window.started || !result.sampling_window.closed)
+        {
+            throw std::logic_error("hardware sampling must stop before statistics");
+        }
+        const auto start = result.sampling_window.start;
+        const auto end = result.sampling_window.end;
+        result.imu = imu_gaps_.snapshotSince(start, end);
+        result.ahrs = ahrs_gaps_.snapshotSince(start, end);
         result.trusted_imu =
-            trusted_imu_gaps_.snapshotSince(hardware_started_at_);
+            trusted_imu_gaps_.snapshotSince(start, end);
         result.imu_ahrs_pair_age = imu_ahrs_pair_age_.snapshot();
         result.right_feedback =
-            right_feedback_.snapshotSince(hardware_started_at_);
+            right_feedback_.snapshotSince(start, end);
         result.left_feedback =
-            left_feedback_.snapshotSince(hardware_started_at_);
-        result.serial_writes = serial_writes_.snapshot();
-        result.serial_write_failures =
-            serial_write_failures_.load(std::memory_order_acquire);
+            left_feedback_.snapshotSince(start, end);
         return result;
     }
 
@@ -1083,7 +1113,7 @@ private:
                 + options_.output.string());
         }
         output << std::setprecision(17)
-               << "{\n\"schema_version\":3,\n\"source_commit\":";
+               << "{\n\"schema_version\":4,\n\"source_commit\":";
         emitJsonString(output, RL_SAR_SOURCE_COMMIT);
         output << ",\n\"mode\":";
         emitJsonString(
@@ -1149,7 +1179,21 @@ private:
             emitLoopStartup(output, result.inference_startup);
             output << '}';
         }
-        output << "\n],\n\"hardware\":{\"initial_disable_writes_complete\":"
+        const auto& window = hardware_result_.sampling_window;
+        output << "\n],\n\"hardware\":{\"sampling_window\":{"
+               << "\"semantics_version\":1,\"clock\":\"steady\",\"started\":"
+               << (window.started ? "true" : "false")
+               << ",\"closed\":" << (window.closed ? "true" : "false")
+               << ",\"start_steady_us\":"
+               << std::chrono::duration<double, std::micro>(
+                      window.start.time_since_epoch()).count()
+               << ",\"end_steady_us\":"
+               << std::chrono::duration<double, std::micro>(
+                      window.end.time_since_epoch()).count()
+               << ",\"duration_us\":"
+               << std::chrono::duration<double, std::micro>(
+                      window.end - window.start).count()
+               << "},\"initial_disable_writes_complete\":"
                << (initial_disable_writes_complete_ ? "true" : "false")
                << ",\"initial_disable_packets\":"
                << initial_disable_packets_
@@ -1165,6 +1209,8 @@ private:
                << (hardware_result_.imu.seen ? "true" : "false")
                << ",\"imu_first_sample_delay_us\":"
                << hardware_result_.imu.first_sample_delay_us
+               << ",\"imu_last_sample_offset_us\":"
+               << hardware_result_.imu.last_sample_offset_us
                << ",\"imu_final_age_us\":"
                << hardware_result_.imu.final_age_us
                << ",\"imu_gap\":";
@@ -1173,6 +1219,8 @@ private:
                << (hardware_result_.ahrs.seen ? "true" : "false")
                << ",\"ahrs_first_sample_delay_us\":"
                << hardware_result_.ahrs.first_sample_delay_us
+               << ",\"ahrs_last_sample_offset_us\":"
+               << hardware_result_.ahrs.last_sample_offset_us
                << ",\"ahrs_final_age_us\":"
                << hardware_result_.ahrs.final_age_us
                << ",\"ahrs_gap\":";
@@ -1181,6 +1229,8 @@ private:
                << (hardware_result_.trusted_imu.seen ? "true" : "false")
                << ",\"trusted_imu_first_sample_delay_us\":"
                << hardware_result_.trusted_imu.first_sample_delay_us
+               << ",\"trusted_imu_last_sample_offset_us\":"
+               << hardware_result_.trusted_imu.last_sample_offset_us
                << ",\"trusted_imu_final_age_us\":"
                << hardware_result_.trusted_imu.final_age_us
                << ",\"trusted_imu_gap\":";
@@ -1191,6 +1241,8 @@ private:
                << (hardware_result_.right_feedback.seen ? "true" : "false")
                << ",\"right_feedback_first_sample_delay_us\":"
                << hardware_result_.right_feedback.first_sample_delay_us
+               << ",\"right_feedback_last_sample_offset_us\":"
+               << hardware_result_.right_feedback.last_sample_offset_us
                << ",\"right_feedback_final_age_us\":"
                << hardware_result_.right_feedback.final_age_us
                << ",\"right_feedback_gap\":";
@@ -1199,6 +1251,8 @@ private:
                << (hardware_result_.left_feedback.seen ? "true" : "false")
                << ",\"left_feedback_first_sample_delay_us\":"
                << hardware_result_.left_feedback.first_sample_delay_us
+               << ",\"left_feedback_last_sample_offset_us\":"
+               << hardware_result_.left_feedback.last_sample_offset_us
                << ",\"left_feedback_final_age_us\":"
                << hardware_result_.left_feedback.final_age_us
                << ",\"left_feedback_gap\":";
@@ -1254,7 +1308,7 @@ private:
     bool disable_keepalive_started_ = false;
     std::atomic<bool> disable_keepalive_stop_{false};
     std::thread disable_keepalive_thread_;
-    std::chrono::steady_clock::time_point hardware_started_at_{};
+    LWProfileSamplingWindow hardware_sampling_;
     HardwareProfileResult hardware_result_;
 
     std::shared_ptr<rclcpp::Node> node_;

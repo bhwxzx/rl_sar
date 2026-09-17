@@ -126,7 +126,7 @@ class ProfileAnalyzerTests(unittest.TestCase):
     ) -> Path:
         selected_root = self.policy_root if policy_root is None else policy_root
         report = {
-            "schema_version": 3,
+            "schema_version": 4,
             "source_commit": source_commit,
             "mode": mode,
             "host": host or {
@@ -184,6 +184,24 @@ class ProfileAnalyzerTests(unittest.TestCase):
                 ),
             },
         }
+        hardware = report["hardware"]
+        enabled = mode == "hardware-observe"
+        window_duration = duration * len(MODULE.POLICIES) * 1_000_000 if enabled else 0
+        hardware["sampling_window"] = {
+            "semantics_version": 1, "clock": "steady",
+            "started": enabled, "closed": enabled,
+            "start_steady_us": 1_000_000 if enabled else 0,
+            "end_steady_us": 1_000_000 + window_duration if enabled else 0,
+            "duration_us": window_duration,
+        }
+        for source in ("imu", "ahrs", "trusted_imu", "right_feedback", "left_feedback"):
+            last = window_duration - hardware[f"{source}_final_age_us"] if enabled else 0
+            hardware[f"{source}_last_sample_offset_us"] = last
+            if enabled:
+                gaps = hardware[f"{source}_gap"]
+                gaps["count"] = max(1, int(window_duration / 5000))
+                gaps["retained"] = min(200000, gaps["count"])
+                gaps["mean_us"] = (last - hardware[f"{source}_first_sample_delay_us"]) / gaps["count"]
         path = self.root / name
         path.write_text(json.dumps(report), encoding="utf-8")
         return path
@@ -215,6 +233,69 @@ class ProfileAnalyzerTests(unittest.TestCase):
             )
         return MODULE.main(arguments)
 
+    def test_rejects_old_schema_with_recollection_instruction(self) -> None:
+        path = self.write_report("old.json", "hardware-observe", -1, 400)
+        report = json.loads(path.read_text())
+        report["schema_version"] = 3
+        path.write_text(json.dumps(report))
+        with self.assertRaisesRegex(RuntimeError, "recollect host and hardware"):
+            MODULE.load_report(path)
+
+    def test_rejects_inconsistent_cutoff_evidence(self) -> None:
+        changes = [
+            ("window", "closed", False),
+            ("window", "started", False),
+            ("window", "semantics_version", 2),
+            ("window", "clock", "wall"),
+            ("window", "duration_us", 10),
+            ("window", "end_steady_us", 0),
+            ("window", "duration_us", float("nan")),
+            ("hardware", "left_feedback_final_age_us", 49343),
+            ("hardware", "trusted_imu_final_age_us", -1),
+            ("hardware", "right_feedback_last_sample_offset_us", 999999999),
+            ("hardware", "imu_first_sample_delay_us", 999999999),
+            ("hardware", "ahrs_seen", False),
+            ("gaps", "mean_us", 1),
+        ]
+        for where, key, value in changes:
+            with self.subTest(where=where, key=key, value=value):
+                path = self.write_report("invalid.json", "hardware-observe", -1, 400)
+                report = json.loads(path.read_text())
+                hardware = report["hardware"]
+                target = {"window": hardware["sampling_window"],
+                          "hardware": hardware, "gaps": hardware["imu_gap"]}[where]
+                target[key] = value
+                path.write_text(json.dumps(report))
+                with self.assertRaises(RuntimeError):
+                    MODULE.load_report(path)
+
+    def test_rejects_missing_cutoff_metadata(self) -> None:
+        for key in ("sampling_window", "left_feedback_last_sample_offset_us"):
+            with self.subTest(key=key):
+                path = self.write_report("missing.json", "hardware-observe", -1, 400)
+                report = json.loads(path.read_text())
+                del report["hardware"][key]
+                path.write_text(json.dumps(report))
+                with self.assertRaises(RuntimeError):
+                    MODULE.load_report(path)
+
+    def test_real_end_age_still_limits_sensor_candidate(self) -> None:
+        host = self.write_report("host.json", "host-only", -1, 400)
+        path = self.write_report("hardware.json", "hardware-observe", -1, 400)
+        report = json.loads(path.read_text())
+        hardware = report["hardware"]
+        duration = hardware["sampling_window"]["duration_us"]
+        hardware["left_feedback_final_age_us"] = 40000
+        last = duration - 40000
+        hardware["left_feedback_last_sample_offset_us"] = last
+        gaps = hardware["left_feedback_gap"]
+        gaps["mean_us"] = (last - hardware["left_feedback_first_sample_delay_us"]) / gaps["count"]
+        path.write_text(json.dumps(report))
+        MODULE.load_report(path)  # internally consistent, but not under a 20 ms bound
+        output = self.root / "unsafe-candidate.json"
+        self.assertNotEqual(self.analyze([host, path], output), 0)
+        self.assertFalse(output.exists())
+
     def test_selects_best_cpu_and_keeps_fatal_disabled(self) -> None:
         slower = self.write_report("slow.yaml", "host-only", 2, 800)
         faster = self.write_report("fast.yaml", "host-only", 3, 400)
@@ -223,7 +304,7 @@ class ProfileAnalyzerTests(unittest.TestCase):
         before = self.base.read_bytes()
         self.assertEqual(self.analyze([slower, faster, hardware], output), 0)
         result = json.loads(output.read_text(encoding="utf-8"))
-        self.assertEqual(result["schema_version"], 3)
+        self.assertEqual(result["schema_version"], 4)
         self.assertEqual(result["deployment_identity"]["source_commit"], "a" * 40)
         self.assertEqual(
             result["base_configuration"]["sha256"],

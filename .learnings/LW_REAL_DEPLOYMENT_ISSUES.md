@@ -22,6 +22,28 @@ LW-072 已完成批准范围内的修改与离线验证，当时无待处理条�
 
 ## 当前选定问题
 
+### [LW-077] 修正吊装测算结束阶段的年龄统计
+
+**状态**： resolved
+**批准日期**：2026-09-17
+
+- 用户在已收到具体方案后明确要求“继续LW-077的代码修改任务”，批准本项实现与离线验证。
+- 范围：统一传感器采样截止，等待在途短记录事务后冻结入口；释放采样锁后计算统计，延后各策略推理分位数；保留真实反馈间隔、首样本延迟和结束年龄。
+- 报告升级 schema v4，记录统一 steady 窗口和末次采样偏移；分析器校验共同截止及完整间隔总和，拒绝旧报告并要求重采。
+- 保留独立失能保活、最终失能发送及失败检查；不修改 base.yaml、四项 MAX_SAFE 安全上限、模型或正式实机控制行为，不启动真实硬件。
+- 基于 b9e821e，开始前工作区干净；此前 skill 修改已提交推送，本项不混入其它问题。用户随后明确授权本项 Git 提交和推送；发布新部署包仍不包含在本轮范围内。
+
+#### 解决记录
+
+- 解决时间：2026-09-17T19:58:18+08:00；基于 `b9e821e`，本记录随本项修改一并提交，标题为 `修正吊装测算统一截止与结束年龄统计（LW-077）`。
+- `LWProfileSamplingWindow` 用短事务锁统一接收时间并处理正常/失败截止；同次左右反馈及单次 IMU 的原始、可信和配对记录保持完整。截止后不再接收统计，关闭操作幂等，不因退出和排序推迟截止。
+- `lw_config_profile.hpp` 将样本捕获与分位数排序分离，源锁外排序；`snapshotSince(start, end)` 使用显式共同截止并拒绝越界时间。profiler 在最终策略 shutdown 前关闭窗口，首次 fail、构造异常和析构也收尾；全部推理分位数延后计算。串口失能保活仍独立运行，最终失能发送和写失败统计保留。
+- profiler 和候选分析报告升级 schema v4；硬件报告保存 steady 窗口起止/时长和各源末次偏移。分析器以 1 微秒绝对容差核验共同截止及完整间隔总和；旧 schema 拒绝并提示重新采集。候选公式及人工安全上限要求不变。
+- 验证目录 `/tmp/lw077-byb15f2e/`：`commands.json`、`build.log`、`tests.log`、`changes.patch`。使用系统 Python、ROS Humble 和现有非生产 `build/rl_sar`，`LW_PRODUCTION_DEPLOYMENT=OFF`、`LW_STRICT_WARNINGS=OFF`；不宣称生产 Release 或 strict 构建通过。编译 `test_lw_config_profile`、`lw_config_profiler` 成功，构建日志无 warning/error。
+- 定向 CTest **4/4 通过**（1.25 秒）：`lw_config_profile`、`lw_runtime_config_analyzer`、`lw_config_profiler_help`、`lw_config_profiler_integration`。分析器 **22 项 Python 测试**通过（Windows 单独运行及 Jetson CTest）；`git diff --check` 通过。
+- 新增 C++ 回归覆盖统一截止、统计延后不改变左右同刻年龄、拒绝迟到记录、重复关闭、未出现来源、窗口越界、并发在途 IMU 事务及独立样本快照；分析回归覆盖旧版本、缺失/矛盾时间、错误语义和时钟，以及真实 40 ms 结束年龄仍阻止突破 20 ms 人工上限。集成测试只运行 host-only、错误确认和不存在的临时串口路径，不访问真实硬件。
+- 已同步两份中文部署指南。`policy/LW/base.yaml`、模型和既有部署包/报告未修改；未启动吊装或正式实机。后续需发布新部署包、重新采集 schema v4 主机及硬件报告后再评审候选；离线验证不代表现场 timing 改善幅度已测得。
+
 ### [LW-076] 新模型配置与测试基线同步
 
 **状态**： resolved

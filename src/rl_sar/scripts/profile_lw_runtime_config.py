@@ -216,6 +216,47 @@ def load_policy_assets(report: dict[str, Any], path: Path) -> list[dict[str, str
     return records
 
 
+def validate_sampling_window(hardware: dict[str, Any], mode: str) -> None:
+    window = require_mapping(hardware.get("sampling_window"), "sampling_window")
+    if require_integer(window, "semantics_version", "sampling_window") != 1 \
+            or window.get("clock") != "steady":
+        fail("unsupported sampling-window semantics; recollect with the current profiler")
+    start = require_number(window, "start_steady_us", "sampling_window")
+    end = require_number(window, "end_steady_us", "sampling_window")
+    duration = require_number(window, "duration_us", "sampling_window")
+    if mode == "host-only":
+        if window.get("started") is not False or window.get("closed") is not False \
+                or any(value != 0 for value in (start, end, duration)):
+            fail("host-only profile claims a hardware sampling window")
+        return
+    if window.get("started") is not True or window.get("closed") is not True:
+        fail("hardware sampling window was not closed")
+    if end < start or duration <= 0 or not math.isclose(
+        end - start, duration, rel_tol=0.0, abs_tol=1.0
+    ):
+        fail("hardware sampling-window duration is inconsistent")
+    for name in ("imu", "ahrs", "trusted_imu", "right_feedback", "left_feedback"):
+        first = require_number(hardware, f"{name}_first_sample_delay_us", "hardware")
+        last = require_number(hardware, f"{name}_last_sample_offset_us", "hardware")
+        age = require_number(hardware, f"{name}_final_age_us", "hardware")
+        gaps = require_mapping(hardware.get(f"{name}_gap"), f"{name}_gap")
+        count = require_integer(gaps, "count", f"{name}_gap")
+        mean = require_number(gaps, "mean_us", f"{name}_gap")
+        seen = hardware.get(f"{name}_seen")
+        if seen is False:
+            if any(value != 0 for value in (first, last, age, count, mean)):
+                fail(f"unseen source contains sampling data: {name}")
+            continue
+        if seen is not True or not 0 <= first <= last <= duration:
+            fail(f"source timestamps are outside the sampling window: {name}")
+        if not math.isclose(last + age, duration, rel_tol=0.0, abs_tol=1.0):
+            fail(f"final age does not use the common sampling cutoff: {name}")
+        # Gap aggregates cover the complete run, even when percentiles use a
+        # bounded retained window. This independently checks the final sample.
+        if not math.isclose(first + mean * count, last, rel_tol=0.0, abs_tol=1.0):
+            fail(f"source gap totals disagree with sample timestamps: {name}")
+
+
 def load_report(path: Path) -> dict[str, Any]:
     if (
         path.is_symlink()
@@ -229,8 +270,9 @@ def load_report(path: Path) -> dict[str, Any]:
     if file_digest(path) != before_digest:
         fail(f"profile changed while it was being read: {path}")
     report = require_mapping(report, str(path))
-    if type(report.get("schema_version")) is not int or report["schema_version"] != 3:
-        fail(f"unsupported profile schema in {path}")
+    if type(report.get("schema_version")) is not int or report["schema_version"] != 4:
+        fail(f"unsupported profile schema in {path}; recollect host and hardware "
+             "reports with the schema v4 profiler (common sampling cutoff)")
     if report.get("failed") is not False:
         fail(f"profile reports failure and cannot be used: {path}")
     source_commit = require_string(report, "source_commit", str(path))
@@ -274,6 +316,7 @@ def load_report(path: Path) -> dict[str, Any]:
         if policy_duration != duration:
             fail(f"profile policy duration differs from report duration: {path}")
     hardware = require_mapping(report.get("hardware"), f"{path}.hardware")
+    validate_sampling_window(hardware, mode)
     if mode == "host-only":
         if report.get("hardware_confirmation") is not False:
             fail(f"host-only profile claims hardware confirmation: {path}")
@@ -777,7 +820,7 @@ def analyze(args: argparse.Namespace) -> None:
         }
 
     result = {
-        "schema_version": 3,
+        "schema_version": 4,
         "review_only": True,
         "must_not_be_applied_without_human_review": True,
         "deployment_identity": identity,
