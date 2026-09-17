@@ -323,6 +323,10 @@ python3 "$LW_PROFILE_TOOL" analyze \
 由 `analyze` 自身执行。
 `--minimum-hardware-samples` 必须是正整数，默认 1000；输出文件不得已经存在。
 
+`analyze` 在报告成功保存并通过输入一致性复核后，会在终端打印全部候选参数、
+时间参数的秒/毫秒换算和评审状态。缺少硬件报告或人工上限时，会标明保留原值及
+待补充事项；分析失败时不输出成功摘要。
+
 `candidate-review.json` 仅供评审。不得把它直接覆盖到当前部署包。需要采用候选时：
 
 1. 在开发机源码树中修改 `policy/LW/base.yaml`；

@@ -859,7 +859,51 @@ def analyze(args: argparse.Namespace) -> None:
     except (OSError, RuntimeError):
         output_path.unlink(missing_ok=True)
         raise
+    print_candidate_summary(result)
     print(f"review-only candidate report written to {output_path}")
+
+
+def print_candidate_summary(result: dict[str, Any]) -> None:
+    values = result["candidate_overlay"]["LW"]
+    decisions = result["decisions"]
+    parameters = (
+        ("sensor_timeout", "sensor_timeout", True),
+        ("trusted_imu_timeout", "trusted_imu_timeout", True),
+        ("imu_ahrs_pair_max_age", "imu_ahrs_pair_max_age", True),
+        ("serial_write_timeout", "serial_write_timeout", True),
+        ("control_loop_degraded_lateness", "degraded_timing", True),
+        ("control_loop_degraded_consecutive_misses", "degraded_timing", False),
+        ("control_loop_cpu", "control_loop_cpu", False),
+        ("control_loop_realtime_priority", "control_loop_realtime_priority", False),
+        ("control_loop_require_realtime", "control_loop_require_realtime", False),
+        ("control_loop_fatal_consecutive_misses", "fatal_timing", False),
+        ("control_loop_fatal_lateness", "fatal_timing", True),
+    )
+    labels = {
+        "provisional": "候选，待评审",
+        "provisional_explicit_candidates_only": "已测选项中的候选，待评审",
+        "provisional_suspended_only": "吊装测算候选，待评审",
+        "hardware_measurement_required": "保留原值，待硬件测量",
+        "manual_required": "保留原值，待人工评审",
+        "physical_validation_required": "保持关闭，待物理验证",
+    }
+    print("\n候选参数（仅供人工评审；未写入 base.yaml）")
+    for name, decision_key, seconds in parameters:
+        value = values[name]
+        if isinstance(value, bool):
+            formatted = "true" if value else "false"
+        elif isinstance(value, float):
+            formatted = f"{value:.9g}"
+        else:
+            formatted = str(value)
+        if seconds:
+            formatted += f" s ({value * 1000:.9g} ms)"
+        status = decisions[decision_key]["status"]
+        label = labels.get(status, status)
+        if name == "control_loop_require_realtime" and status == "manual_required":
+            label = "保持 false，待人工评审"
+        print(f"{name + ':':<45} {formatted:<25} [{label}]")
+    print()
 
 
 def build_parser() -> argparse.ArgumentParser:
