@@ -58,8 +58,24 @@ timestamps, and the mirrored-event cross-check only as metadata evidence.
 
 - Count only top-level `compacted` records.
 - Require consecutive `window_number` values starting at one.
-- Cross-check top-level `event_msg` records whose payload type is
-  `context_compacted`; never add these mirrored notifications to the count.
+- Cross-check top-level `event_msg` records with payload type
+  `context_compacted`, or `item_completed` whose `item.type` is
+  `ContextCompaction` / `contextCompaction`. Ignore start events and nested
+  conversation content; never add notifications to the compaction count.
+- Associate notifications with the preceding top-level `compacted` record.
+  Each window needs at least one supported notification. Old and new formats
+  may coexist in a window or vary between windows; do not sum their counts.
+- Deduplicate completed items by nonempty `item.id` within the rollout, even
+  when an identical event is replayed after a later window. Compare payloads
+  with item-type spelling normalized; ignore the outer log timestamp.
+  Conflicting payloads for one ID, distinct completion IDs in one window,
+  missing IDs, notifications before any window, and mismatched event thread
+  identities fail validation. Repeated legacy notifications in one window
+  are ambiguous without a reliable ID and also fail validation.
+- Report version 2 keeps `context_compacted_count` as the raw legacy count;
+  `completion_event_count`, `unique_completion_count`,
+  `duplicate_completion_count`, and `matched_window_count` expose the modern
+  cross-check. Always use the overall `status` to decide whether to trust it.
 - Require one rollout session identity and match it to the requested thread.
 - Resolve exactly one rollout for automatic thread lookup.
 - Return `rollout_changed_during_read` instead of claiming an exact count when

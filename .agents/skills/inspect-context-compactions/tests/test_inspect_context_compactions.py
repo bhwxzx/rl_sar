@@ -57,6 +57,20 @@ def context_compacted() -> dict:
     }
 
 
+def compaction_completed(item_id: str = "compaction-1", **payload_fields) -> dict:
+    return {
+        "timestamp": "2026-08-01T00:00:09Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "item_completed",
+            "thread_id": THREAD_ID,
+            "turn_id": "turn-1",
+            "item": {"type": "ContextCompaction", "id": item_id},
+            **payload_fields,
+        },
+    }
+
+
 class ContextCompactionInspectionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -136,6 +150,164 @@ class ContextCompactionInspectionTests(unittest.TestCase):
         report = self.inspect()
         self.assertEqual(report["compaction_count"], 5)
         self.assertTrue(report["threshold_reached"])
+
+    def test_modern_completion_supports_both_item_type_spellings(self) -> None:
+        for spelling in ("ContextCompaction", "contextCompaction"):
+            with self.subTest(spelling=spelling):
+                event = compaction_completed()
+                event["payload"]["item"]["type"] = spelling
+                self.write_rollout([session_meta(), compacted(1), event])
+                report = self.inspect()
+                self.assertEqual(report["status"], "available")
+                self.assertEqual(report["compaction_count"], 1)
+                self.assertEqual(report["event_cross_check"]["completion_event_count"], 1)
+                self.assertEqual(report["event_cross_check"]["context_compacted_count"], 0)
+
+    def test_identical_replay_is_deduplicated_across_windows(self) -> None:
+        replay = compaction_completed()
+        replay["timestamp"] = "2026-08-01T00:00:10Z"
+        replay["payload"]["item"]["type"] = "contextCompaction"
+        self.write_rollout([
+            session_meta(), compacted(1), compaction_completed(),
+            compacted(2), replay, compaction_completed("compaction-2"),
+        ])
+        report = self.inspect()
+        self.assertEqual(report["status"], "available")
+        self.assertEqual(report["compaction_count"], 2)
+        check = report["event_cross_check"]
+        self.assertEqual(check["completion_event_count"], 3)
+        self.assertEqual(check["unique_completion_count"], 2)
+        self.assertEqual(check["duplicate_completion_count"], 1)
+
+    def test_same_window_replay_is_deduplicated(self) -> None:
+        self.write_rollout([
+            session_meta(), compacted(1), compaction_completed(), compaction_completed(),
+        ])
+        report = self.inspect()
+        self.assertEqual(report["status"], "available")
+        self.assertEqual(report["compaction_count"], 1)
+        self.assertEqual(report["event_cross_check"]["duplicate_completion_count"], 1)
+
+    def test_mixed_formats_are_cross_checked_per_window(self) -> None:
+        self.write_rollout([
+            session_meta(), compacted(1), context_compacted(),
+            compacted(2), compaction_completed("compaction-2"),
+            compacted(3), context_compacted(), compaction_completed("compaction-3"),
+        ])
+        report = self.inspect()
+        self.assertEqual(report["status"], "available")
+        self.assertEqual(report["compaction_count"], 3)
+        self.assertEqual(report["event_cross_check"]["matched_window_count"], 3)
+
+    def test_two_formats_cannot_hide_missing_window_notification(self) -> None:
+        self.write_rollout([
+            session_meta(), compacted(1), context_compacted(), compaction_completed(),
+            compacted(2),
+        ])
+        report = self.inspect()
+        self.assertEqual(report["status"], "inconsistent")
+        self.assertIsNone(report["compaction_count"])
+        self.assertIn("context_compacted_event_count_mismatch", report["errors"])
+
+    def test_replayed_id_does_not_supply_a_later_windows_notification(self) -> None:
+        self.write_rollout([
+            session_meta(), compacted(1), compaction_completed(),
+            compacted(2), compaction_completed(),
+        ])
+        self.assertEqual(self.inspect()["status"], "inconsistent")
+
+    def test_distinct_completion_ids_in_one_window_are_inconsistent(self) -> None:
+        self.write_rollout([
+            session_meta(), compacted(1), compaction_completed(),
+            compaction_completed("another-id"),
+        ])
+        report = self.inspect()
+        self.assertEqual(report["status"], "inconsistent")
+        self.assertTrue(any(e.startswith("multiple_compaction_items_for_window:")
+                            for e in report["errors"]))
+
+    def test_conflicting_duplicate_payload_is_inconsistent(self) -> None:
+        self.write_rollout([
+            session_meta(), compacted(1), compaction_completed(),
+            compaction_completed(turn_id="another-turn"),
+        ])
+        report = self.inspect()
+        self.assertEqual(report["status"], "inconsistent")
+        self.assertTrue(any(e.startswith("conflicting_compaction_item:")
+                            for e in report["errors"]))
+
+    def test_missing_or_invalid_completion_id_is_inconsistent(self) -> None:
+        for item_id in (None, "", " ", 42, []):
+            with self.subTest(item_id=item_id):
+                event = compaction_completed()
+                if item_id is None:
+                    del event["payload"]["item"]["id"]
+                else:
+                    event["payload"]["item"]["id"] = item_id
+                self.write_rollout([session_meta(), compacted(1), event])
+                report = self.inspect()
+                self.assertEqual(report["status"], "inconsistent")
+                self.assertTrue(any(e.startswith("invalid_compaction_item_id:")
+                                    for e in report["errors"]))
+
+    def test_event_thread_must_match_inferred_session(self) -> None:
+        path = self.write_rollout([
+            session_meta(), compacted(1),
+            compaction_completed(thread_id="another-thread"),
+        ])
+        report = MODULE.inspect_context_compactions(
+            sessions_root=self.sessions_root, rollout_path=path,
+            retry_delay_seconds=0,
+        )
+        self.assertEqual(report["status"], "inconsistent")
+        self.assertIn("compaction_event_thread_id_mismatch", report["errors"])
+
+    def test_invalid_event_thread_is_inconsistent(self) -> None:
+        for thread in (None, "", 42, []):
+            with self.subTest(thread=thread):
+                self.write_rollout([
+                    session_meta(), compacted(1), compaction_completed(thread_id=thread),
+                ])
+                self.assertEqual(self.inspect()["status"], "inconsistent")
+
+    def test_optional_event_thread_can_be_absent(self) -> None:
+        event = compaction_completed()
+        del event["payload"]["thread_id"]
+        self.write_rollout([session_meta(), compacted(1), event])
+        self.assertEqual(self.inspect()["status"], "available")
+
+    def test_start_and_nested_completion_do_not_count(self) -> None:
+        started = compaction_completed(type="item_started")
+        nested = {"type": "response_item", "payload": compaction_completed()}
+        self.write_rollout([session_meta(), compacted(1), started, nested])
+        report = self.inspect()
+        self.assertEqual(report["status"], "inconsistent")
+        self.assertEqual(report["event_cross_check"]["completion_event_count"], 0)
+
+    def test_completion_without_preceding_window_is_inconsistent(self) -> None:
+        self.write_rollout([session_meta(), compaction_completed(), compacted(1)])
+        report = self.inspect()
+        self.assertEqual(report["status"], "inconsistent")
+        self.assertTrue(any(e.startswith("compaction_event_without_window:")
+                            for e in report["errors"]))
+
+    def test_legacy_duplicates_without_identity_are_ambiguous(self) -> None:
+        self.write_rollout([
+            session_meta(), compacted(1), context_compacted(), context_compacted(),
+        ])
+        report = self.inspect()
+        self.assertEqual(report["status"], "inconsistent")
+        self.assertTrue(any(e.startswith("ambiguous_legacy_compaction_events:")
+                            for e in report["errors"]))
+
+    def test_report_does_not_expose_event_payload(self) -> None:
+        self.write_rollout([
+            session_meta(), compacted(1), compaction_completed("private-item-id"),
+            compaction_completed("private-item-id", turn_id="private-turn-id"),
+        ])
+        report = self.inspect()
+        self.assertEqual(report["status"], "inconsistent")
+        self.assertNotIn("private-", json.dumps(report))
 
     def test_gap_in_window_numbers_is_inconsistent(self) -> None:
         self.write_rollout(

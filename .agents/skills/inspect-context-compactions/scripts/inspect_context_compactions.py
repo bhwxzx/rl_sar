@@ -28,7 +28,7 @@ def _default_sessions_root() -> Path:
 
 def _base_result(thread_id: str | None, threshold: int) -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": 2,
         "provider": "codex",
         "status": "unavailable",
         "checked_at": datetime.now(timezone.utc).isoformat(),
@@ -41,6 +41,10 @@ def _base_result(thread_id: str | None, threshold: int) -> dict[str, Any]:
         "threshold_reached": None,
         "event_cross_check": {
             "context_compacted_count": None,
+            "completion_event_count": None,
+            "unique_completion_count": None,
+            "duplicate_completion_count": None,
+            "matched_window_count": None,
             "matches": None,
         },
         "errors": [],
@@ -103,6 +107,14 @@ def _inspect_rollout_once(
     window_numbers: list[int] = []
     compaction_timestamps: list[str | None] = []
     context_compacted_count = 0
+    completion_event_count = 0
+    duplicate_completion_count = 0
+    # Notifications are evidence for the preceding compacted record, never
+    # additional compactions. Keep each format separate within that window.
+    legacy_windows: set[int] = set()
+    completion_windows: set[int] = set()
+    completion_ids: dict[str, str] = {}
+    event_thread_ids: set[str] = set()
 
     try:
         with path.open("r", encoding="utf-8") as stream:
@@ -143,9 +155,55 @@ def _inspect_rollout_once(
                 elif (
                     record_type == "event_msg"
                     and isinstance(payload, dict)
-                    and payload.get("type") == "context_compacted"
                 ):
-                    context_compacted_count += 1
+                    event_type = payload.get("type")
+                    item = payload.get("item")
+                    is_completion = (
+                        event_type == "item_completed"
+                        and isinstance(item, dict)
+                        and item.get("type") in (
+                            "ContextCompaction", "contextCompaction"
+                        )
+                    )
+                    if event_type != "context_compacted" and not is_completion:
+                        continue
+                    event_thread = payload.get("thread_id")
+                    if "thread_id" in payload:
+                        if not isinstance(event_thread, str) or not event_thread:
+                            errors.append(f"invalid_compaction_event_thread:{line_number}")
+                        else:
+                            event_thread_ids.add(event_thread)
+                    window = len(window_numbers)
+                    if is_completion:
+                        completion_event_count += 1
+                        item_id = item.get("id")
+                        if not isinstance(item_id, str) or not item_id.strip():
+                            errors.append(f"invalid_compaction_item_id:{line_number}")
+                            continue
+                        # Outer log timestamps may differ on replay. Compare the
+                        # event payload, normalizing the two item-type spellings.
+                        normalized = dict(payload)
+                        normalized["item"] = dict(item, type="ContextCompaction")
+                        fingerprint = json.dumps(normalized, sort_keys=True)
+                        if item_id in completion_ids:
+                            if completion_ids[item_id] != fingerprint:
+                                errors.append(f"conflicting_compaction_item:{line_number}")
+                            else:
+                                duplicate_completion_count += 1
+                            continue
+                        completion_ids[item_id] = fingerprint
+                        if window in completion_windows:
+                            errors.append(f"multiple_compaction_items_for_window:{line_number}")
+                        completion_windows.add(window)
+                    else:
+                        context_compacted_count += 1
+                        if window in legacy_windows:
+                            # Legacy events have no reliable item identity;
+                            # identical text/timestamps do not prove a replay.
+                            errors.append(f"ambiguous_legacy_compaction_events:{line_number}")
+                        legacy_windows.add(window)
+                    if window == 0:
+                        errors.append(f"compaction_event_without_window:{line_number}")
     except OSError:
         result["errors"] = ["rollout_read_failed"]
         return result
@@ -160,11 +218,14 @@ def _inspect_rollout_once(
             errors.append("rollout_thread_id_mismatch")
         elif not thread_id:
             result["thread_id"] = session_id
+        if event_thread_ids - {session_id}:
+            errors.append("compaction_event_thread_id_mismatch")
 
     expected_windows = list(range(1, len(window_numbers) + 1))
     if window_numbers != expected_windows:
         errors.append("compaction_window_sequence_invalid")
-    event_matches = context_compacted_count == len(window_numbers)
+    matched_windows = legacy_windows | completion_windows
+    event_matches = matched_windows == set(expected_windows)
     if not event_matches:
         errors.append("context_compacted_event_count_mismatch")
 
@@ -172,6 +233,10 @@ def _inspect_rollout_once(
     result["compaction_timestamps"] = compaction_timestamps
     result["event_cross_check"] = {
         "context_compacted_count": context_compacted_count,
+        "completion_event_count": completion_event_count,
+        "unique_completion_count": len(completion_ids),
+        "duplicate_completion_count": duplicate_completion_count,
+        "matched_window_count": len(matched_windows - {0}),
         "matches": event_matches,
     }
     result["errors"] = errors
