@@ -212,7 +212,7 @@ python3 "$LW_PROFILE_TOOL" collect-host \
     --policy-root "$LW_POLICY_ROOT" \
     --output-dir "$LW_PROFILE_DIR/host" \
     --duration-seconds 30 \
-    --cpus allowed \
+    --cpus -1 \
     --realtime-priorities 0
 ```
 
@@ -224,6 +224,10 @@ python3 "$LW_PROFILE_TOOL" collect-host \
 可比较的采样时长。
 
 输出目录必须不存在或为空。未经部署负责人批准，不要加入正数实时优先级。
+
+主机测算和下节吊装测算均保留计算力矩超限检测与诊断安全事件，但关闭逐条
+力矩告警打印，也不输出结束汇总。测算耗时不包含这部分同步输出开销；正式
+实机和 Sim2Sim 的力矩告警打印仍开启，其耗时不能直接由测算结果保证。
 
 ### 5.2 吊装硬件观察
 
@@ -277,6 +281,8 @@ python3 "$LW_PROFILE_TOOL" collect-hardware \
 电机板串口的命令是 `motors_disable=true`。它先完成双侧初始失能写入，再启动
 独立的 5 ms 失能保活，策略只做 shadow inference，输出全部丢弃。命令结束后
 停止独立 AHRS 驱动。
+
+关闭逐条力矩打印不影响失能保活、测算失败处理或其它错误输出。
 
 该证明只表示上层完整写入失能包且没有发送非失能命令，不表示 STM32 已经执行
 失能，也不能证明电机物理上已经失能。整个阶段仍必须保持吊装、隔离和物理急停。

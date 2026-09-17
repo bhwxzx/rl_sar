@@ -64,7 +64,7 @@ struct LWInferenceCycleHooks
         const Observations<float>&,
         const std::vector<float>&,
         const std::vector<float>&)> after_publish;
-    // Host-only profiling can omit synchronous console I/O without changing
+    // Profiling can omit synchronous console I/O without changing
     // torque detection or the diagnostic safety event. Runtime defaults to on.
     bool print_torque_warnings = true;
 };

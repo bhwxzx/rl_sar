@@ -1003,7 +1003,8 @@ private:
             {
                 publishMotionReference();
                 LWInferenceCycleHooks hooks;
-                hooks.print_torque_warnings = options_.mode != ProfileMode::HostOnly;
+                // Profiling retains torque checks without synchronous warning output.
+                hooks.print_torque_warnings = false;
                 const auto started = std::chrono::steady_clock::now();
                 runtime_core_.runInferenceCycle(false, hooks);
                 inference_samples->record(

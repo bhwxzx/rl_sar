@@ -22,6 +22,30 @@ LW-072 已完成批准范围内的修改与离线验证，当时无待处理条�
 
 ## 当前选定问题
 
+### [LW-075] 关闭吊装测算逐条力矩告警
+
+**状态**： resolved
+**批准日期**：2026-09-17
+
+- 用户明确批准本项方案；仅关闭吊装测算的逐条计算力矩超限打印，主机测算继续保持关闭。
+- 实施范围：`lw_config_profiler.cpp` 复用现有 `print_torque_warnings` 开关并固定为 `false`；更新共享开关注释及两份部署指南。
+- 保留超限检测和 `TorqueLimitWarning` 诊断事件；正式实机与 Sim2Sim 默认打印行为、策略输出、5 ms 失能保活、错误输出和失败退出处理不变。不增加开关参数或结束汇总。
+- 验收范围：编译 profiler，运行现有共享运行时打印/检测一致性回归和 profiler 无硬件集成测试。实际吊装复测不包含在本次离线验证中。
+- 本轮初始工作区干净；保留已有部署包和测算报告。用户随后于 2026-09-17 明确授权提交并推送；部署包发布不在本次范围内。
+- 执行期间检测到用户同时保存快速指南，将主机测算命令改为 `--cpus -1`；已保留该调整，并在最新文档上补回本项说明。该 CPU 参数调整不属于本项代码修改。
+
+#### 解决记录
+
+- 解决时间： 2026-09-17T11:34:57+08:00
+- 提交：本记录随本项修改一并提交，标题为 `关闭吊装测算逐条力矩告警（LW-075）`；基于 `df0d4eccd41a837c164ed4958fa0fcf049004ee2`。
+- 修改文件：`src/rl_sar/src/lw_config_profiler.cpp`、`src/rl_sar/library/core/safety/lw_runtime_core.hpp`（仅注释）、`docs/LW_BUILD_DEPLOYMENT_CN.md`、`docs/LW_QUICK_START_CN.md` 及本记录。
+- 实施：profiler 在共享推理调用前统一设置 `print_torque_warnings=false`。复用现有检测路径，不改变 `TorqueLimitWarning` 事件或输出计算；共享默认值仍为 `true`。串口失能、保活、失败退出、模型和配置均未修改。
+- 隔离验证目录：`/tmp/lw075-8xb9hgeg`。`commands.json` 保存 CMake 配置、构建和 CTest 参数；`configure.log`、`build.log`、`tests.log` 保存执行结果。使用系统 Python、ROS Humble、Release 和非生产测试配置；未覆盖已有 build/install 程序或部署包。
+- 编译 `lw_config_profiler`、`test_lw_runtime_parity` 成功；定向 CTest **3/3 通过**：`lw_runtime_parity`、`lw_config_profiler_help`、`lw_config_profiler_integration`。
+- 既有 `testTorqueWarningPrintingDoesNotChangeDetection` 验证默认打印与静默模式的输出区别，同时确认超限诊断事件、非阻尼锁存状态及位置、速度、计算力矩输出一致。profiler 集成测试仅运行 host-only 和硬件拒绝启动路径；后者使用错误确认字符串或不存在的临时串口路径，未访问真实电机板。
+- `git diff --check` 通过。验证不包含实际吊装、正式实机或 Sim2Sim 运行，也未测量硬件模式关闭打印后的性能改善幅度。
+- 后续事项：提交新版本后按发布流程生成并离线验收新的部署包，再安排现场吊装复测；现有部署包和历史报告保持原样。
+
 ### [LW-074] 对齐四个 LW 策略的动作目标裁剪顺序
 
 **状态**： resolved
