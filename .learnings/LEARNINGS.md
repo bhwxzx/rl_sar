@@ -1036,3 +1036,40 @@ LibTorch、ONNX Runtime 和按需 MuJoCo；文档明确首次运行的联网和 
   sudo 和受控测试跳过方式。
 
 ---
+
+## [LRN-20260918-001] correction
+
+**Logged**: 2026-09-18T20:52:27+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+通过 SSH 操作远端仓库时，当前 Codex 会话压缩次数应在实际保存会话记录的本机检查，不能默认在远端检查。
+
+### Details
+本次 Codex 会话运行于 Windows VS Code，本机会话记录位于 C:/Users/10448/.codex/sessions/；/home/nvidia/rl_sar 只是 SSH 访问的远端工作区。在远端直接运行 inspector 返回 status=unavailable、codex_thread_id_unavailable，原因是检查环境不具备本机会话身份与记录，不能据此认定本机会话不可检查，也不能套用上一会话的压缩次数。
+用户纠正后，在本机读取 CODEX_THREAD_ID，匹配本地 rollout，并用本机 py 执行远端读取的只读 inspector。2026-09-18T20:50:51+08:00 验证当前会话 01a0b48f-afbc-7213-86b2-a2f1b2489a72 的 status=available、compaction_count=0、threshold_reached=false，交叉校验通过且 errors=[]。这只是该检查时刻的结果，不是未来会话的固定次数。
+
+### Suggested Action
+1. 先区分仓库所在主机与 Codex 会话记录所在主机。当前 Windows VS Code + SSH 工作方式下，优先在本机读取 CODEX_THREAD_ID/CODEX_HOME 和 sessions 路径。
+2. 使用 inspect-context-compactions 技能的只读脚本检查本地记录。精确 rollout 已知时传 --rollout，并可用 --thread-id 核对身份；否则让脚本按当前身份定位。脚本仅在远端时，可只读取得脚本并通过本机 Python 执行，不把本机会话日志上传远端。
+3. 本机检查 Python 可用性时包含 py，不要沿用旧会话关于 Windows Python 不可用的结论。
+4. 只信任 status=available 的次数；先纠正主机、身份和记录路径，再按有效结果应用交接阈值。避免直接打印 rollout 消息或工具输出。
+
+### Metadata
+- Source: user_feedback
+- Related Files: AGENTS.md, .agents/skills/inspect-context-compactions/SKILL.md, .agents/skills/inspect-context-compactions/scripts/inspect_context_compactions.py
+- Tags: ssh, windows, codex, context-compaction, local-session
+- See Also: LRN-20260801-001
+- Pattern-Key: workflow.inspect_compactions_on_session_host
+- Recurrence-Count: 1
+- First-Seen: 2026-09-18
+- Last-Seen: 2026-09-18
+
+### Resolution
+- **Resolved**: 2026-09-18T20:50:51+08:00
+- **Commit/PR**: 本提交；用户在记录完成后明确授权提交和推送。
+- **Notes**: 已在本机成功复查并验证为 0 次。本项只记录纠正，不修改源代码、AGENTS.md 或检查技能。
+
+---
