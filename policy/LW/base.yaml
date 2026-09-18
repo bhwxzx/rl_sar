@@ -1,6 +1,9 @@
 LW:
   dt: 0.005
   decimation: 4
+  # GetUp完成后，双足/双轮策略启动前的姿态准入条件。
+  policy_entry_angle_deg: 8.0
+  policy_entry_stable_time: 0.5
   # 每个电机板反馈帧在触发故障保护前允许的最大时效。
   sensor_timeout: 0.05
   # guard 输出的可信 IMU 在触发故障保护前允许的最大时效。当前值保留

@@ -19,6 +19,8 @@ public:
     virtual void Run() = 0;
     virtual void Exit() = 0;
     virtual std::string_view CheckChange() { return state_name_; }
+    // Revalidate a staged transition before Exit/Enter can activate its target.
+    virtual bool CanTransitionTo(std::string_view) { return true; }
 
     const std::string &GetStateName() const { return state_name_; }
 
@@ -92,6 +94,13 @@ public:
         }
         else if (mode_ == Mode::CHANGE)
         {
+            if (!current_state_->CanTransitionTo(next_state_->GetStateName()))
+            {
+                next_state_ = current_state_;
+                mode_ = Mode::NORMAL;
+                current_state_->Run();
+                return;
+            }
             current_state_->Exit();
             previous_state_ = current_state_;
             current_state_ = next_state_;

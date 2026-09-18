@@ -3,6 +3,7 @@
 
 #include "fsm.hpp"
 #include "rl_sdk.hpp"
+#include "lw_policy_entry_guard.hpp"
 
 namespace LW_fsm
 {
@@ -59,6 +60,55 @@ public:
     }
 };
 
+// Shared by the two GetUp states; never activates a policy on recovery.
+class LWGetUpEntryCheck
+{
+public:
+    LWPolicyEntryGuard guard;
+    void reset() { guard.reset(); warning_active_ = false; last_warning_ = {}; }
+    void update(RL& rl, const RobotState<float>& state, bool completed)
+    {
+        if (!rl.lw_policy_entry_guard_enabled) { reset(); return; }
+        const auto& c = rl.GetLWBaseRuntimeConfiguration();
+        guard.observe(state.imu.quaternion, state.imu.sample_time,
+                      rl.LWEntryCheckNow(), completed, c.policy_entry_angle_deg,
+                      c.policy_entry_stable_time, c.trusted_imu_timeout);
+        if (warning_active_ && guard.ready()) {
+            std::cout << LOGGER::INFO << "[PolicyEntry] 已满足启动条件，请重新按键启动策略" << std::endl;
+            warning_active_ = false;
+        }
+        if (warning_active_) warn(rl);
+    }
+    bool request(RL& rl, const char* policy)
+    {
+        if (!rl.lw_policy_entry_guard_enabled || guard.ready()) return true;
+        policy_ = policy;
+        warning_active_ = true;
+        // Discard the rejected request, including the keyboard's remembered key.
+        rl.control.current_keyboard = rl.control.last_keyboard = Input::Keyboard::None;
+        rl.control.current_gamepad = rl.control.last_gamepad = Input::Gamepad::None;
+        warn(rl);
+        return false;
+    }
+private:
+    void warn(RL& rl)
+    {
+        const auto now = rl.LWEntryCheckNow();
+        if (last_warning_ != LWPolicyEntryGuard::Time{}
+            && now-last_warning_ < std::chrono::milliseconds(500)) return;
+        last_warning_ = now;
+        const auto& c = rl.GetLWBaseRuntimeConfiguration();
+        std::cout << LOGGER::WARNING << "[PolicyEntry] 拒绝启动 " << policy_
+            << ": " << guard.description() << ", roll=" << guard.roll
+            << " deg, pitch=" << guard.pitch << " deg, 要求各轴绝对值<="
+            << c.policy_entry_angle_deg << " deg, 连续稳定=" << guard.stable_seconds
+            << "/" << c.policy_entry_stable_time << " s；保持GetUp" << std::endl;
+    }
+    bool warning_active_ = false;
+    const char* policy_ = "locomotion";
+    LWPolicyEntryGuard::Time last_warning_{};
+};
+
 class RLFSMStateGetUp_Leg : public RLFSMState
 {
 public:
@@ -74,9 +124,11 @@ public:
         0.0, 0.0
     };
     bool stand_from_passive = true;
+    LWGetUpEntryCheck entry_check;
 
     void Enter() override
     {
+        entry_check.reset();
         percent_pre_getup = 0.0f;
         percent_getup = 0.0f;
         if (rl.fsm.previous_state_->GetStateName() == "RLFSMStatePassive")
@@ -108,8 +160,18 @@ public:
 
     void Exit() override {}
 
+    bool CanTransitionTo(std::string_view target) override
+    {
+        if (target != "RLFSMStateRLLocomotion_Leg") return true;
+        if (rl.lw_policy_entry_guard_enabled)
+            entry_check.update(rl, *fsm_state, percent_getup >= 1.0f);
+        return entry_check.request(rl, "leg_loco");
+    }
+
     std::string_view CheckChange() override
     {
+        if (rl.lw_policy_entry_guard_enabled)
+            entry_check.update(rl, *fsm_state, percent_getup >= 1.0f);
         if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
         {
             return "RLFSMStatePassive";
@@ -122,7 +184,9 @@ public:
         {
             if (rl.control.current_keyboard == Input::Keyboard::Num1 || rl.control.current_gamepad == Input::Gamepad::RB_DPadUp)
             {
-                return "RLFSMStateRLLocomotion_Leg";
+                if (entry_check.request(rl, "leg_loco"))
+                    return "RLFSMStateRLLocomotion_Leg";
+                return state_name_;
             }
             else if (rl.control.current_keyboard == Input::Keyboard::Num9 || rl.control.current_gamepad == Input::Gamepad::B)
             {
@@ -148,9 +212,11 @@ public:
         0.0, 0.0
     };
     bool stand_from_passive = true;
+    LWGetUpEntryCheck entry_check;
 
     void Enter() override
     {
+        entry_check.reset();
         percent_pre_getup = 0.0f;
         percent_getup = 0.0f;
         if (rl.fsm.previous_state_->GetStateName() == "RLFSMStatePassive")
@@ -181,8 +247,18 @@ public:
 
     void Exit() override {}
 
+    bool CanTransitionTo(std::string_view target) override
+    {
+        if (target != "RLFSMStateRLLocomotion_Wheel") return true;
+        if (rl.lw_policy_entry_guard_enabled)
+            entry_check.update(rl, *fsm_state, percent_getup >= 1.0f);
+        return entry_check.request(rl, "wheel_loco");
+    }
+
     std::string_view CheckChange() override
     {
+        if (rl.lw_policy_entry_guard_enabled)
+            entry_check.update(rl, *fsm_state, percent_getup >= 1.0f);
         if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
         {
             return "RLFSMStatePassive";
@@ -195,7 +271,9 @@ public:
         {
             if (rl.control.current_keyboard == Input::Keyboard::Num3 || rl.control.current_gamepad == Input::Gamepad::RB_DPadDown)
             {
-                return "RLFSMStateRLLocomotion_Wheel";
+                if (entry_check.request(rl, "wheel_loco"))
+                    return "RLFSMStateRLLocomotion_Wheel";
+                return state_name_;
             }
             else if (rl.control.current_keyboard == Input::Keyboard::Num9 || rl.control.current_gamepad == Input::Gamepad::B)
             {

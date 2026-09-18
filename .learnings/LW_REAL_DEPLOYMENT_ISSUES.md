@@ -22,6 +22,30 @@ LW-072 已完成批准范围内的修改与离线验证，当时无待处理条�
 
 ## 当前选定问题
 
+### [LW-080] GetUp后策略启动姿态准入保护
+
+**状态**： resolved
+**批准日期**：2026-09-18
+
+- 用户明确批准：横滚和俯仰各±8°，连续稳定0.5秒；适用于GetUp_Leg→leg_loco与GetUp_Wheel→wheel_loco。
+- 不满足条件时保持GetUp，每秒2次持续终端告警；恢复后提示重新按键，不自动启动。请求与实际切换均校验，新IMU样本才推进稳定时间。
+- 用户补充：仿真不用该保护。仅rl_real_LW显式启用，共享状态机默认保持原行为。
+- 本项含实现、配置、离线回归和记录；用户随后明确授权本项Git提交和推送，未授权硬件运行、烧录或部署。保留用户docs/LW_QUICK_START_CN.md修改。
+- 现有更高优先级失效/姿态保护继续有效；本项不能阻止运行后尖峰、角度正常但角速度异常，亦不能保证消除已分析的轮式闭环振荡。
+
+
+#### 解决记录
+
+- 2026-09-18完成批准范围的实现与离线验证，尚未进行实机验收。
+- base.yaml新增policy_entry_angle_deg=8.0、policy_entry_stable_time=0.5；校验有限正值，角度小于90°，旧配置缺省采用8°/0.5秒。未更改已有超时、增益、模型或摩擦补偿。
+- 仅rl_real_LW启用准入检查并传递可信IMU接收时间；仿真/主机测算默认不启用。GetUp完成后按新样本累计稳定时间，重复缓存不推进，超限/无效/过期/时间异常/采样间断重新计时。
+- GetUp的启动请求与实际Exit/Enter前分别检查。泛用FSM增加默认允许的切换前复核钩子，仅LW GetUp覆盖；拒绝时取消待切换、保留GetUp进度与控制，不触发策略激活。
+- 拒绝后清除该次输入，每0.5秒重复警告；恢复仅提示重新按键，重新进入GetUp会清空记录。GetDown、Passive和既有更高优先级安全处置保持有效。
+- 新增回归覆盖±8°边界、超限、NaN/Inf/异常四元数、未来/过期/重复样本、间断重计时、0.5秒窗口、双足/双轮启动、切换下一周期突发超限、拒绝后重试、2Hz告警、逃生通道、重新GetUp以及仿真不启用。
+- 真机目标rl_real_LW及相关测试重编译成功；定向CTest共11/11通过：lw_fsm_transitions、lw_control_safety、lw_runtime_parity、lw_allocation_bound、lw_rl_destruction、lw_runtime_sync、lw_policy_output_transport、lw_motion_reference_rate、lw_configuration_validation、lw_repository_scope、lw_runtime_linkage。并非全仓或实机验收。
+- 新说明docs/LW_POLICY_ENTRY_GUARD_CN.md；用户docs/LW_QUICK_START_CN.md与修改前逐字节一致，rl_sim_LW.cpp亦未变化。git diff --check通过。
+- 证据保存在build/lw_diagnostics/lw080/：before/备份、final-build.log、final-tests.log、preservation.json、verification.json。未构建/替换已发布部署包，未启动硬件或烧录；Git提交和推送按用户随后授权执行。
+
 ### [LW-079] 固定输出回归采用绝对与相对误差容限
 
 **状态**： resolved

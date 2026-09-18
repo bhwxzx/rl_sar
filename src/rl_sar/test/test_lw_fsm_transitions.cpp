@@ -46,6 +46,8 @@ private:
 class TestRL : public RL
 {
 public:
+    LWPolicyEntryGuard::Time entry_now{std::chrono::seconds(100)};
+    LWPolicyEntryGuard::Time LWEntryCheckNow() const override { return entry_now; }
     std::vector<float> Forward() override
     {
         return {};
@@ -300,13 +302,16 @@ StateMap createLWStates(RL& rl, std::unordered_set<std::string>& registered_name
         require(
             state->GetStateName() == name,
             "factory state name does not match registered name " + name);
+        auto typed = std::dynamic_pointer_cast<RLFSMState>(state);
+        typed->fsm_state = &rl.robot_state;
+        typed->fsm_command = &rl.robot_command;
         states.emplace(name, std::move(state));
     }
     require(states.size() == factory.GetSupportedStates().size(), "duplicate LW state name");
     return states;
 }
 
-void setReadyProgress(const std::shared_ptr<FSMState>& state)
+void setReadyProgress(RL& rl, const std::shared_ptr<FSMState>& state)
 {
     if (auto get_up_leg =
             std::dynamic_pointer_cast<LW_fsm::RLFSMStateGetUp_Leg>(state))
@@ -317,6 +322,17 @@ void setReadyProgress(const std::shared_ptr<FSMState>& state)
                  std::dynamic_pointer_cast<LW_fsm::RLFSMStateGetUp_Wheel>(state))
     {
         get_up_wheel->percent_getup = 1.0f;
+    }
+    if (state->GetStateName() == "RLFSMStateGetUp_Leg"
+        || state->GetStateName() == "RLFSMStateGetUp_Wheel") {
+        auto& test = dynamic_cast<TestRL&>(rl);
+        rl.control.current_keyboard = Input::Keyboard::None;
+        rl.control.current_gamepad = Input::Gamepad::None;
+        for (int i=0; i<=100; ++i) {
+            test.entry_now += std::chrono::milliseconds(5);
+            rl.robot_state.imu.sample_time = test.entry_now;
+            state->CheckChange();
+        }
     }
 }
 
@@ -470,7 +486,7 @@ void testAcceptedTransitionTable(
         const auto state = states.at(transition.state);
         if (transition.ready)
         {
-            setReadyProgress(state);
+            setReadyProgress(rl, state);
         }
         rl.control.current_keyboard = transition.keyboard;
         rl.control.current_gamepad = transition.gamepad;
@@ -495,7 +511,7 @@ void testEveryInputReturnsRegisteredState(
     for (const auto& entry : states)
     {
         const auto& state = entry.second;
-        setReadyProgress(state);
+        setReadyProgress(rl, state);
 
         for (int value = static_cast<int>(Input::Keyboard::None);
              value <= static_cast<int>(Input::Keyboard::Right);
@@ -542,6 +558,119 @@ void testMorphologyTransitionsIgnoreGetUpInput(
     }
 }
 
+std::vector<float> tilt(float roll, float pitch=0)
+{
+    constexpr double rad=0.017453292519943295;
+    double cr=std::cos(roll*rad/2), sr=std::sin(roll*rad/2);
+    double cp=std::cos(pitch*rad/2), sp=std::sin(pitch*rad/2);
+    return {float(cr*cp),float(sr*cp),float(cr*sp),float(-sr*sp)};
+}
+
+void testEntryGuardSamples()
+{
+    using namespace std::chrono_literals;
+    LWPolicyEntryGuard g;
+    auto now=LWPolicyEntryGuard::Time(100s);
+    const auto feed=[&](const std::vector<float>& q, bool completed=true) {
+        g.observe(q,now,now,completed,8,.5,.02);
+    };
+    for (float angle : {8.f,-8.f}) {
+        g.reset();
+        for (int i=0;i<=100;++i) { now+=5ms; feed(tilt(angle,angle)); }
+        require(g.ready(), "8-degree boundary rejected");
+        now+=5ms; feed(tilt(angle>0?8.01f:-8.01f));
+        require(!g.ready(), "outside angle accepted");
+    }
+    g.reset();feed(tilt(0));
+    const auto cached=now;
+    now+=10ms;g.observe(tilt(0),cached,now,true,8,.5,.02);
+    require(g.stable_seconds==0, "cached sample advanced stability");
+    now+=500ms;g.observe(tilt(0),cached,now,true,8,.5,.02);
+    require(!g.ready() && g.reason==LWPolicyEntryGuard::Reason::Stale, "stale sample accepted");
+    feed(tilt(0));
+    for(int i=0;i<99;++i) { now+=5ms;feed(tilt(0)); }
+    require(!g.ready(), "admitted before hold duration");
+    now+=5ms;feed(tilt(0));require(g.ready(), "continuous fresh samples not admitted");
+    now+=30ms;feed(tilt(0));require(!g.ready(), "sample gap did not reset hold");
+    for(int i=0;i<100;++i) { now+=5ms;feed(tilt(0)); }
+    require(g.ready(), "recovery interval not admitted");
+    now+=5ms;feed(tilt(0),false);require(!g.ready(), "incomplete getup admitted");
+    for (auto q : {std::vector<float>{0,0,0,0}, std::vector<float>{1,0,0},
+                   std::vector<float>{NAN,0,0,0},std::vector<float>{INFINITY,0,0,0}}) {
+        now+=5ms;feed(q);require(!g.ready(), "invalid quaternion accepted");
+    }
+    g.observe(tilt(0),now+1ms,now,true,8,.5,.02);
+    require(!g.ready(), "future sample accepted");
+}
+
+void testEntryTransitions()
+{
+    using namespace std::chrono_literals;
+    for (const std::string kind : {"Leg","Wheel"}) {
+        TestRL rl;
+        rl.lw_policy_entry_guard_enabled = true;
+        rl.SetLWBaseRuntimeConfiguration(LWValidatedBaseConfiguration(
+            YAML::LoadFile(std::string(POLICY_DIR)+"/LW/base.yaml")["LW"], "entry-test"));
+        rl.InitJointNum(10);
+        std::unordered_set<std::string> names;
+        auto states=createLWStates(rl,names);
+        const std::string getup="RLFSMStateGetUp_"+kind;
+        const std::string loco="RLFSMStateRLLocomotion_"+kind;
+        auto current=states.at(getup);
+        for (const auto& pair:states) rl.fsm.AddState(pair.second);
+        rl.fsm.previous_state_=states.at("RLFSMStatePassive");
+        rl.fsm.SetInitialState(getup);
+        if(kind=="Leg") std::dynamic_pointer_cast<LW_fsm::RLFSMStateGetUp_Leg>(current)->percent_pre_getup=1;
+        else std::dynamic_pointer_cast<LW_fsm::RLFSMStateGetUp_Wheel>(current)->percent_pre_getup=1;
+        setReadyProgress(rl,current);
+        const auto key=kind=="Leg"?Input::Keyboard::Num1:Input::Keyboard::Num3;
+        rl.control.current_keyboard=key;
+        require(current->CheckChange()==loco,"ready entry rejected");
+        // A spike arrives after the request but before next-cycle Enter.
+        rl.fsm.RequestStateChange(loco);
+        rl.entry_now+=5ms;rl.robot_state.imu.sample_time=rl.entry_now;
+        rl.robot_state.imu.quaternion=tilt(13);
+        rl.fsm.Run();
+        require(rl.fsm.current_state_==current && rl.fsm.mode_==FSM::Mode::NORMAL,
+                "staged transition bypassed new tilt");
+        require(rl.control.current_keyboard==Input::Keyboard::None,
+                "rejected keyboard request retained");
+        clearInput(rl);
+        rl.control.current_gamepad=Input::Gamepad::B;
+        require(current->CheckChange()=="RLFSMStateGetDown","entry gate blocked getdown");
+        clearInput(rl);rl.control.current_keyboard=Input::Keyboard::P;
+        require(current->CheckChange()=="RLFSMStatePassive","entry gate blocked passive");
+        clearInput(rl);
+        std::ostringstream captured;auto* previous=std::cout.rdbuf(captured.rdbuf());
+        for(int i=0;i<200;++i) {
+            rl.entry_now+=5ms;rl.robot_state.imu.sample_time=rl.entry_now;
+            current->CheckChange();
+        }
+        std::cout.rdbuf(previous);
+        size_t count=0,pos=0;
+        while((pos=captured.str().find("[PolicyEntry]",pos))!=std::string::npos) {++count;pos+=13;}
+        require(count==2,"warning rate is not 2Hz while rejection persists");
+        rl.robot_state.imu.quaternion=tilt(0);
+        setReadyProgress(rl,current);
+        require(current->CheckChange()==getup,"automatically started on recovery");
+        rl.control.current_gamepad=kind=="Leg"?Input::Gamepad::RB_DPadUp:Input::Gamepad::RB_DPadDown;
+        require(current->CheckChange()==loco,"fresh gamepad request rejected after recovery");
+        require(current->CanTransitionTo(loco),"ready staged transition rejected");
+        // The simulator does not opt in: even a tilted/no-timestamp state
+        // must retain its original transition behavior.
+        rl.lw_policy_entry_guard_enabled=false;
+        rl.robot_state.imu.quaternion=tilt(13);
+        rl.robot_state.imu.sample_time={};
+        rl.control.current_keyboard=key;
+        require(current->CheckChange()==loco && current->CanTransitionTo(loco),
+                "real-only guard changed simulation transitions");
+        rl.lw_policy_entry_guard_enabled=true;
+        // Re-entering GetUp must discard prior stability.
+        rl.fsm.previous_state_=states.at("RLFSMStatePassive");current->Enter();
+        require(!current->CanTransitionTo(loco),"re-entry reused old admission");
+    }
+}
+
 void testGetDownCompletesToPassive(RL& rl, const StateMap& states)
 {
     const auto get_down =
@@ -561,12 +690,17 @@ int main()
 {
     try
     {
+        testEntryGuardSamples();
+        testEntryTransitions();
         testCoreRejectsUnregisteredTargets();
         testMorphologyEnterUsesStartupPreload();
         testMissingMotionFailsDuringPreload();
 
         TestRL rl;
         testPolicyRootResolution(rl);
+        rl.SetLWBaseRuntimeConfiguration(LWValidatedBaseConfiguration(
+            YAML::LoadFile(std::string(POLICY_DIR) + "/LW/base.yaml")["LW"], "entry-test"));
+        rl.InitJointNum(10);
         std::unordered_set<std::string> registered_names;
         const auto states = createLWStates(rl, registered_names);
         testAcceptedTransitionTable(rl, states, registered_names);

@@ -744,6 +744,19 @@ void testBaseTimeoutValidation()
     const YAML::Node base = loadConfig(policy_root / "LW/base.yaml", "LW");
     const YAML::Node policy = loadConfig(
         policy_root / "LW/robot_lab/leg_loco/config.yaml", "LW/robot_lab/leg_loco");
+    for (const std::string key : {"policy_entry_angle_deg", "policy_entry_stable_time"}) {
+        for (float invalid : {0.f, -1.f, std::numeric_limits<float>::quiet_NaN(),
+                              std::numeric_limits<float>::infinity()}) {
+            auto candidate=YAML::Clone(base);candidate[key]=invalid;
+            requireFailure([&]() { LWValidatedBaseConfiguration checked(candidate,"entry"); },key);
+        }
+        auto legacy=YAML::Clone(base);legacy.remove(key);
+        LWValidatedBaseConfiguration checked(legacy,"entry-defaults");
+        require(checked.runtime().policy_entry_angle_deg==8.f
+                && checked.runtime().policy_entry_stable_time==.5f,"entry defaults mismatch");
+    }
+    auto excessive=YAML::Clone(base);excessive["policy_entry_angle_deg"]=90.f;
+    requireFailure([&]() { LWValidatedBaseConfiguration checked(excessive,"entry"); },"policy_entry_angle_deg");
     for (const std::string key : {"sensor_timeout", "trusted_imu_timeout",
                                   "imu_ahrs_pair_max_age", "serial_write_timeout"})
     {

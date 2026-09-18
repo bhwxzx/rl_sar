@@ -27,6 +27,8 @@ struct LWBaseRuntimeConfiguration
     float trusted_imu_timeout = 0.0f;
     float imu_ahrs_pair_max_age = 0.0f;
     float serial_write_timeout = 0.0f;
+    float policy_entry_angle_deg = 8.0f;
+    float policy_entry_stable_time = 0.5f;
     std::vector<std::string> joint_names;
     std::vector<int> joint_mapping;
     std::vector<int> wheel_indices;

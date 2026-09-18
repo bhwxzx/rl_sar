@@ -348,6 +348,13 @@ LWBaseRuntimeConfiguration ValidateLWBaseConfiguration(
     runtime.imu_ahrs_pair_max_age = requirePositiveFinite(config, "imu_ahrs_pair_max_age", source);
     runtime.serial_write_timeout = requirePositiveFinite(config, "serial_write_timeout", source);
 
+    if (config["policy_entry_angle_deg"])
+        runtime.policy_entry_angle_deg = requirePositiveFinite(config, "policy_entry_angle_deg", source);
+    if (runtime.policy_entry_angle_deg >= 90.0f)
+        fail(source, "policy_entry_angle_deg must be less than 90 degrees");
+    if (config["policy_entry_stable_time"])
+        runtime.policy_entry_stable_time = requirePositiveFinite(config, "policy_entry_stable_time", source);
+
     const int cpu = requireValue<int>(config, "control_loop_cpu", source);
     if (cpu < -1)
     {

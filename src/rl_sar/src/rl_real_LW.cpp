@@ -107,6 +107,7 @@ RL_Real::RL_Real(
         LWValidatedBaseConfiguration(
             this->params.config_node,
             this->ResolvePolicyPath(this->robot_name + "/base.yaml")));
+    lw_policy_entry_guard_enabled = true;
     const auto& base_configuration = GetLWBaseRuntimeConfiguration();
     this->sensor_readiness_monitor_.setMotorFeedbackTimeout(
         std::chrono::duration_cast<SafetyClock::duration>(
@@ -681,6 +682,7 @@ void RL_Real::GetState(RobotState<float> *state)
         return;
     }
 
+    state->imu.sample_time = imu_sample->received_at;
     state->imu.quaternion[0] = imu_sample->quaternion[0];
     state->imu.quaternion[1] = imu_sample->quaternion[1];
     state->imu.quaternion[2] = imu_sample->quaternion[2];

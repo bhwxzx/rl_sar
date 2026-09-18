@@ -63,6 +63,7 @@ struct RobotState
 {
     struct IMU
     {
+        std::chrono::steady_clock::time_point sample_time{};
         std::vector<T> quaternion = {1.0f, 0.0f, 0.0f, 0.0f}; // w, x, y, z
         std::vector<T> gyroscope = {0.0f, 0.0f, 0.0f};
         std::vector<T> accelerometer = {0.0f, 0.0f, 0.0f};
@@ -358,6 +359,13 @@ public:
     RobotState<float> start_state;
     RobotState<float> now_state;
     bool rl_init_done = false;
+
+    // Opt-in by the real LW adapter only; simulation and profilers retain their behavior.
+    bool lw_policy_entry_guard_enabled = false;
+
+    // Clock seam for deterministic admission tests; production uses steady time.
+    virtual std::chrono::steady_clock::time_point LWEntryCheckNow() const
+    { return std::chrono::steady_clock::now(); }
 
     // init
     void InitObservations();
