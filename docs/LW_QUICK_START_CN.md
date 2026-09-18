@@ -361,6 +361,12 @@ python3 "$LW_PROFILE_TOOL" analyze \
 每次启动都在新终端重新加载基础 ROS 和已验收前缀，并做轻量包解析检查：
 
 ```bash
+RELEASE_TAG=lw-release-20260816-01
+git fetch origin tag "$RELEASE_TAG"
+SOURCE_COMMIT=$(git rev-parse "${RELEASE_TAG}^{commit}")
+SHORT_COMMIT="${SOURCE_COMMIT:0:12}"
+DEPLOY_PREFIX="$RL_SAR_ROOT/build/lw_deployments/$SHORT_COMMIT"
+LW_PROFILE_DIR="$RL_SAR_ROOT/build/lw_profiles/$SHORT_COMMIT"
 source /opt/ros/humble/setup.bash
 source "$DEPLOY_PREFIX/setup.bash"
 
@@ -436,7 +442,7 @@ PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py \
 保护的 `DEPLOY_PREFIX` 之外：
 
 ```bash
-LW_BAG_ROOT="/absolute/writable/path/outside/DEPLOY_PREFIX"
+LW_BAG_ROOT="/home/nvidia/debug_bags"
 mkdir -p "$LW_BAG_ROOT"
 bag_dir="$LW_BAG_ROOT/lw_real_$(date +%Y%m%d-%H%M%S)"
 ros2 bag record \
