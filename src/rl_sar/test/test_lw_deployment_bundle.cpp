@@ -35,6 +35,7 @@ const std::vector<std::string> kRuntimeFiles = {
     "lib/fdilink_ahrs/ahrs_driver_node",
     "lib/rl_sar/lw_config_profiler",
     "lib/rl_sar/profile_lw_runtime_config.py",
+    "lib/rl_sar/check_lw_attitude.py",
     "share/ament_index/resource_index/packages/fdilink_ahrs",
     "share/ament_index/resource_index/packages/rl_sar",
     "share/ament_index/resource_index/packages/serial",
@@ -360,6 +361,18 @@ void testSymlinkRuntimeDependencyFails()
         "symbolic link");
 }
 
+void testTamperedAttitudePreflightFails()
+{
+    Fixture fixture;
+    writeFile(fixture.prefix / "lib/rl_sar/check_lw_attitude.py", "tampered\n");
+    requireFailure(
+        [&]() {
+            LWDeploymentBundle::Verify(
+                fixture.share, fixture.executable, kCommit);
+        },
+        "runtime SHA-256 mismatch");
+}
+
 void testMissingProductionLaunchFails()
 {
     Fixture fixture;
@@ -671,6 +684,7 @@ int main()
         testMissingRuntimeDependencyFails();
         testTamperedRuntimeDependencyFails();
         testSymlinkRuntimeDependencyFails();
+        testTamperedAttitudePreflightFails();
         testMissingProductionLaunchFails();
         testTamperedProductionLaunchFails();
         testSymlinkProductionLaunchFails();

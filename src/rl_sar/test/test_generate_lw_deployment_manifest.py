@@ -134,6 +134,7 @@ class ManifestGeneratorTests(unittest.TestCase):
         self.assertIn('    sha256: "' + "b" * 64 + '"', content)
         self.assertIn('    path: "lib/rl_sar/onnxruntime/origin.json"', content)
         self.assertIn("runtime_files:", content)
+        self.assertIn('  - path: "lib/rl_sar/check_lw_attitude.py"', content)
         self.assertIn(
             '  - path: "share/rl_sar/launch/rl_real_LW.launch.py"',
             content,
@@ -181,6 +182,11 @@ class ManifestGeneratorTests(unittest.TestCase):
         runtime.unlink()
         runtime.symlink_to(external)
         with self.assertRaisesRegex(RuntimeError, "symbolic link"):
+            self.generate()
+
+    def test_rejects_missing_attitude_preflight(self) -> None:
+        (self.prefix / "lib/rl_sar/check_lw_attitude.py").unlink()
+        with self.assertRaisesRegex(RuntimeError, "runtime dependency"):
             self.generate()
 
     def test_rejects_missing_production_launch(self) -> None:

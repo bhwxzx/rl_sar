@@ -73,6 +73,7 @@ if find "$output_prefix/lib/rl_sar/rl_real_LW" \
         "$output_prefix/lib/rl_sar/lw_config_profiler" \
         "$output_prefix/lib/rl_sar/onnxruntime" \
         "$output_prefix/lib/rl_sar/profile_lw_runtime_config.py" \
+        "$output_prefix/lib/rl_sar/check_lw_attitude.py" \
         "$output_prefix/share/rl_sar/launch" \
         "$output_prefix/share/rl_sar/deployment/LW" -type l -print -quit \
         | grep -q .; then

@@ -374,6 +374,26 @@ for package in serial fdilink_ahrs rl_sar; do
     test "$(realpath -m "$(ros2 pkg prefix "$package")")" = "$DEPLOY_PREFIX"
 done
 
+```
+
+### 启动前检查机身姿态
+
+保持机身静止，在启动 IMU 驱动和正式程序前执行以下预检。`DEPLOY_PREFIX`
+必须指向本次实际使用的部署包，脚本从该包的 `base.yaml` 读取角度阈值、连续
+合格时长和 IMU 时效参数，不修改配置。已有的旧部署包可用工作区脚本检查：
+
+```bash
+/usr/bin/python3 "$DEPLOY_PREFIX/lib/rl_sar/check_lw_attitude.py" \
+    --config "$DEPLOY_PREFIX/share/rl_sar/deployment/LW/policy/LW/base.yaml"
+echo "姿态预检退出码: $?"
+```
+- 显示最新角度、采样期间最小/最大值、有效帧数及异常原因。退出码 `0` 为本次
+  预检通过，`1` 为角度或连续时长不满足，`2` 为配置、串口或数据有效性错误，
+  `130` 为中断。只能在看到 `PASS`、退出码为 `0` 后，由操作员继续启动。
+
+确认上述检查通过后，单独执行正式启动命令：
+
+```bash
 PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py
 ```
 

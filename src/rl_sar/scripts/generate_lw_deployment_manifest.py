@@ -30,6 +30,7 @@ RUNTIME_FILES = (
     "lib/fdilink_ahrs/ahrs_driver_node",
     "lib/rl_sar/lw_config_profiler",
     "lib/rl_sar/profile_lw_runtime_config.py",
+    "lib/rl_sar/check_lw_attitude.py",
     "share/ament_index/resource_index/packages/fdilink_ahrs",
     "share/ament_index/resource_index/packages/rl_sar",
     "share/ament_index/resource_index/packages/serial",

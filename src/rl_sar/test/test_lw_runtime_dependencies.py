@@ -33,6 +33,10 @@ class RuntimeDependencyTests(unittest.TestCase):
             f"{sorted({'serial', 'tf2_geometry_msgs', 'eigen'} - declared)}",
         )
 
+    def test_attitude_preflight_runtime_dependencies(self) -> None:
+        dependencies = declared_dependencies(RL_SAR_PACKAGE)
+        self.assertTrue({"python3-yaml", "psmisc"}.issubset(dependencies.get("exec_depend", set())))
+
 
 if __name__ == "__main__":
     unittest.main()

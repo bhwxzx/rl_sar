@@ -616,6 +616,12 @@ if(BUILD_TESTING)
             COMMAND test_lw_deployment_bundle
         )
         add_test(
+            NAME lw_attitude_preflight
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_check_lw_attitude.py
+                    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_lw_attitude.py
+        )
+        add_test(
             NAME lw_deployment_manifest_generator
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/test/test_generate_lw_deployment_manifest.py
@@ -1218,6 +1224,7 @@ endif()
 install(PROGRAMS
     scripts/actuator_net.py
     scripts/profile_lw_runtime_config.py
+    scripts/check_lw_attitude.py
     DESTINATION lib/${PROJECT_NAME}
 )
 
