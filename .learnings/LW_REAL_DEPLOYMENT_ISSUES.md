@@ -22,6 +22,26 @@ LW-072 已完成批准范围内的修改与离线验证，当时无待处理条�
 
 ## 当前选定问题
 
+### [LW-081] 同步新 Wheel 模型固定推理测试基线
+
+**状态**： resolved
+**批准日期**：2026-09-21
+
+- 用户明确批准仅更新配置回归测试中 Wheel 的 10 个固定输出、归档日期和 SHA-256，并记录验证证据。定向验证后执行 `scripts/validate_lw_strict_build.sh` 完整回归。
+- 根因：工作区 Wheel 模型已更新为归档 `2026-09-19-11-41-48`，SHA-256 `689395ee03276cb3b2dcaa37db58c2b4921069df56c8b884007ce3abbafcbfcf`，而测试仍绑定 `2026-09-16-15-12-04`。索引 0 的旧基线为 `0.80958467721939087`，新输出为 `0.3897395133972168`，绝对差 `0.41984516382217407`，超过允许误差 `2.8095846772193908e-6`；不是输入维度或浮点微差问题。
+- 新归档仍为 10×39=390 维输入、10 维输出，历史由旧到新排列；JIT 前向结构与上一版逐文件相同，actor_obs_normalizer 为 Identity。根据新归档 JIT 权重进行 NumPy float64 独立复算，与本机 C++ ONNX Runtime 固定输入输出最大差 `1.3288863973670573e-6`，通过 `1e-5` 独立核对门限；这不是 JIT 引擎执行。
+- 保留 LW-079 的 `2e-6 + 1e-6 * abs(expected)` 容差、有限性检查、全部配置及另外三个策略基线。保留用户已有 Wheel ONNX 内容和未跟踪的 `library/`，不修改运行时、模型或其它 LW 问题。不安装依赖，不训练，不启动实机或闭环评估。用户在验证完成后明确授权 Git 提交和推送，将已验证的新 Wheel ONNX 与对应基线一并纳入；`library/` 不纳入提交。
+
+#### 解决记录
+
+- 解决日期：2026-09-21；基于 `a6e330a`。本记录随本项修改和已验证的用户新模型一并提交，标题为 `同步新 Wheel 模型与固定推理测试基线（LW-081）`；推送按用户随后授权执行。
+- 修改文件：`src/rl_sar/test/test_lw_configuration_validation.cpp` 仅更新 Wheel 的 10 个固定输出、归档日期和模型哈希；本记录只新增和更新 LW-081。输入 39/390、Leg 及两种转换策略基线、容差判断与其它测试内容逐字节保持一致。
+- 独立核对：归档 JIT SHA-256 `7f3bb5fde53b317e28d694d6da54c7af37573904d4068f12b3288ed42fe68b6f`、ONNX SHA-256 与归档清单一致，部署 ONNX 与归档一致；新旧 JIT 前向结构逐文件相同。NumPy float64 复算最大差 `1.3288863973670573e-6`，通过独立门限 `1e-5`；正式回归沿用 LW-079 容差。
+- 验证目录 `/tmp/lw081-rPtCt1ln/`：`commands.json`、`crosscheck.py/json`、`probe.cpp`/`probe`、`wheel_loco-forward.txt`、`test-before.cpp`、`policy-hashes-before.json`、`preservation.json` 和全部构建/测试日志。探针复用此前已检查的 C++ ORT 工具，复算脚本使用新归档权重及 ROA 前向结构。
+- 普通构建重编译 `test_lw_configuration_validation` 成功，定向 CTest **1/1 通过**（0.09 秒）。随后原样执行 `LW_STRICT_BUILD_JOBS=2 bash scripts/validate_lw_strict_build.sh`，Debug、`LW_STRICT_WARNINGS=ON`、`BUILD_TESTING=ON` 完整构建成功，完整 CTest **54/54 通过**（10.27 秒），脚本退出码 0；构建日志未出现编译 warning/error。严格构建临时目录由原脚本按既有 EXIT trap 自动清理，完整输出保存在 `strict-build-tests.log`。
+- 保全核对：`policy/LW` 全部 13 个资源文件哈希在实施与验证前后一致；测试文件去除 Wheel 基线块后与实施前 HEAD 完全相同；`git diff --check` 通过。用户 Wheel ONNX 内容原样纳入随后获准的提交，`library/` 保留。
+- 验证仅覆盖本项基线同步和离线回归，不改变新策略表现，也不构成新版实机闭环验收。
+
 ### [LW-080] GetUp后策略启动姿态准入保护
 
 **状态**： resolved
