@@ -1073,3 +1073,40 @@ LibTorch、ONNX Runtime 和按需 MuJoCo；文档明确首次运行的联网和 
 - **Notes**: 已在本机成功复查并验证为 0 次。本项只记录纠正，不修改源代码、AGENTS.md 或检查技能。
 
 ---
+
+## [LRN-20260928-001] correction
+
+**Logged**: 2026-09-28T11:23:04+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+用户要求“提交并推送”时，必须完成推送并核对远端引用，不能把本地提交完成当作整个任务完成。
+
+### Details
+用户明确指出“提交并推送”包含两项操作，并调用 self-improvement 要求记录。本会话此前 9 月 21 日的请求曾在 HTTPS/SSH 网络失败后停在本地提交，未满足全部目标；网络失败只能作为未完成的原因，不能算作推送成功。
+本次反馈后直接通过同一 origin 仓库的 SSH 地址执行 git ls-remote，GitHub refs/heads/main 返回 b3b20b9bdc56d1b62b16fddc393c3abac74ca1b6，与本地 HEAD 和 refs/remotes/origin/main 完全相同。此前本次 push 的退出码为 0，输出 a70e25b..b3b20b9 main -> main。因此本次 main 已推送，不能为了认同反馈而记录虚假的“本次没有推送”。
+
+### Suggested Action
+1. 将用户明确授权的提交与推送视为一个完整任务，授权在重试和传输方式切换后继续有效。
+2. 提交后推送指定分支；HTTPS 凭据不可用时可采用同仓库已有 SSH 访问方式，不擅自更换目标仓库或强推。
+3. 推送后用 git ls-remote 核对目标仓库、目标引用与本地提交。需要时刷新远端跟踪引用，不能只凭本地 ahead/behind 提示判断服务器状态。
+4. 最终说明提交哈希、目标分支和远端核验结果。若仍因网络或认证未完成，明确说明未完成原因，不能宣称已推送。
+5. 文档选中的 git push origin "$RELEASE_TAG" 操作发布标签；不得仅依据 IDE 选中文字推断新标签名称或将分支推送改成创建/推送标签。
+
+### Metadata
+- Source: user_feedback
+- Related Files: .learnings/LEARNINGS.md, docs/LW_QUICK_START_CN.md
+- Tags: git, commit, push, remote-verification, task-completion
+- Pattern-Key: workflow.complete_commit_and_verify_push
+- Recurrence-Count: 1
+- First-Seen: 2026-09-28
+- Last-Seen: 2026-09-28
+
+### Resolution
+- **Resolved**: 2026-09-28T11:23:04+08:00
+- **Commit/PR**: 本次核验的业务提交为 b3b20b9；学习记录尚未提交。
+- **Notes**: 已直接确认 GitHub main、本地 HEAD 和 origin/main 哈希一致，记录完整任务与远端核验要求；本次未重复提交、强推或创建发布标签。
+
+---
