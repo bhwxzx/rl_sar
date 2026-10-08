@@ -63,7 +63,8 @@ std::vector<std::vector<float>> loadCSV(
 
 void verifyMotion(
     const std::string& policy_name,
-    size_t expected_frames)
+    size_t expected_frames,
+    int expected_time_offset_frames)
 {
     const std::string policy_path =
         std::string(POLICY_DIR)
@@ -89,8 +90,8 @@ void verifyMotion(
         60.0f,
         policy_name + " did not use the configured source rate");
     require(
-        time_offset_frames == 1,
-        policy_name + " did not record the removed t=0 source frame");
+        time_offset_frames == expected_time_offset_frames,
+        policy_name + " has an unexpected source time offset");
 
     const std::string motion_path =
         policy_path + "/"
@@ -216,8 +217,8 @@ int main()
             60.0f,
             "motion source rate was coupled to the 50 Hz policy rate");
 
-        verifyMotion("leg_to_wheel", 167);
-        verifyMotion("wheel_to_leg", 170);
+        verifyMotion("leg_to_wheel", 201, 0);
+        verifyMotion("wheel_to_leg", 170, 1);
 
         std::cout
             << "LW motion reference rate tests passed"

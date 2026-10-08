@@ -380,8 +380,8 @@ void testCurrentLWConfigurationsAndModels()
         std::size_t input;
         std::vector<float> output;
     };
-    // Locomotion ONNX baselines cross-checked independently against the
-    // archived JIT weights/forward structure with NumPy (not the JIT engine).
+    // Locomotion and leg-to-wheel ONNX baselines cross-checked independently
+    // against archived JIT weights/forward structure with NumPy (not the JIT engine).
     const std::vector<ExpectedPolicy> policies = {
         // Archive: LW/leg_loco/2026-09-16-15-45-12
         // ONNX SHA-256: c5d94cd109557baaf3b3a57b9e146a95555ea7c323b538fcf8830aea829f42eb
@@ -390,18 +390,20 @@ void testCurrentLWConfigurationsAndModels()
           -0x1.38e3bp+0F, 0x1.6629bep+1F, 0x1.934b88p+1F,
           0x1.94bab4p+2F, -0x1.7ee4fep+0F, 0x1.240122p+2F,
           0x1.3be86ep+0F}},
-        // Archive: LW/wheel_loco/2026-10-02-14-30-02
-        // ONNX SHA-256: ef6cf9f83ffcf559e15d1e4e8da138fcd6d0c8c0b8fd02e1de5a4f021817429b
+        // Archive: LW/wheel_loco/2026-10-03-22-59-50
+        // ONNX SHA-256: bda4ed7bf090b8e3d554d9243a3652d626016ca70343190d8abb4638bc4f8df9
         {"LW/robot_lab/wheel_loco", 39, 390,
-         {-0x1.6898acp-1F, 0x1.f6f2dep-3F, -0x1.4e2cap-4F,
-          -0x1.2a4858p+1F, -0x1.166d5cp-2F, 0x1.015a7ap+0F,
-          -0x1.23a9aep-1F, 0x1.6ab942p-3F, 0x1.4f9692p+0F,
-          0x1.0780b8p+2F}},
-        {"LW/robot_lab/leg_to_wheel", 59, 59,
-         {-0x1.585e7p-2F, -0x1.3f41a4p+0F, -0x1.49eb6cp+0F,
-          -0x1.a6f982p-1F, 0x1.8bfbeap+0F, -0x1.60f2bp+1F,
-          -0x1.8798c4p-2F, 0x1.80d9bp-2F, -0x1.2d3aacp+1F,
-          0x1.1eea08p+0F}},
+         {0x1.8038e2p-2F, -0x1.08bf18p-1F, -0x1.8d162ap+0F,
+          -0x1.ca635p+0F, 0x1.fee54cp-3F, 0x1.984d9ep-1F,
+          -0x1.45538cp-4F, 0x1.ea6526p-3F, -0x1.98c288p-1F,
+          0x1.e7d39ep+2F}},
+        // Archive: LW/leg_to_wheel/2026-10-06-11-58-04
+        // ONNX SHA-256: 2a94dbf5fafc1cd83bc0098476e95c3af14f4ba81a6001cf14da60325a107f8b
+        {"LW/robot_lab/leg_to_wheel", 59, 590,
+         {-0x1.5ae88cp-1F, -0x1.a5d09cp-4F, -0x1.821e54p-1F,
+          -0x1.2a6b5ap-1F, 0x1.0704bp+0F, -0x1.d34934p+0F,
+          -0x1.61e348p-3F, 0x1.2d71cp-7F, -0x1.316e82p+0F,
+          0x1.ee70b8p+0F}},
         {"LW/robot_lab/wheel_to_leg", 59, 59,
          {-0x1.292a8cp+1F, 0x1.882dbp+0F, 0x1.7a6574p-2F,
           0x1.f2e5bep-2F, 0x1.b518acp-1F, -0x1.e03cacp+0F,

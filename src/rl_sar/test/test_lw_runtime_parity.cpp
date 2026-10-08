@@ -17,6 +17,7 @@
 namespace
 {
 constexpr size_t kNumDofs = 10;
+constexpr size_t kLegToWheelHistoryFrames = 10;
 
 void require(bool condition, const std::string& message)
 {
@@ -549,13 +550,20 @@ void testMotionReferenceRuntimeGating()
         harness.core.runInferenceCycle(false);
         require(
             setup.model->forward_calls == 1
-                && setup.model->last_input.size() == 6
+                && setup.model->last_input.size() == 6 * kLegToWheelHistoryFrames
                 && harness.core.readInferenceTrace(trace)
                 && trace.frame == 1,
             "anchor-only inference did not use the matching reference");
+        std::vector<float> expected_anchor;
+        for (size_t frame = 0; frame < kLegToWheelHistoryFrames; ++frame)
+        {
+            expected_anchor.insert(
+                expected_anchor.end(),
+                {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f});
+        }
         requireVectorEqual(
             setup.model->last_input,
-            {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f},
+            expected_anchor,
             "anchor-only observation");
 
         const std::uint64_t next_generation =
@@ -601,18 +609,21 @@ void testMotionReferenceRuntimeGating()
         harness.core.runInferenceCycle(false);
         require(
             setup.model->forward_calls == 1
-                && setup.model->last_input.size() == 20,
+                && setup.model->last_input.size() == 20 * kLegToWheelHistoryFrames,
             "command-only inference did not use the matching reference");
         std::vector<float> expected_command;
         const auto reference = makeMotionReference(setup.generation);
-        expected_command.insert(
-            expected_command.end(),
-            reference.joint_pos.begin(),
-            reference.joint_pos.end());
-        expected_command.insert(
-            expected_command.end(),
-            reference.joint_vel.begin(),
-            reference.joint_vel.end());
+        for (size_t frame = 0; frame < kLegToWheelHistoryFrames; ++frame)
+        {
+            expected_command.insert(
+                expected_command.end(),
+                reference.joint_pos.begin(),
+                reference.joint_pos.end());
+            expected_command.insert(
+                expected_command.end(),
+                reference.joint_vel.begin(),
+                reference.joint_vel.end());
+        }
         requireVectorEqual(
             setup.model->last_input,
             expected_command,
@@ -628,7 +639,7 @@ void testMotionReferenceRuntimeGating()
         harness.core.runInferenceCycle(false);
         require(
             setup.model->forward_calls == 1
-                && setup.model->last_input.size() == 3,
+                && setup.model->last_input.size() == 3 * kLegToWheelHistoryFrames,
             "non-motion inference unnecessarily required a reference");
     }
 }
@@ -775,7 +786,8 @@ void testNoGaitPoliciesRetainLegacyClock()
     require(harness.core.readInferenceTrace(trace), "missing non-gait trace");
     const float delta = 0.005f * 4.0f * 1.25f;
     require(trace.gait_phase_before == 0.0f && trace.gait_phase_used == delta
-        && trace.gait_phase_after == delta && setup.model->last_input.size() == 3,
+        && trace.gait_phase_after == delta
+        && setup.model->last_input.size() == 3 * kLegToWheelHistoryFrames,
         "non-gait policy phase bookkeeping changed");
 }
 
