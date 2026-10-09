@@ -1110,3 +1110,47 @@ LibTorch、ONNX Runtime 和按需 MuJoCo；文档明确首次运行的联网和 
 - **Notes**: 已直接确认 GitHub main、本地 HEAD 和 origin/main 哈希一致，记录完整任务与远端核验要求；本次未重复提交、强推或创建发布标签。
 
 ---
+
+
+## [LRN-20261009-001] best_practice
+
+**Logged**: 2026-10-09T17:40:14+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+SSH 登录 Jetson 操作仓库时，Git 推送优先尝试本机/当前 VS Code 会话已有的 Git 认证通道。
+
+### Details
+用户明确要求记录并优先使用这一方式。2026-10-09 归档 sim2real_test 的 1009-01 实机测试时，普通 SSH shell 中 git push 失败：
+fatal: could not read Username for 'https://github.com': No such device or address
+
+Jetson 没有 Git HTTPS 凭据助手、GitHub CLI、GitHub token 环境变量或可用 GitHub SSH 私钥；这并不意味着当前 VS Code 会话没有认证。现有远端 VS Code 会话具有 Git askpass 程序及有效 IPC socket，可把远端 Git 的认证请求交给当前编辑器会话的认证提供方。临时为推送子进程继承这组环境变量后，原 HTTPS origin 推送成功，没有读取/复制明文 token、修改永久凭据配置或更换远端地址。
+
+这里的“本机认证通道”指本机/当前编辑器会话已有的认证提供方；本次实际桥接入口位于 Jetson 的 VS Code Server。它不等于 Windows 一定安装了独立 Git CLI，也不能默认普通 SSH shell 会继承 VS Code 的 Git 环境。
+
+### Suggested Action
+1. 用户授权推送后，先检查当前会话是否有可用 Git 认证通道，优先复用，不先要求重新登录、提供 token、生成 SSH 密钥或安装 GitHub CLI。
+2. VS Code Remote SSH 场景检查当前会话的 GIT_ASKPASS、VSCODE_GIT_ASKPASS_NODE、VSCODE_GIT_ASKPASS_MAIN、VSCODE_GIT_ASKPASS_EXTRA_ARGS、VSCODE_GIT_IPC_HANDLE。普通 SSH shell 缺失时，可只读取本人当前 VS Code/终端进程环境中的这些白名单变量。
+3. 验证 askpass/node/main 路径和 IPC socket 仍存在且属于目标会话；多会话时确认对应关系，不随意选用其他用户或不相关会话。PID、server commit 路径、socket 名称均为动态值，每次重新发现。
+4. 仅将白名单变量临时交给 Git 子进程，可用 GIT_TERMINAL_PROMPT=0 避免无终端的回退提示。禁止打印完整进程环境或认证响应，不把 token、密码写入日志、命令行、Git remote、仓库或学习记录。
+5. 保持原仓库/分支和已有推送授权，正常推送，不强推。只有现有通道不存在、失效或明确拒绝认证，才报告缺失的信息或转向其他已授权认证方式。
+6. 推送后用 git ls-remote 核对实际目标引用与本地 HEAD，不能把本地提交完成当作推送完成。
+
+### Metadata
+- Source: user_feedback
+- Related Files: .learnings/LEARNINGS.md, .agents/skills/self-improvement/SKILL.md
+- Tags: ssh, jetson, git, push, vscode, askpass, authentication
+- See Also: LRN-20260928-001, LRN-20260918-001
+- Pattern-Key: workflow.jetson_git_push_prefer_existing_editor_auth
+- Recurrence-Count: 1
+- First-Seen: 2026-10-09
+- Last-Seen: 2026-10-09
+
+### Resolution
+- **Resolved**: 2026-10-09T17:40:14+08:00
+- **Commit/PR**: 验证依据为 sim2real_test 提交 b4084ed942dcbfe3fac887ccc461c101731064fa；本条学习记录随本次提交保存。
+- **Notes**: 继承当前 VS Code Git askpass 环境后 git push origin HEAD:main 返回 0，输出 b4dfdb4..b4084ed HEAD -> main；git ls-remote 返回同一完整哈希，工作区干净。仅记录一次已验证事件，不虚增复现次数；未修改代码、AGENTS.md、认证配置或技能文件。
+
+---
