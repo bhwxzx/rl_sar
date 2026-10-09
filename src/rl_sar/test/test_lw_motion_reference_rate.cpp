@@ -217,7 +217,7 @@ int main()
             60.0f,
             "motion source rate was coupled to the 50 Hz policy rate");
 
-        verifyMotion("leg_to_wheel", 201, 0);
+        verifyMotion("leg_to_wheel", 204, 0);
         verifyMotion("wheel_to_leg", 170, 1);
 
         std::cout
