@@ -2,8 +2,8 @@ LW/robot_lab/wheel_to_leg:
   model_name: "policy.onnx"
   num_observations: 59 # 20 + 6 + 3 + 10 + 10 + 10
   observations: ["whole_body_tracking/motion_command", "whole_body_tracking/motion_anchor_ori_b", "ang_vel", "dof_pos", "dof_vel", "actions"]
-  observations_history: []  # 0 is the latest observation
-  observations_history_priority: "time"  # "time" or "term" priority
+  observations_history: [9,8,7,6,5,4,3,2,1,0]  # 0 is the latest observation
+  observations_history_priority: "term"  # "time" or "term" priority
   clip_obs: 100.0
   # Target bounds after action scale/default offset, in policy joint order:
   # non-wheel position [rad], wheel velocity [rad/s]. No raw-action clipping.
@@ -20,12 +20,12 @@ LW/robot_lab/wheel_to_leg:
   rl_kp: [90.0, 90.0,
           90.0, 90.0,
           90.0, 90.0,
-          36.0, 36.0, 
+          28.0, 28.0,
           0.0, 0.0]
   rl_kd: [3.0, 3.0,
           3.0, 3.0,
           3.0, 3.0,
-          1.8, 1.8,
+          1.4, 1.4,
           0.5, 0.5]
   fixed_kp: [160.0, 160.0, 
              160.0, 160.0,
@@ -65,5 +65,5 @@ LW/robot_lab/wheel_to_leg:
   gait_command: [1.25, 0.5, 0.5]
   vel_command: [0.7, 0.0, 0.5]
   motion_fps: 60.0
-  # CSV 第一行对应原轨迹第 1 个 60 Hz 周期；以后保留 t=0 首帧时改为 0。
-  motion_time_offset_frames: 1
+  # 原始 60 Hz CSV 保留 t=0 首帧。
+  motion_time_offset_frames: 0

@@ -380,7 +380,7 @@ void testCurrentLWConfigurationsAndModels()
         std::size_t input;
         std::vector<float> output;
     };
-    // Locomotion and leg-to-wheel ONNX baselines cross-checked independently
+    // All LW ONNX baselines cross-checked independently
     // against archived JIT weights/forward structure with NumPy (not the JIT engine).
     const std::vector<ExpectedPolicy> policies = {
         // Archive: LW/leg_loco/2026-09-16-15-45-12
@@ -404,11 +404,13 @@ void testCurrentLWConfigurationsAndModels()
           -0x1.5f2af4p-1F, 0x1.43e0a6p-1F, -0x1.7c7136p-1F,
           -0x1.0128b2p-5F, 0x1.8ea7bcp-2F, -0x1.4a4f04p-1F,
           0x1.ff8bfep-1F}},
-        {"LW/robot_lab/wheel_to_leg", 59, 59,
-         {-0x1.292a8cp+1F, 0x1.882dbp+0F, 0x1.7a6574p-2F,
-          0x1.f2e5bep-2F, 0x1.b518acp-1F, -0x1.e03cacp+0F,
-          -0x1.f3abfap-1F, 0x1.2a31f2p-2F, 0x1.dde794p+2F,
-          -0x1.4bd34ap+2F}},
+        // Archive: LW/wheel_to_leg/2026-11-04-11-29-16
+        // ONNX SHA-256: 9936b2aa02d67d5077a9e3d8a4bc6285f49cd733a2e7616dc15edd6bb91e0a16
+        {"LW/robot_lab/wheel_to_leg", 59, 590,
+         {-0x1.aa27e2p-4F, -0x1.da557ep-2F, -0x1.9f5d68p-1F,
+          -0x1.4b0166p-2F, -0x1.0b8b8p-1F, -0x1.2c57c8p-1F,
+          -0x1.913262p-3F, -0x1.e2491p-3F, 0x1.cb50bp-2F,
+          0x1.259612p-3F}},
     };
 
     for (const auto& policy : policies)
