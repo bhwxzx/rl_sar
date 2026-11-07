@@ -404,13 +404,13 @@ void testCurrentLWConfigurationsAndModels()
           -0x1.5f2af4p-1F, 0x1.43e0a6p-1F, -0x1.7c7136p-1F,
           -0x1.0128b2p-5F, 0x1.8ea7bcp-2F, -0x1.4a4f04p-1F,
           0x1.ff8bfep-1F}},
-        // Archive: LW/wheel_to_leg/2026-11-04-11-29-16
-        // ONNX SHA-256: 9936b2aa02d67d5077a9e3d8a4bc6285f49cd733a2e7616dc15edd6bb91e0a16
+        // Archive: LW/wheel_to_leg/2026-11-06-11-39-51
+        // ONNX SHA-256: 76745f74f1cc89e2ebe3910e325b6c24e55833d3c8956d4ba5e90e4ca9ed9c7c
         {"LW/robot_lab/wheel_to_leg", 59, 590,
-         {-0x1.aa27e2p-4F, -0x1.da557ep-2F, -0x1.9f5d68p-1F,
-          -0x1.4b0166p-2F, -0x1.0b8b8p-1F, -0x1.2c57c8p-1F,
-          -0x1.913262p-3F, -0x1.e2491p-3F, 0x1.cb50bp-2F,
-          0x1.259612p-3F}},
+         {0x1.b7a0f6p-3F, -0x1.7c5eaep-3F, -0x1.7f2a16p-1F,
+          0x1.ab8908p-6F, -0x1.fb824cp-2F, -0x1.7e793cp-2F,
+          0x1.c81c58p-4F, -0x1.320d3cp-2F, 0x1.35b798p-1F,
+          0x1.626404p-6F}},
     };
 
     for (const auto& policy : policies)
