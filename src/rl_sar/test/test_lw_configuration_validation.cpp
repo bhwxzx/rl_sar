@@ -390,13 +390,13 @@ void testCurrentLWConfigurationsAndModels()
           -0x1.38e3bp+0F, 0x1.6629bep+1F, 0x1.934b88p+1F,
           0x1.94bab4p+2F, -0x1.7ee4fep+0F, 0x1.240122p+2F,
           0x1.3be86ep+0F}},
-        // Archive: LW/wheel_loco/2026-10-03-22-59-50
-        // ONNX SHA-256: bda4ed7bf090b8e3d554d9243a3652d626016ca70343190d8abb4638bc4f8df9
+        // Archive: LW/wheel_loco/2026-10-02-14-30-02
+        // ONNX SHA-256: ef6cf9f83ffcf559e15d1e4e8da138fcd6d0c8c0b8fd02e1de5a4f021817429b
         {"LW/robot_lab/wheel_loco", 39, 390,
-         {0x1.8038e2p-2F, -0x1.08bf18p-1F, -0x1.8d162ap+0F,
-          -0x1.ca635p+0F, 0x1.fee54cp-3F, 0x1.984d9ep-1F,
-          -0x1.45538cp-4F, 0x1.ea6526p-3F, -0x1.98c288p-1F,
-          0x1.e7d39ep+2F}},
+         {-0x1.6898acp-1F, 0x1.f6f2dep-3F, -0x1.4e2cap-4F,
+          -0x1.2a4858p+1F, -0x1.166d5cp-2F, 0x1.015a7ap+0F,
+          -0x1.23a9aep-1F, 0x1.6ab942p-3F, 0x1.4f9692p+0F,
+          0x1.0780b8p+2F}},
         // Archive: LW/leg_to_wheel/2026-10-09-12-49-52
         // ONNX SHA-256: 9a809a0f122e56da6d1cc84503bffcd0c1d3ebc67be99d6d7fff90bfedc9e4f7
         {"LW/robot_lab/leg_to_wheel", 59, 590,
@@ -404,13 +404,13 @@ void testCurrentLWConfigurationsAndModels()
           -0x1.5f2af4p-1F, 0x1.43e0a6p-1F, -0x1.7c7136p-1F,
           -0x1.0128b2p-5F, 0x1.8ea7bcp-2F, -0x1.4a4f04p-1F,
           0x1.ff8bfep-1F}},
-        // Archive: LW/wheel_to_leg/2026-11-10-14-03-57
-        // ONNX SHA-256: 0b2032d78e0f41bc2be5a44fb52251a8af2edd3334d8d36bfd866a1c0249912f
+        // Archive: LW/wheel_to_leg/2026-11-11-19-54-20
+        // ONNX SHA-256: b51a9fb89569c5beeb6dce3d393cd00e7e707116795cd0a9cc145571f43b6583
         {"LW/robot_lab/wheel_to_leg", 59, 590,
-         {0x1.0602c8p-6F, -0x1.f20e44p-3F, -0x1.3304aep-1F,
-          -0x1.293528p-2F, -0x1.e9578ep-4F, -0x1.de012cp-9F,
-          0x1.175ae8p-5F, -0x1.691464p-3F, 0x1.127ae8p-1F,
-          -0x1.8cac6ap-3F}},
+         {-0x1.a88a6cp-3F, -0x1.41c69p-3F, -0x1.bceae6p-1F,
+          -0x1.79e7a8p-2F, -0x1.5a1fap-2F, -0x1.9fc7bcp-3F,
+          -0x1.81a954p-4F, -0x1.03ba12p-2F, 0x1.6a868ep-2F,
+          0x1.b49aa6p-5F}},
     };
 
     for (const auto& policy : policies)
