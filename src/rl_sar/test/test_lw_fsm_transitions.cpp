@@ -626,6 +626,11 @@ void testEntryTransitions()
         const auto key=kind=="Leg"?Input::Keyboard::Num1:Input::Keyboard::Num3;
         rl.control.current_keyboard=key;
         require(current->CheckChange()==loco,"ready entry rejected");
+        clearInput(rl);
+        rl.control.current_gamepad = kind == "Leg" ? Input::Gamepad::RB_DPadDown : Input::Gamepad::RB_DPadUp;
+        require(current->CheckChange() == getup, "opposite balance accepted from get-up");
+        clearInput(rl);
+        rl.control.current_keyboard = key;
         // A spike arrives after the request but before next-cycle Enter.
         rl.fsm.RequestStateChange(loco);
         rl.entry_now+=5ms;rl.robot_state.imu.sample_time=rl.entry_now;
@@ -671,6 +676,75 @@ void testEntryTransitions()
     }
 }
 
+void testGamepadMorphologyRoundTrip()
+{
+    using Key = Input::Gamepad;
+    TestRL rl;
+    configurePolicyRoot(rl, POLICY_DIR);
+    rl.InitJointNum(10);
+    for (const char* name : {"leg_loco", "wheel_loco", "leg_to_wheel", "wheel_to_leg"})
+    {
+        const std::string path = std::string("LW/robot_lab/") + name;
+        rl.PreloadModel(path);
+        rl.PreloadLWPolicyContext(path);
+    }
+    std::unordered_set<std::string> names;
+    const auto states = createLWStates(rl, names);
+    for (const auto& entry : states) rl.fsm.AddState(entry.second);
+    rl.fsm.SetInitialState("RLFSMStateRLLocomotion_Leg");
+    rl.control.x = 0.5f;
+    const auto cycle = [&](Key key = Key::None) {
+        rl.control.SetGamepad(key);
+        rl.StateController(&rl.robot_state, &rl.robot_command, false);
+        rl.control.ClearInput();
+        require(rl.control.x == 0.5f && rl.control.yaw == 0.0f,
+                "morphology operation changed the held stick command");
+    };
+    for (bool to_wheel : {true, false})
+    {
+        const char* target = to_wheel ? "RLFSMStateRLLocomotion_Wheel" : "RLFSMStateRLLocomotion_Leg";
+        const char* transition = to_wheel ? "RLFSMStateRL_LegToWheel" : "RLFSMStateRL_WheelToLeg";
+        const auto start = to_wheel ? Key::RB_Y : Key::RB_A;
+        const auto reverse = to_wheel ? Key::RB_A : Key::RB_Y;
+        const auto opposite_balance = to_wheel ? Key::RB_DPadDown : Key::RB_DPadUp;
+        const auto source = rl.fsm.current_state_;
+        const auto* activation = rl.LoadLWPolicyActivation();
+        require(activation != nullptr, "initial locomotion did not activate");
+        const auto generation = activation->generation;
+        cycle(reverse);
+        cycle(opposite_balance);
+        cycle(Key::A);
+        cycle(Key::Y);
+        rl.fsm.RequestStateChange(target);
+        cycle();
+        cycle();
+        require(rl.fsm.current_state_ == source && rl.fsm.next_state_ == source
+                    && rl.fsm.mode_ == FSM::Mode::NORMAL
+                    && rl.LoadLWPolicyActivation()
+                    && rl.LoadLWPolicyActivation()->generation == generation,
+                "invalid request interrupted or replaced the active locomotion");
+
+        cycle(start);
+        cycle();
+        require(rl.fsm.current_state_ == states.at(transition), "wrong transition entered");
+        const auto* motion = rl.LoadLWPolicyActivation();
+        require(motion && motion->motion_length > 0.0f, "transition policy missing");
+        cycle(reverse);
+        cycle(opposite_balance);
+        require(rl.fsm.mode_ == FSM::Mode::NORMAL && rl.fsm.current_state_ == states.at(transition),
+                "wrong input interrupted transition");
+        const auto final_frame = static_cast<std::uint64_t>(
+            std::ceil(motion->motion_length / motion->definition->runtime.period_seconds));
+        rl.PublishLWPolicyProgress(motion->generation, final_frame);
+        cycle(reverse);
+        cycle(reverse); // Entry cycle also consumes any input arriving on the boundary.
+        cycle();
+        require(rl.fsm.current_state_ == states.at(target) && rl.fsm.next_state_ == states.at(target)
+                    && rl.fsm.mode_ == FSM::Mode::NORMAL && rl.LoadLWPolicyActivation(),
+                "completion failed or an ignored request triggered a reversal");
+    }
+}
+
 void testGetDownCompletesToPassive(RL& rl, const StateMap& states)
 {
     const auto get_down =
@@ -692,6 +766,7 @@ int main()
     {
         testEntryGuardSamples();
         testEntryTransitions();
+        testGamepadMorphologyRoundTrip();
         testCoreRejectsUnregisteredTargets();
         testMorphologyEnterUsesStartupPreload();
         testMissingMotionFailsDuringPreload();

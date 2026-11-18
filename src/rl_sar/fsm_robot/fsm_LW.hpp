@@ -352,7 +352,9 @@ public:
                     "policy context was not preloaded: "
                     + robot_config_path);
             }
-            rl.InitControl();
+            if (!rl.fsm.previous_state_
+                || rl.fsm.previous_state_->GetStateName() != "RLFSMStateRL_WheelToLeg")
+                rl.InitControl();
             rl.ActivateLWPolicy(robot_config_path);
             rl.now_state = *fsm_state;
         }
@@ -381,6 +383,11 @@ public:
         rl.DeactivateLWPolicy();
     }
 
+    bool CanTransitionTo(std::string_view target) override
+    {
+        return target != "RLFSMStateRLLocomotion_Wheel";
+    }
+
     std::string_view CheckChange() override
     {
         if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
@@ -395,7 +402,9 @@ public:
         {
             return "RLFSMStateRLLocomotion_Leg";
         }
-        else if (rl.control.current_keyboard == Input::Keyboard::Num4 || rl.control.current_gamepad == Input::Gamepad::RB_DPadLeft)
+        else if (rl.control.current_keyboard == Input::Keyboard::Num4
+            || rl.control.current_gamepad == Input::Gamepad::RB_Y
+            || rl.control.current_gamepad == Input::Gamepad::RB_DPadLeft)
         {
             return "RLFSMStateRL_LegToWheel";
         }
@@ -425,7 +434,9 @@ public:
                     "policy context was not preloaded: "
                     + robot_config_path);
             }
-            rl.InitControl();
+            if (!rl.fsm.previous_state_
+                || rl.fsm.previous_state_->GetStateName() != "RLFSMStateRL_LegToWheel")
+                rl.InitControl();
             rl.ActivateLWPolicy(robot_config_path);
             rl.now_state = *fsm_state;
         }
@@ -454,6 +465,11 @@ public:
         rl.DeactivateLWPolicy();
     }
 
+    bool CanTransitionTo(std::string_view target) override
+    {
+        return target != "RLFSMStateRLLocomotion_Leg";
+    }
+
     std::string_view CheckChange() override
     {
         if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
@@ -468,7 +484,9 @@ public:
         {
             return "RLFSMStateRLLocomotion_Wheel";
         }
-        else if (rl.control.current_keyboard == Input::Keyboard::Num5 || rl.control.current_gamepad == Input::Gamepad::RB_DPadRight)
+        else if (rl.control.current_keyboard == Input::Keyboard::Num5
+            || rl.control.current_gamepad == Input::Gamepad::RB_A
+            || rl.control.current_gamepad == Input::Gamepad::RB_DPadRight)
         {
             return "RLFSMStateRL_WheelToLeg";
         }
@@ -511,7 +529,6 @@ public:
             rl.motion_length = rl.motion_loader_lw->GetDuration();
 
             rl.motion_loader_lw->Reset(fsm_state->imu.quaternion);
-            rl.InitControl();
             policy_generation =
                 rl.ActivateLWPolicy(
                     robot_config_path,
@@ -624,7 +641,6 @@ public:
             rl.motion_length = rl.motion_loader_lw->GetDuration();
 
             rl.motion_loader_lw->Reset(fsm_state->imu.quaternion);
-            rl.InitControl();
             policy_generation =
                 rl.ActivateLWPolicy(
                     robot_config_path,

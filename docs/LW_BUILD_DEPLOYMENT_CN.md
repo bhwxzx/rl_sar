@@ -721,11 +721,15 @@ PYTHONDONTWRITEBYTECODE=1 ros2 launch rl_sar rl_real_LW.launch.py enable_keyboar
 | 进入腿式运动 | `1` | `RB` + 十字键上 | 仅在腿式起身完成后进入腿式 locomotion；腿式 locomotion 中重复请求保持当前状态 |
 | 轮式起身 | `2` | `Y` | 在 Passive、腿式起身或 GetDown 状态请求 `RLFSMStateGetUp_Wheel` |
 | 进入轮式运动 | `3` | `RB` + 十字键下 | 仅在轮式起身完成后进入轮式 locomotion；轮式 locomotion 中重复请求保持当前状态 |
-| 腿式切换为轮式 | `4` | `RB` + 十字键左 | 仅在腿式 locomotion 中启动 `leg_to_wheel` 策略；完成后自动进入轮式 locomotion |
-| 轮式切换为腿式 | `5` | `RB` + 十字键右 | 仅在轮式 locomotion 中启动 `wheel_to_leg` 策略；完成后自动进入腿式 locomotion |
+| 腿式切换为轮式 | `4` | **`RB + Y`** 或 `RB` + 十字键左 | 仅在腿式 locomotion 中启动 `leg_to_wheel` 策略；完成后自动进入轮式 locomotion |
+| 轮式切换为腿式 | `5` | **`RB + A`** 或 `RB` + 十字键右 | 仅在轮式 locomotion 中启动 `wheel_to_leg` 策略；完成后自动进入腿式 locomotion |
 | 受控趴下 | `9` | `B` | 起身完成后、任一 locomotion 或形态切换状态中请求 GetDown；Passive 中无动作 |
 | 立即转入 Passive 阻尼 | `P` | `LB` + `X` | 任一非 Passive 状态转入 `RLFSMStatePassive`；这是 `Kp=0`、`Kd=5` 的阻尼命令，不等于电机失能或零执行器输出 |
 | 切换导航模式标志 | `N` | `X` | 切换 `navigation_mode`；当前 LW 本地速度仅由摇杆输入 |
+
+左手可持续推左摇杆，右手先按住 `RB`，再点按 `Y` 腿转轮或 `A` 轮转腿。每次按下只触发一次。
+两个肩键同时按住时，点按 `A/Y` 无效。按错转换方向或对侧平衡键时继续当前策略。
+形态转换完成后自动进入目标平衡。转换期间或跨越策略进入时刻的采样周期内，反向请求均丢弃；需要反向时，请在目标平衡建立后重新点按。
 
 组合键写法表示先按住肩键，再按面键或推动十字键。`GetDown` 是受控运动，不是
 急停；受保护状态下姿态角度越限会进入 S2 阻尼，反馈或控制线程已经不可信时
@@ -755,13 +759,13 @@ LW 键盘不提供速度控制：`W/S/A/D/Q/E` 和 `Space` 都不会修改 `x/y/
 
 | 功能 | 键盘 | 手柄 | 说明 |
 | --- | --- | --- | --- |
-| 重置到腿式初始姿态 | `R` | `RB` + `Y` | 调用 MuJoCo 的 `home_leg` keyframe；真机无此功能 |
-| 重置到轮式初始姿态 | `T` | `RB` + `A` | 调用 MuJoCo 的 `home_wheel` keyframe；真机无此功能 |
+| 重置到腿式初始姿态 | `R` | `LB + Y` | 调用 MuJoCo 的 `home_leg` keyframe；真机无此功能 |
+| 重置到轮式初始姿态 | `T` | `LB + A` | 调用 MuJoCo 的 `home_wheel` keyframe；真机无此功能 |
 | 暂停/继续仿真 | `Enter` | `RB` + `X` | 切换 MuJoCo 运行状态；真机无此功能 |
 
 #### 手柄布局和未绑定输入
 
-真机与默认 Sim2Sim 当前都按 `JOYSTICK_1` 布局解释 `/dev/input/js0`：按钮编号
+真机读取 `/dev/input/js0`，默认 Sim2Sim 读取 `/dev/input/js1`。两者均使用 `JOYSTICK_1` 布局。按钮编号
 `0/1/3/4` 分别作为 `A/B/X/Y`，`6/7` 作为 `LB/RB`，轴 `0/1/2` 分别作为
 `LX/LY/RX`，轴 `6/7` 作为十字键横向/纵向。这里的 `A/B/X/Y` 是程序赋予
 Linux joystick 编号的逻辑名称；不同品牌、连接方式或驱动可能报告不同编号，

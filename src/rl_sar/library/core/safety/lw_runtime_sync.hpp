@@ -3,6 +3,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <utility>
@@ -126,6 +127,7 @@ struct LWInputSnapshot
     float y = 0.0f;
     float yaw = 0.0f;
     Event event{};
+    std::chrono::steady_clock::time_point earliest_event_time{};
     std::uint64_t event_sequence = 0;
 };
 
@@ -143,9 +145,12 @@ public:
         snapshots_.publish(producer_snapshot_);
     }
 
-    void publishEvent(Event event)
+    void publishEvent(
+        Event event,
+        std::chrono::steady_clock::time_point earliest_time = std::chrono::steady_clock::now())
     {
         producer_snapshot_.event = event;
+        producer_snapshot_.earliest_event_time = earliest_time;
         ++producer_snapshot_.event_sequence;
         snapshots_.publish(producer_snapshot_);
     }

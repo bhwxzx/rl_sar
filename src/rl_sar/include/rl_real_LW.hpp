@@ -100,6 +100,7 @@ private:
     std::array<LWJoystickButton, LW_JOYSTICK_BUTTON_COUNT> sys_js_button{};
     std::array<int, LW_JOYSTICK_AXIS_COUNT> sys_js_axis{};
     LWJoystickFaultLatch joystick_fault_latch_;
+    std::chrono::steady_clock::time_point joystick_queue_empty_since_{};
     LWInputMailbox<Input::Gamepad> joystick_input_mailbox_;
     LWInputMailbox<Input::Gamepad>::Snapshot joystick_input_snapshot_{};
     std::uint64_t consumed_gamepad_sequence_ = 0;

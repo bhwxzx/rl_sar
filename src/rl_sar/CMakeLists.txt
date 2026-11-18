@@ -772,7 +772,7 @@ if(BUILD_TESTING)
     add_executable(test_lw_joystick_safety
         test/test_lw_joystick_safety.cpp
     )
-    target_include_directories(test_lw_joystick_safety PRIVATE library/core/safety)
+    target_link_libraries(test_lw_joystick_safety PRIVATE rl_sdk)
     if(TARGET lw_joystick_vendor)
         target_link_libraries(
             test_lw_joystick_safety

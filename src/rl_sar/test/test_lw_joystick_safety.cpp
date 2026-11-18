@@ -1,4 +1,4 @@
-#include "lw_joystick_safety.hpp"
+#include "lw_gamepad_mapping.hpp"
 
 #include <cerrno>
 #include <cstdlib>
@@ -215,6 +215,84 @@ void testEventBoundsAndDeadzone()
     }
 }
 
+void testGamepadEdges(const LWGamepadLayout& layout)
+{
+    using Key = Input::Gamepad;
+    std::array<LWJoystickButton, LW_JOYSTICK_BUTTON_COUNT> buttons{};
+    std::array<int, LW_JOYSTICK_AXIS_COUNT> axes{};
+    const auto send = [&](unsigned char type, unsigned char id, short value) {
+        Key key;
+        require(LWReadGamepadEvent(layout, {0, value, type, id}, buttons, axes,
+                                   32768, 0.05f, key) == LWJoystickEventResult::Applied,
+                "valid input was rejected");
+        return key;
+    };
+    const auto press = [&](unsigned char id) { return send(JS_EVENT_BUTTON, id, 1); };
+    const auto release = [&](unsigned char id) {
+        require(send(JS_EVENT_BUTTON, id, 0) == Key::None, "release generated an action");
+    };
+    require(send(JS_EVENT_AXIS, 1, -16384) == Key::None, "stick generated a button");
+    for (bool to_wheel : {false, true})
+    {
+        const auto face = to_wheel ? layout.y : layout.a;
+        const auto start = to_wheel ? Key::RB_Y : Key::RB_A;
+        const auto reset = to_wheel ? Key::LB_Y : Key::LB_A;
+        const auto keyboard = to_wheel ? Input::Keyboard::R : Input::Keyboard::T;
+        const std::string keyframe = to_wheel ? "home_leg" : "home_wheel";
+
+        require(send(JS_EVENT_INIT | JS_EVENT_BUTTON, face, 1) == Key::None,
+                "initial held face button generated an action");
+        release(face);
+        require(press(face) == (to_wheel ? Key::Y : Key::A), "plain face binding changed");
+        release(face);
+        press(layout.lb);
+        require(press(face) == reset, "reset chord did not resolve exclusively");
+        require(LWSimResetKeyframe(Input::Keyboard::None, reset) == keyframe
+                    && LWSimResetKeyframe(keyboard, Key::None) == keyframe,
+                "reset did not select its keyframe");
+        release(face);
+        release(layout.lb);
+        press(layout.rb);
+        const short dpad = to_wheel ? -32767 : 32767;
+        require(send(JS_EVENT_AXIS, 7, dpad) == (to_wheel ? Key::RB_DPadUp : Key::RB_DPadDown),
+                "reset followed by balance entry lost the direction");
+        require(send(JS_EVENT_AXIS, 7, dpad) == Key::None, "held D-pad retriggered");
+        send(JS_EVENT_AXIS, 7, 0);
+        require(press(face) == start && !LWSimResetKeyframe(Input::Keyboard::None, start),
+                "switch chord also requested a reset");
+        require(press(face) == Key::None, "held face retriggered");
+        release(layout.rb);
+        require(press(face) == Key::None, "releasing the shoulder reinterpreted the face");
+        release(face);
+        press(layout.lb);
+        press(layout.rb);
+        require(press(face) == Key::None, "ambiguous chord accepted");
+        release(layout.lb);
+        release(layout.rb);
+        release(face);
+        require(axes[1] == -16384 && axes[layout.yaw_axis] == 0, "buttons changed stick axes");
+    }
+}
+
+void testLateSwitchIsDiscarded()
+{
+    LWInputMailbox<Input::Gamepad> mailbox;
+    LWPolicyActivation activation;
+    activation.activated_at = std::chrono::steady_clock::now();
+    for (auto key : {Input::Gamepad::RB_A, Input::Gamepad::RB_Y,
+                     Input::Gamepad::RB_DPadLeft, Input::Gamepad::RB_DPadRight})
+    {
+        mailbox.publishEvent(key, activation.activated_at - std::chrono::milliseconds(1));
+        mailbox.publishVelocity(0.5f, 0.0f, 0.0f);
+        LWInputSnapshot<Input::Gamepad> input;
+        require(mailbox.read(input) && LWPolicyGamepadEvent(input, &activation) == Input::Gamepad::None,
+                "old switch was replayed after policy activation");
+        mailbox.publishEvent(key, activation.activated_at + std::chrono::milliseconds(1));
+        require(mailbox.read(input) && LWPolicyGamepadEvent(input, &activation) == key,
+                "fresh switch was discarded");
+    }
+}
+
 void testFaultLatchCannotRecoverAutomatically()
 {
     LWJoystickFaultLatch latch;
@@ -233,6 +311,9 @@ int main()
         testReadStatusDistinguishesIdleEventAndDisconnect();
         testReadStatusRejectsInvalidAndPartialReads();
         testEventBoundsAndDeadzone();
+        testGamepadEdges(LW_GAMEPAD_1);
+        testGamepadEdges(LW_GAMEPAD_2);
+        testLateSwitchIsDiscarded();
         testFaultLatchCannotRecoverAutomatically();
         std::cout << "LW joystick safety tests passed" << std::endl;
         return EXIT_SUCCESS;

@@ -1,5 +1,6 @@
 
 #include "rl_sim_LW.hpp"
+#include "lw_gamepad_mapping.hpp"
 #include "lw_mujoco_control_adapter.hpp"
 
 #include <iomanip>
@@ -656,39 +657,20 @@ void RL_Real::ApplySimulationControls()
     }
     const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
     RefreshMuJoCoPointersLocked();
-    if (this->control.current_keyboard == Input::Keyboard::R || this->control.current_gamepad == Input::Gamepad::RB_Y)
+    const auto reset = pending_sim_reset_.exchange(Input::Gamepad::None);
+    const char* keyframe = LWSimResetKeyframe(control.current_keyboard, reset);
+    if (keyframe && mj_model && mj_data)
     {
-        if (this->mj_model && this->mj_data)
-        {   
-            if(this->robot_name == "LW")
-            {
-                int id = mj_name2id(this->mj_model, mjOBJ_KEY, "home_leg");
-                mj_resetDataKeyframe(this->mj_model, this->mj_data, id);
-            }
-            else
-            {
-                mj_resetData(this->mj_model, this->mj_data);
-            }
-
-            mj_forward(this->mj_model, this->mj_data);
+        if (robot_name == "LW")
+        {
+            const int id = mj_name2id(mj_model, mjOBJ_KEY, keyframe);
+            mj_resetDataKeyframe(mj_model, mj_data, id);
         }
-    }
-    if (this->control.current_keyboard == Input::Keyboard::T || this->control.current_gamepad == Input::Gamepad::RB_A)
-    {
-        if (this->mj_model && this->mj_data)
-        {   
-            if(this->robot_name == "LW")
-            {
-                int id = mj_name2id(this->mj_model, mjOBJ_KEY, "home_wheel");
-                mj_resetDataKeyframe(this->mj_model, this->mj_data, id);
-            }
-            else
-            {
-                mj_resetData(this->mj_model, this->mj_data);
-            }
-
-            mj_forward(this->mj_model, this->mj_data);
+        else
+        {
+            mj_resetData(mj_model, mj_data);
         }
+        mj_forward(mj_model, mj_data);
     }
     if (this->control.current_keyboard == Input::Keyboard::Enter || this->control.current_gamepad == Input::Gamepad::RB_X)
     {
@@ -901,6 +883,7 @@ void RL_Real::LatchJoystickFault(
 {
     runtime_core_.reportSafetyEvent(LWSafetyEvent::JoystickUnavailable);
     LWClearJoystickState(this->sys_js_button, this->sys_js_axis);
+    pending_sim_reset_.store(Input::Gamepad::None);
     joystick_input_mailbox_.clear(Input::Gamepad::None);
     this->sys_js_active = false;
 
@@ -928,7 +911,7 @@ void RL_Real::ApplyPendingInput()
     if (input.event_sequence != consumed_gamepad_sequence_)
     {
         consumed_gamepad_sequence_ = input.event_sequence;
-        this->control.SetGamepad(input.event);
+        this->control.SetGamepad(LWPolicyGamepadEvent(input, LoadLWPolicyActivation()));
     }
 }
 
@@ -962,12 +945,20 @@ void RL_Real::GetSysJoystick()
         return;
     }
 
+#ifdef JOYSTICK_2
+    constexpr auto layout = LW_GAMEPAD_2;
+#else
+    constexpr auto layout = LW_GAMEPAD_1;
+#endif
     while (true)
     {
+        const auto read_started = std::chrono::steady_clock::now();
         const LWJoystickSampleResult sample_result =
             this->sys_js->sample(&this->sys_js_event);
         if (sample_result.status == LWJoystickSampleStatus::NoData)
         {
+            if (sample_result.error_number == EINTR) continue;
+            joystick_queue_empty_since_ = read_started;
             break;
         }
         if (!sample_result.hasEvent())
@@ -976,13 +967,16 @@ void RL_Real::GetSysJoystick()
             return;
         }
 
-        const LWJoystickEventResult event_result =
-            LWApplyJoystickEvent(
-                this->sys_js_event,
-                this->sys_js_button,
-                this->sys_js_axis,
-                this->sys_js_max_value,
-                this->axis_deadzone);
+        Input::Gamepad action;
+        const auto event_result = LWReadGamepadEvent(
+            layout, sys_js_event, sys_js_button, sys_js_axis,
+            sys_js_max_value, axis_deadzone, action);
+        // A quick reset followed by a D-pad press must deliver both actions.
+        if (action == Input::Gamepad::LB_Y || action == Input::Gamepad::LB_A)
+            pending_sim_reset_.store(action);
+        else if (action != Input::Gamepad::None)
+            joystick_input_mailbox_.publishEvent(action, joystick_queue_empty_since_);
+
         if (event_result == LWJoystickEventResult::ButtonOutOfRange
             || event_result == LWJoystickEventResult::AxisOutOfRange)
         {
@@ -1006,98 +1000,10 @@ void RL_Real::GetSysJoystick()
         }
     }
 
-#ifdef JOYSTICK_1
-    // 修改为自己的手柄映射
-    if (this->sys_js_button[0].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::A);
-    if (this->sys_js_button[1].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::B);
-    if (this->sys_js_button[3].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::X);
-    if (this->sys_js_button[4].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::Y);
-    if (this->sys_js_button[6].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB);
-    if (this->sys_js_button[7].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB);
-    if (this->sys_js_button[13].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LStick);
-    if (this->sys_js_button[14].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RStick);
-    if (this->sys_js_axis[7] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadUp);
-    if (this->sys_js_axis[7] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadDown);
-    if (this->sys_js_axis[6] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadLeft);
-    if (this->sys_js_axis[6] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadRight);
-    if (this->sys_js_button[6].pressed && this->sys_js_button[0].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_A);
-    if (this->sys_js_button[6].pressed && this->sys_js_button[1].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_B);
-    if (this->sys_js_button[6].pressed && this->sys_js_button[3].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_X);
-    if (this->sys_js_button[6].pressed && this->sys_js_button[4].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_Y);
-    if (this->sys_js_button[6].pressed && this->sys_js_button[13].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_LStick);
-    if (this->sys_js_button[6].pressed && this->sys_js_button[14].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_RStick);
-    if (this->sys_js_button[6].pressed && this->sys_js_axis[7] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadUp);
-    if (this->sys_js_button[6].pressed && this->sys_js_axis[7] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadDown);
-    if (this->sys_js_button[6].pressed && this->sys_js_axis[6] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadRight);
-    if (this->sys_js_button[6].pressed && this->sys_js_axis[6] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadLeft);
-    if (this->sys_js_button[7].pressed && this->sys_js_button[0].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_A);
-    if (this->sys_js_button[7].pressed && this->sys_js_button[1].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_B);
-    if (this->sys_js_button[7].pressed && this->sys_js_button[3].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_X);
-    if (this->sys_js_button[7].pressed && this->sys_js_button[4].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_Y);
-    if (this->sys_js_button[7].pressed && this->sys_js_button[13].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_LStick);
-    if (this->sys_js_button[7].pressed && this->sys_js_button[14].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_RStick);
-    if (this->sys_js_button[7].pressed && this->sys_js_axis[7] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadUp);
-    if (this->sys_js_button[7].pressed && this->sys_js_axis[7] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadDown);
-    if (this->sys_js_button[7].pressed && this->sys_js_axis[6] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadRight);
-    if (this->sys_js_button[7].pressed && this->sys_js_axis[6] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadLeft);
-    if (this->sys_js_button[6].pressed && this->sys_js_button[7].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_RB);
-
-    // 通过sys_js_max_value将各项指令归一化
-    const auto& velocity_limits =
-        GetLWBaseRuntimeConfiguration().vel_command;
-    float ly = (-float(this->sys_js_axis[1]) / float(this->sys_js_max_value)) * velocity_limits[0];
-    float lx = (-float(this->sys_js_axis[0]) / float(this->sys_js_max_value)) * velocity_limits[1];
-    float rx = (-float(this->sys_js_axis[2]) / float(this->sys_js_max_value)) * velocity_limits[2];
-
-#endif
-
-#ifdef JOYSTICK_2
-    // 修改为自己的手柄映射
-    if (this->sys_js_button[0].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::A);
-    if (this->sys_js_button[1].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::B);
-    if (this->sys_js_button[2].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::X);
-    if (this->sys_js_button[3].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::Y);
-    if (this->sys_js_button[4].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB);
-    if (this->sys_js_button[5].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB);
-    if (this->sys_js_button[9].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LStick);
-    if (this->sys_js_button[10].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RStick);
-    if (this->sys_js_axis[7] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadUp);
-    if (this->sys_js_axis[7] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadDown);
-    if (this->sys_js_axis[6] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadLeft);
-    if (this->sys_js_axis[6] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::DPadRight);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[0].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_A);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[1].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_B);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[2].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_X);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[3].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_Y);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[9].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_LStick);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[10].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_RStick);
-    if (this->sys_js_button[4].pressed && this->sys_js_axis[7] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadUp);
-    if (this->sys_js_button[4].pressed && this->sys_js_axis[7] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadDown);
-    if (this->sys_js_button[4].pressed && this->sys_js_axis[6] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadRight);
-    if (this->sys_js_button[4].pressed && this->sys_js_axis[6] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_DPadLeft);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[0].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_A);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[1].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_B);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[2].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_X);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[3].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_Y);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[9].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_LStick);
-    if (this->sys_js_button[5].pressed && this->sys_js_button[10].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_RStick);
-    if (this->sys_js_button[5].pressed && this->sys_js_axis[7] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadUp);
-    if (this->sys_js_button[5].pressed && this->sys_js_axis[7] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadDown);
-    if (this->sys_js_button[5].pressed && this->sys_js_axis[6] > 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadRight);
-    if (this->sys_js_button[5].pressed && this->sys_js_axis[6] < 0) joystick_input_mailbox_.publishEvent(Input::Gamepad::RB_DPadLeft);
-    if (this->sys_js_button[4].pressed && this->sys_js_button[5].on_press) joystick_input_mailbox_.publishEvent(Input::Gamepad::LB_RB);
-
-    // 通过sys_js_max_value将各项指令归一化
-    // float ly = -float(this->sys_js_axis[1]) / float(this->sys_js_max_value);
-    // float lx = -float(this->sys_js_axis[0]) / float(this->sys_js_max_value);
-    // float rx = -float(this->sys_js_axis[3]) / float(this->sys_js_max_value);
-
-    const auto& velocity_limits =
-        GetLWBaseRuntimeConfiguration().vel_command;
-    float ly = (-float(this->sys_js_axis[1]) / float(this->sys_js_max_value)) * velocity_limits[0];
-    float lx = (-float(this->sys_js_axis[0]) / float(this->sys_js_max_value)) * velocity_limits[1];
-    float rx = (-float(this->sys_js_axis[3]) / float(this->sys_js_max_value)) * velocity_limits[2];
-#endif
+    const auto& velocity_limits = GetLWBaseRuntimeConfiguration().vel_command;
+    float ly = (-float(sys_js_axis[1]) / sys_js_max_value) * velocity_limits[0];
+    float lx = (-float(sys_js_axis[0]) / sys_js_max_value) * velocity_limits[1];
+    float rx = (-float(sys_js_axis[layout.yaw_axis]) / sys_js_max_value) * velocity_limits[2];
 
     bool has_input = (ly != 0.0f || lx != 0.0f || rx != 0.0f);
 
